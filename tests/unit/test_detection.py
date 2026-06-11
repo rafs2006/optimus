@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from datetime import UTC, datetime
+from unittest import mock
 
 from optimus.contracts.events import ImageFetchedEvent, Verdict
 from optimus.core.config import Sensitivity
@@ -232,6 +233,26 @@ async def test_worker_swarm_escalates_and_alerts() -> None:
     assert result.swarm_alert.distinct_guilds == 5
     # An exact match (SCAM) stays SCAM; escalation only lifts a lower band.
     assert result.verdict.verdict is Verdict.SCAM
+
+
+async def test_worker_offloads_decode_and_hash_to_thread() -> None:
+    # The decode subprocess wait and numpy hashing must not run on the event
+    # loop; the worker dispatches them via asyncio.to_thread.
+    import asyncio
+
+    calls: list[object] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(func: object, /, *args: object, **kwargs: object) -> object:
+        calls.append(func)
+        return await real_to_thread(func, *args, **kwargs)  # type: ignore[arg-type]
+
+    worker = _worker(guild_index=EMPTY)
+    with mock.patch.object(asyncio, "to_thread", spy):
+        result = await worker.handle(_event(key="offload", data=_scam_png()))
+    assert result is not None
+    assert calls, "decode+hash work was not offloaded via asyncio.to_thread"
+    assert calls[0] == worker._decode_and_hash
 
 
 async def test_worker_swarm_escalates_ambiguous_to_scam() -> None:
