@@ -1,0 +1,120 @@
+"""Token-bucket rate limiting backed by Redis, with an in-memory fallback."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Protocol
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimit:
+    """A token-bucket configuration.
+
+    ``capacity`` tokens accrue at ``refill_rate`` tokens/second up to the cap.
+    """
+
+    capacity: float
+    refill_rate: float
+
+    def __post_init__(self) -> None:
+        if self.capacity <= 0:
+            raise ValueError("capacity must be positive")
+        if self.refill_rate <= 0:
+            raise ValueError("refill_rate must be positive")
+
+
+class RateLimiter(Protocol):
+    """Common interface for rate limiters."""
+
+    async def acquire(self, key: str, limit: RateLimit, cost: float = 1.0) -> bool:
+        """Try to consume ``cost`` tokens for ``key``; return whether allowed."""
+        ...
+
+
+# Atomic token-bucket in Lua. KEYS[1]=bucket key.
+# ARGV: capacity, refill_rate, cost, now (seconds, float).
+# Returns 1 if allowed, 0 otherwise.
+_BUCKET_SCRIPT = """
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+
+local data = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if tokens == nil then
+  tokens = capacity
+  ts = now
+end
+
+local elapsed = now - ts
+if elapsed < 0 then elapsed = 0 end
+tokens = math.min(capacity, tokens + elapsed * refill)
+
+local allowed = 0
+if tokens >= cost then
+  allowed = 1
+  tokens = tokens - cost
+end
+
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+local ttl = math.ceil(capacity / refill) + 1
+redis.call('EXPIRE', KEYS[1], ttl)
+return allowed
+"""
+
+
+class RedisRateLimiter:
+    """Distributed token bucket evaluated atomically by a Redis Lua script."""
+
+    def __init__(self, redis: object, *, prefix: str = "optimus:rl") -> None:
+        self._redis = redis
+        self._prefix = prefix
+
+    async def acquire(self, key: str, limit: RateLimit, cost: float = 1.0) -> bool:
+        """Consume ``cost`` tokens atomically in Redis."""
+        full_key = f"{self._prefix}:{key}"
+        result = await self._redis.eval(  # type: ignore[attr-defined]
+            _BUCKET_SCRIPT,
+            1,
+            full_key,
+            limit.capacity,
+            limit.refill_rate,
+            cost,
+            time.time(),
+        )
+        return bool(int(result))
+
+
+@dataclass
+class _Bucket:
+    tokens: float
+    ts: float
+
+
+@dataclass
+class InMemoryRateLimiter:
+    """Process-local token bucket, used when Redis is unavailable."""
+
+    time_source: object = field(default=time.monotonic)
+    _buckets: dict[str, _Bucket] = field(default_factory=dict)
+
+    def _now(self) -> float:
+        return float(self.time_source())  # type: ignore[operator]
+
+    async def acquire(self, key: str, limit: RateLimit, cost: float = 1.0) -> bool:
+        """Consume ``cost`` tokens for ``key`` in process memory."""
+        now = self._now()
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            bucket = _Bucket(tokens=limit.capacity, ts=now)
+            self._buckets[key] = bucket
+        elapsed = max(0.0, now - bucket.ts)
+        bucket.tokens = min(limit.capacity, bucket.tokens + elapsed * limit.refill_rate)
+        bucket.ts = now
+        if bucket.tokens >= cost:
+            bucket.tokens -= cost
+            return True
+        return False
