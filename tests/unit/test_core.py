@@ -125,6 +125,43 @@ async def test_rate_limit_keys_are_independent() -> None:
     assert await limiter.acquire("b", limit)
 
 
+async def test_in_memory_rate_limit_rejects_nonpositive_cost() -> None:
+    limiter = InMemoryRateLimiter()
+    limit = RateLimit(capacity=2, refill_rate=1.0)
+    with pytest.raises(ValueError, match="cost must be positive"):
+        await limiter.acquire("k", limit, cost=0)
+    with pytest.raises(ValueError, match="cost must be positive"):
+        await limiter.acquire("k", limit, cost=-1)
+
+
+async def test_in_memory_rate_limit_evict_idle_bounds_memory() -> None:
+    clock = {"t": 0.0}
+    limiter = InMemoryRateLimiter(time_source=lambda: clock["t"])
+    limit = RateLimit(capacity=2, refill_rate=1.0)
+    for i in range(50):
+        assert await limiter.acquire(f"key-{i}", limit)  # 1 token left each
+    assert len(limiter._buckets) == 50
+    # Nothing has refilled yet, so a sweep now frees nothing.
+    assert limiter.evict_idle(limit) == 0
+    assert len(limiter._buckets) == 50
+    # After a full refill window every bucket is back at capacity and is freed.
+    clock["t"] = 10.0
+    assert limiter.evict_idle(limit) == 50
+    assert len(limiter._buckets) == 0
+
+
+async def test_evict_idle_keeps_actively_throttled_buckets() -> None:
+    clock = {"t": 0.0}
+    limiter = InMemoryRateLimiter(time_source=lambda: clock["t"])
+    limit = RateLimit(capacity=3, refill_rate=1.0)
+    assert await limiter.acquire("busy", limit)
+    assert await limiter.acquire("busy", limit)
+    assert await limiter.acquire("busy", limit)  # drained to 0
+    clock["t"] = 1.0  # only 1 token back -> still below capacity
+    assert limiter.evict_idle(limit) == 0
+    assert "busy" in limiter._buckets
+
+
 # --- idempotency ---------------------------------------------------------------
 
 
