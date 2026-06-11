@@ -26,6 +26,7 @@ from optimus.contracts.events import SUBJECT_INDEX_INVALIDATE, IndexInvalidateEv
 from optimus.core.config import Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.logging import configure_logging, get_logger
+from optimus.core.readiness import nats_check
 from optimus.db.engine import (
     SessionScope,
     create_engine,
@@ -204,6 +205,7 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     service = SchedulerService(settings, bus, scope, delete_object=delete_object)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
+    health.add_readiness_check(nats_check(nc), name="nats")
     await health.start()
 
     handles = service.start()

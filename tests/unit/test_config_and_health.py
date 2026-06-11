@@ -51,5 +51,23 @@ async def test_health_endpoints() -> None:
         await server.stop()
 
 
+async def test_readyz_returns_503_when_check_raises() -> None:
+    server = HealthServer(host="127.0.0.1", port=8138)
+
+    async def _boom() -> bool:
+        raise ConnectionError("dependency down")
+
+    server.add_readiness_check(_boom, name="redis")
+    await server.start()
+    try:
+        async with (
+            aiohttp.ClientSession() as http,
+            http.get("http://127.0.0.1:8138/readyz") as resp,
+        ):
+            assert resp.status == 503
+    finally:
+        await server.stop()
+
+
 async def _async_bool(value: bool) -> bool:
     return value

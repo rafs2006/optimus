@@ -21,6 +21,7 @@ from optimus.core.ratelimit import (
     RateLimiter,
     RedisRateLimiter,
 )
+from optimus.core.readiness import nats_check, redis_check
 from optimus.ingest.fetcher import FetchedImage, fetch_image
 from optimus.services.ingest.worker import IngestWorker, RateLimitedError
 
@@ -72,6 +73,9 @@ async def _amain() -> None:
     worker = build_worker(settings, redis)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
+    health.add_readiness_check(nats_check(nc), name="nats")
+    if redis is not None:
+        health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
     stop = asyncio.Event()

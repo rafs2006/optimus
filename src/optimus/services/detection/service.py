@@ -27,6 +27,7 @@ from optimus.core.config import Sensitivity, Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.idempotency import IdempotencyGuard
 from optimus.core.logging import configure_logging, get_logger
+from optimus.core.readiness import nats_check, redis_check
 from optimus.db.engine import (
     SessionScope,
     create_engine,
@@ -173,6 +174,9 @@ async def _amain() -> None:
     service = build_service(settings, bus, redis)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
+    health.add_readiness_check(nats_check(nc), name="nats")
+    if redis is not None:
+        health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
     async def _invalidate_cb(raw_msg: object) -> None:

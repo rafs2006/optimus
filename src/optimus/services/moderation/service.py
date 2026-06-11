@@ -36,6 +36,7 @@ from optimus.core.config import Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.logging import configure_logging, get_logger
 from optimus.core.ratelimit import RateLimit, RedisRateLimiter
+from optimus.core.readiness import nats_check, redis_check
 from optimus.db.engine import (
     SessionScope,
     create_engine,
@@ -287,6 +288,8 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     service = ModerationService(settings, bus, coordinator, scope)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
+    health.add_readiness_check(nats_check(nc), name="nats")
+    health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
     stop = asyncio.Event()

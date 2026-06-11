@@ -94,6 +94,37 @@ def test_circuit_half_open_reopens_on_failure() -> None:
     assert cb.state is CircuitState.OPEN
 
 
+def test_circuit_state_change_callback_observes_transitions() -> None:
+    clock = {"t": 0.0}
+    seen: list[tuple[CircuitState, CircuitState]] = []
+    cb = CircuitBreaker(
+        failure_threshold=1,
+        recovery_time=5.0,
+        time_source=lambda: clock["t"],
+        on_state_change=lambda prev, cur: seen.append((prev, cur)),
+    )
+    cb.record_failure()  # closed -> open
+    clock["t"] = 5.0
+    assert cb.state is CircuitState.HALF_OPEN  # open -> half_open on read
+    cb.record_success()  # half_open -> closed
+    assert seen == [
+        (CircuitState.CLOSED, CircuitState.OPEN),
+        (CircuitState.OPEN, CircuitState.HALF_OPEN),
+        (CircuitState.HALF_OPEN, CircuitState.CLOSED),
+    ]
+
+
+def test_circuit_state_change_callback_skips_noop_transitions() -> None:
+    seen: list[tuple[CircuitState, CircuitState]] = []
+    cb = CircuitBreaker(
+        failure_threshold=2,
+        on_state_change=lambda prev, cur: seen.append((prev, cur)),
+    )
+    cb.record_failure()  # still closed, below threshold
+    cb.record_success()  # still closed
+    assert seen == []
+
+
 async def test_circuit_call_fast_fails_when_open() -> None:
     cb = CircuitBreaker(failure_threshold=1, recovery_time=100.0)
     cb.record_failure()

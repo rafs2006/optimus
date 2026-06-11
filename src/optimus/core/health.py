@@ -7,7 +7,11 @@ from collections.abc import Awaitable, Callable
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, CollectorRegistry, generate_latest
 
+from optimus.core.logging import get_logger
+
 ReadinessCheck = Callable[[], Awaitable[bool]]
+
+_log = get_logger(__name__)
 
 
 class HealthServer:
@@ -27,7 +31,7 @@ class HealthServer:
         self._host = host
         self._port = port
         self._registry = registry
-        self._readiness_checks: list[ReadinessCheck] = []
+        self._readiness_checks: list[tuple[str, ReadinessCheck]] = []
         self._live = True
         self._app = web.Application()
         self._app.add_routes(
@@ -39,9 +43,12 @@ class HealthServer:
         )
         self._runner: web.AppRunner | None = None
 
-    def add_readiness_check(self, check: ReadinessCheck) -> None:
-        """Register an async readiness check returning ``True`` when ready."""
-        self._readiness_checks.append(check)
+    def add_readiness_check(self, check: ReadinessCheck, *, name: str = "check") -> None:
+        """Register an async readiness check returning ``True`` when ready.
+
+        ``name`` labels the dependency in readiness failure logs (e.g. ``redis``).
+        """
+        self._readiness_checks.append((name, check))
 
     def set_live(self, live: bool) -> None:
         """Set process liveness (used to fail ``/healthz`` during shutdown)."""
@@ -53,12 +60,14 @@ class HealthServer:
         return web.json_response({"status": "shutting_down"}, status=503)
 
     async def _handle_readyz(self, _request: web.Request) -> web.Response:
-        for check in self._readiness_checks:
+        for name, check in self._readiness_checks:
             try:
                 ok = await check()
             except Exception:
+                _log.exception("readiness_check_errored", check=name)
                 ok = False
             if not ok:
+                _log.warning("readiness_check_failed", check=name)
                 return web.json_response({"status": "not_ready"}, status=503)
         return web.json_response({"status": "ready"})
 

@@ -352,6 +352,7 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     from optimus.core.health import HealthServer
     from optimus.core.logging import configure_logging
     from optimus.core.ratelimit import InMemoryRateLimiter, RedisRateLimiter
+    from optimus.core.readiness import redis_check
     from optimus.db.engine import create_engine, create_session_factory, session_scope
 
     settings = get_settings()
@@ -370,6 +371,8 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     service = InteractionService(scope, rate_limiter, settings)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
+    if redis is not None:
+        health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
     bot = hikari.GatewayBot(token=settings.discord_token, intents=hikari.Intents.GUILDS)

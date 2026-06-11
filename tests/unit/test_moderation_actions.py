@@ -176,3 +176,29 @@ async def test_cooldown_window_validation() -> None:
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     with pytest.raises(ValueError, match="window_seconds"):
         Cooldown(redis, window_seconds=0)
+
+
+async def _always_acquire(_key: str) -> bool:
+    return True
+
+
+async def test_default_breaker_records_transition_metric() -> None:
+    from optimus.services.moderation.actions import CIRCUIT_TRANSITIONS
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest(fail_times=99)
+    # A default-constructed executor wires the metric/log observer onto its breaker.
+    ex = ActionExecutor(
+        rest,
+        InMemoryRateLimiter(),
+        bot_user_id=999,
+        rate=RateLimit(capacity=50.0, refill_rate=0.001),
+        idempotency_acquire=_always_acquire,
+        dm_cooldown=Cooldown(redis, window_seconds=3600),
+        backoff=BackoffPolicy(base=0.001, max_delay=0.002, max_attempts=1),
+    )
+    label = CIRCUIT_TRANSITIONS.labels(from_state="closed", to_state="open")
+    before = label._value.get()
+    for i in range(5):  # default failure_threshold (5) trips the breaker open
+        await ex.execute(_req(key=f"trip{i}"))
+    assert label._value.get() == before + 1
