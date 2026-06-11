@@ -115,6 +115,31 @@ async def test_detection_idempotency_scoped(session: AsyncSession) -> None:
     assert len(recent) == 1
 
 
+async def test_detection_belongs_to_enforces_guild_and_uploader(
+    session: AsyncSession,
+) -> None:
+    await _make_guild(session, 5)
+    await _make_guild(session, 6)
+    repo = DetectionRepository(session, guild_id=5)
+    stored = await repo.record(
+        Detection(
+            message_id=10,
+            channel_id=11,
+            attachment_id=12,
+            uploader_id=13,
+            distances={"phash": 0},
+            verdict="scam",
+            idempotency_key="10:12",
+        )
+    )
+
+    assert await repo.belongs_to(stored.id, 13) is True
+    # Wrong uploader, wrong guild, and unknown id are all rejected.
+    assert await repo.belongs_to(stored.id, 99) is False
+    assert await DetectionRepository(session, guild_id=6).belongs_to(stored.id, 13) is False
+    assert await repo.belongs_to(stored.id + 1000, 13) is False
+
+
 # --- opt-out / right to erasure ------------------------------------------------
 
 

@@ -161,6 +161,13 @@ class DbDeps:
                 return detection.id
         return None
 
+    async def detection_belongs_to(
+        self, guild_id: int, detection_id: int, user_id: int
+    ) -> bool:
+        return await DetectionRepository(self._session, guild_id).belongs_to(
+            detection_id, user_id
+        )
+
     async def open_appeal(self, guild_id: int, detection_id: int, user_id: int) -> int:
         appeal = await AppealRepository(self._session, guild_id).open(
             detection_id=detection_id, user_id=user_id

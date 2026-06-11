@@ -269,6 +269,15 @@ class DetectionRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def belongs_to(self, detection_id: int, user_id: int) -> bool:
+        """Whether ``detection_id`` exists in this guild and ``user_id`` uploaded it."""
+        stmt = select(func.count()).where(
+            Detection.guild_id == self._guild_id,
+            Detection.id == detection_id,
+            Detection.uploader_id == user_id,
+        )
+        return int((await self._session.execute(stmt)).scalar_one()) > 0
+
     async def set_action_taken(self, detection_id: int, action: str) -> int:
         """Record the action applied to a detection; return rows affected."""
         from sqlalchemy import update
