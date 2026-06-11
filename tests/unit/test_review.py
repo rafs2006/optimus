@@ -1,0 +1,69 @@
+"""Unit tests for the review custom_id scheme and report content."""
+
+from __future__ import annotations
+
+import pytest
+
+from optimus.services.moderation.review import (
+    REVIEW_BUTTONS,
+    ReportData,
+    ReviewAction,
+    decode_custom_id,
+    encode_custom_id,
+    report_fields,
+    report_title,
+)
+
+
+@pytest.mark.parametrize("action", list(ReviewAction))
+def test_custom_id_roundtrips(action: ReviewAction) -> None:
+    cid = encode_custom_id(action, 12345)
+    assert cid.startswith("om:v1:")
+    parsed = decode_custom_id(cid)
+    assert parsed is not None
+    assert parsed.action is action
+    assert parsed.detection_id == 12345
+
+
+def test_decode_rejects_foreign_custom_id() -> None:
+    assert decode_custom_id("other:thing:confirm_scam:1") is None
+    assert decode_custom_id("om:v1:confirm_scam") is None
+    assert decode_custom_id("om:v1:not_an_action:1") is None
+    assert decode_custom_id("om:v1:confirm_scam:notint") is None
+
+
+def test_all_buttons_are_offered() -> None:
+    assert set(REVIEW_BUTTONS) == set(ReviewAction)
+
+
+def test_report_title_and_fields() -> None:
+    data = ReportData(
+        detection_id=9,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=42,
+        verdict="scam",
+        confidence=0.91,
+        action_taken="delete_ban",
+        matched_hash_id="camp-7",
+        swarm_guilds=4,
+        evidence_url="https://example/x",
+    )
+    assert "#9" in report_title(data)
+    field_names = [name for name, _ in report_fields(data)]
+    assert "Uploader" in field_names
+    assert "Matched hash" in field_names
+    assert "Swarm" in field_names
+    assert "Evidence" in field_names
+
+
+def test_report_fields_omit_optional_when_absent() -> None:
+    data = ReportData(
+        detection_id=1, guild_id=1, channel_id=2, message_id=3, uploader_id=4,
+        verdict="ambiguous", confidence=0.6, action_taken="report_only",
+    )
+    names = [name for name, _ in report_fields(data)]
+    assert "Matched hash" not in names
+    assert "Swarm" not in names
+    assert "Evidence" not in names
