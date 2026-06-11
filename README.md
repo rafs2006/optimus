@@ -1,5 +1,8 @@
 # optimus
 
+[![CI](https://github.com/la314sazuli/optimus/actions/workflows/ci.yml/badge.svg)](https://github.com/la314sazuli/optimus/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Open-source Discord moderation bot focused on detecting and removing scam,
 phishing, and fraud **images** (fake giveaways, fake Nitro/Steam gifts, fake
 exchange screenshots, wallet-drainer QR codes) in near-real-time, built to scale
@@ -42,6 +45,10 @@ Discord ──▶ gateway ──▶ ingest ──▶ detection ──▶ moderat
 Event schemas and NATS subjects are defined in
 [`src/optimus/contracts/events.py`](src/optimus/contracts/events.py); every
 subject is versioned (`...v1`) so schemas can evolve without breaking consumers.
+
+For a deeper treatment — the full message flow, the detection pipeline, where
+state lives, and where the resilience controls sit (with diagrams) — see
+[`docs/architecture.md`](docs/architecture.md).
 
 ## Quickstart (self-hosted)
 
@@ -129,11 +136,26 @@ trading off per sensitivity — the right bias for an auto-moderation action.
 ## Development
 
 ```bash
-uv sync --extra dev
-uv run ruff check .
-uv run mypy
-uv run pytest
+uv sync --extra dev --frozen
+uv run ruff check .   # lint (matches CI)
+uv run mypy           # type-check, strict (matches CI)
+uv run pytest         # test suite (matches CI)
 ```
+
+Optional [pre-commit](https://pre-commit.com/) hooks run the same `ruff check`
+and `mypy` plus secret scanning:
+
+```bash
+uvx pre-commit install
+uvx pre-commit run --all-files
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full developer workflow (setup,
+running services locally, test conventions, and PR expectations) and
+[`docs/architecture.md`](docs/architecture.md) for the system design. Additional
+references: [`docs/security-audit.md`](docs/security-audit.md),
+[`docs/performance-notes.md`](docs/performance-notes.md), and
+[`docs/eval/baseline.md`](docs/eval/baseline.md).
 
 ## License
 
