@@ -155,8 +155,7 @@ def build_coordinator(
                 guild_id=guild_id,
                 configured_action=action,
                 mod_queue_threshold=(
-                    guild.mod_queue_threshold if guild is not None
-                    else settings.mod_queue_threshold
+                    guild.mod_queue_threshold if guild is not None else settings.mod_queue_threshold
                 ),
                 auto_act_threshold=settings.mod_auto_act_threshold,
                 safe_mode=guild.safe_mode if guild is not None else False,
@@ -237,9 +236,7 @@ async def _resolve_target(  # pragma: no cover - requires live REST
         if int(rid) in by_id
     )
     top = max((by_id[int(rid)].position for rid in member.role_ids if int(rid) in by_id), default=0)
-    bot_top = max(
-        (by_id[int(rid)].position for rid in me.role_ids if int(rid) in by_id), default=0
-    )
+    bot_top = max((by_id[int(rid)].position for rid in me.role_ids if int(rid) in by_id), default=0)
     return TargetContext(
         user_id=user_id,
         guild_owner_id=int(guild.owner_id),

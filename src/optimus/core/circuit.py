@@ -58,9 +58,7 @@ class CircuitBreaker:
         self._opened_at = 0.0
         self._trials_in_flight = 0
 
-    def add_state_listener(
-        self, listener: Callable[[CircuitState, CircuitState], None]
-    ) -> None:
+    def add_state_listener(self, listener: Callable[[CircuitState, CircuitState], None]) -> None:
         """Register ``listener`` to fire on every real state transition.
 
         Idempotent: re-registering an already-attached listener is a no-op, so a

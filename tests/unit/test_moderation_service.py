@@ -105,9 +105,7 @@ async def test_on_guild_joined_inserts_row_once(scope: SessionScope) -> None:
     svc = ModerationService(
         get_settings(), _FakeBus(), _FakeCoordinator(ActionResult(Action.NONE, True)), scope
     )  # type: ignore[arg-type]
-    event = GuildJoinedEvent(
-        correlation_id="c", occurred_at=datetime.now(UTC), guild_id=99
-    )
+    event = GuildJoinedEvent(correlation_id="c", occurred_at=datetime.now(UTC), guild_id=99)
     await svc.on_guild_joined(event)
     await svc.on_guild_joined(event)  # idempotent: existing row is left in place
 

@@ -81,9 +81,7 @@ class FakeDeps:
     async def recent_detection_for(self, guild_id: int, user_id: int) -> int | None:
         return self._recent_detection
 
-    async def detection_belongs_to(
-        self, guild_id: int, detection_id: int, user_id: int
-    ) -> bool:
+    async def detection_belongs_to(self, guild_id: int, detection_id: int, user_id: int) -> bool:
         return detection_id in self._owned_detections
 
     async def open_appeal(self, guild_id: int, detection_id: int, user_id: int) -> int:
@@ -204,9 +202,7 @@ async def test_forget_me_allowed_in_dm_without_permission() -> None:
 @pytest.mark.asyncio
 async def test_scamhash_add_audits_and_stores() -> None:
     deps = FakeDeps()
-    resp = await handle_command(
-        _ctx("scamhash", subcommand="add", phash="deadbeef"), deps
-    )
+    resp = await handle_command(_ctx("scamhash", subcommand="add", phash="deadbeef"), deps)
     assert resp.i18n_key == "command.hash_added"
     assert deps.hashes
     assert deps.audits[0][2] == "scamhash.add"

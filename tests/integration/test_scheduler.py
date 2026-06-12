@@ -85,8 +85,12 @@ async def test_retention_also_clears_mod_actions(scope: SessionScope) -> None:
     async with scope() as s:
         s.add(
             ModAction(
-                guild_id=1, actor_id=0, action="delete_ban", target="4",
-                payload={}, created_at=now - timedelta(days=20),
+                guild_id=1,
+                actor_id=0,
+                action="delete_ban",
+                target="4",
+                payload={},
+                created_at=now - timedelta(days=20),
             )
         )
     deleted = await tasks.enforce_retention(scope, default_days=30, now=now)

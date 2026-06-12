@@ -83,9 +83,7 @@ def main(argv: list[str] | None = None) -> None:
     presets = preset_results(scored)
     operating_point = recommend_operating_point(sweep)
 
-    report = render_markdown(
-        corpus, scored, sweep, presets, operating_point, PERTURBATIONS
-    )
+    report = render_markdown(corpus, scored, sweep, presets, operating_point, PERTURBATIONS)
     print(report)
 
     if args.markdown is not None:

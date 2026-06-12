@@ -461,9 +461,7 @@ async def test_appeal_flow_owner_succeeds_nonowner_rejected_then_mod_reverses(
     intruder_ctx = InteractionContext(
         guild_id=GUILD_ID, user_id=SCAM_UPLOADER + 1, member_permissions=0, command=""
     )
-    rejected = await handle_component(
-        intruder_ctx, ComponentAction.APPEAL_OPEN, detection.id, deps
-    )
+    rejected = await handle_component(intruder_ctx, ComponentAction.APPEAL_OPEN, detection.id, deps)
     assert rejected.i18n_key == "command.appeal_none"
     assert (await db_session.execute(Appeal.__table__.select())).fetchall() == []
 
@@ -537,9 +535,7 @@ async def test_open_circuit_breaker_fails_action_gracefully(
     # auto-recovers mid-test. The first scam trips it; the second is rejected
     # fast with circuit_open and no Discord call is attempted.
     clock = _FakeClock()
-    breaker = CircuitBreaker(
-        failure_threshold=1, recovery_time=1000.0, time_source=clock.now
-    )
+    breaker = CircuitBreaker(failure_threshold=1, recovery_time=1000.0, time_source=clock.now)
     scam = make_scam_png()
     await _seed_guild(db_session, action_policy="delete_ban")
     await _register_scam_hash(db_session, scam)

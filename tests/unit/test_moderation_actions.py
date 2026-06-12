@@ -224,8 +224,12 @@ async def test_no_dm_to_self() -> None:
     rest = _FakeRest()
     ex = _executor(rest, redis=redis)
     req = ActionRequest(
-        guild_id=1, channel_id=2, message_id=3, uploader_id=999,
-        action=Action.DELETE, idempotency_key="self",
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=999,
+        action=Action.DELETE,
+        idempotency_key="self",
     )
     await ex.execute(req)
     assert rest.dms == []

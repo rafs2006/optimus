@@ -231,9 +231,7 @@ class GlobalSubmitterRepository:
         row = await self.get_or_create(user_id)
         row.confirmed += confirmed
         row.rejected += rejected
-        row.reputation = reputation_after(
-            row.reputation, confirmed=confirmed, rejected=rejected
-        )
+        row.reputation = reputation_after(row.reputation, confirmed=confirmed, rejected=rejected)
         await self._session.flush()
         return row
 
@@ -373,9 +371,7 @@ class AppealRepository:
 
     async def delete_older_than(self, cutoff: datetime) -> int:
         """Delete appeals older than ``cutoff``; return rows deleted."""
-        stmt = delete(Appeal).where(
-            Appeal.guild_id == self._guild_id, Appeal.created_at < cutoff
-        )
+        stmt = delete(Appeal).where(Appeal.guild_id == self._guild_id, Appeal.created_at < cutoff)
         result = await self._session.execute(stmt)
         await self._session.flush()
         return cast("CursorResult[Any]", result).rowcount or 0

@@ -84,8 +84,14 @@ def test_report_title_and_fields() -> None:
 
 def test_report_fields_omit_optional_when_absent() -> None:
     data = ReportData(
-        detection_id=1, guild_id=1, channel_id=2, message_id=3, uploader_id=4,
-        verdict="ambiguous", confidence=0.6, action_taken="report_only",
+        detection_id=1,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=4,
+        verdict="ambiguous",
+        confidence=0.6,
+        action_taken="report_only",
     )
     names = [name for name, _ in report_fields(data)]
     assert "Matched hash" not in names

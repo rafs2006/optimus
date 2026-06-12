@@ -161,12 +161,8 @@ class DbDeps:
                 return detection.id
         return None
 
-    async def detection_belongs_to(
-        self, guild_id: int, detection_id: int, user_id: int
-    ) -> bool:
-        return await DetectionRepository(self._session, guild_id).belongs_to(
-            detection_id, user_id
-        )
+    async def detection_belongs_to(self, guild_id: int, detection_id: int, user_id: int) -> bool:
+        return await DetectionRepository(self._session, guild_id).belongs_to(detection_id, user_id)
 
     async def open_appeal(self, guild_id: int, detection_id: int, user_id: int) -> int:
         appeal = await AppealRepository(self._session, guild_id).open(
@@ -235,9 +231,7 @@ class DbDeps:
 class InteractionService:
     """Routes hikari interactions through the pure handlers within a DB scope."""
 
-    def __init__(
-        self, scope: SessionScope, rate_limiter: RateLimiter, settings: Settings
-    ) -> None:
+    def __init__(self, scope: SessionScope, rate_limiter: RateLimiter, settings: Settings) -> None:
         self._scope = scope
         self._rl = rate_limiter
         self._settings = settings
@@ -383,9 +377,7 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     @bot.listen(hikari.InteractionCreateEvent)
     async def _on_interaction(event: hikari.InteractionCreateEvent) -> None:
         interaction = event.interaction
-        if not isinstance(
-            interaction, hikari.CommandInteraction | hikari.ComponentInteraction
-        ):
+        if not isinstance(interaction, hikari.CommandInteraction | hikari.ComponentInteraction):
             return
         message = await run_interaction(service, interaction)
         if not message:

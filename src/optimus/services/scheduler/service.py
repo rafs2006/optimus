@@ -143,32 +143,47 @@ class SchedulerService:
         return [
             asyncio.create_task(
                 run_periodic(
-                    "retention", s.scheduler_retention_interval, self._retention,
-                    stop=self._stop, jitter_fraction=jf,
+                    "retention",
+                    s.scheduler_retention_interval,
+                    self._retention,
+                    stop=self._stop,
+                    jitter_fraction=jf,
                 )
             ),
             asyncio.create_task(
                 run_periodic(
-                    "evidence", s.scheduler_evidence_interval, self._evidence,
-                    stop=self._stop, jitter_fraction=jf,
+                    "evidence",
+                    s.scheduler_evidence_interval,
+                    self._evidence,
+                    stop=self._stop,
+                    jitter_fraction=jf,
                 )
             ),
             asyncio.create_task(
                 run_periodic(
-                    "rollups", s.scheduler_rollup_interval, self._rollups,
-                    stop=self._stop, jitter_fraction=jf,
+                    "rollups",
+                    s.scheduler_rollup_interval,
+                    self._rollups,
+                    stop=self._stop,
+                    jitter_fraction=jf,
                 )
             ),
             asyncio.create_task(
                 run_periodic(
-                    "index_rebuild", s.scheduler_index_rebuild_interval, self._index_rebuild,
-                    stop=self._stop, jitter_fraction=jf,
+                    "index_rebuild",
+                    s.scheduler_index_rebuild_interval,
+                    self._index_rebuild,
+                    stop=self._stop,
+                    jitter_fraction=jf,
                 )
             ),
             asyncio.create_task(
                 run_periodic(
-                    "health_sweep", s.scheduler_health_interval, self._health_sweep,
-                    stop=self._stop, jitter_fraction=jf,
+                    "health_sweep",
+                    s.scheduler_health_interval,
+                    self._health_sweep,
+                    stop=self._stop,
+                    jitter_fraction=jf,
                 )
             ),
         ]

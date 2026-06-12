@@ -161,9 +161,7 @@ def default_thresholds(steps: int = 25, hi: float = 0.30) -> list[float]:
     return [round(i * hi / steps, 4) for i in range(steps + 1)]
 
 
-def perturbation_recall(
-    scored: Sequence[Scored], threshold: float
-) -> dict[str, tuple[int, int]]:
+def perturbation_recall(scored: Sequence[Scored], threshold: float) -> dict[str, tuple[int, int]]:
     """Per-perturbation (and base) recall at ``threshold``.
 
     Returns ``{perturbation: (caught, total)}`` for scam images only. The
