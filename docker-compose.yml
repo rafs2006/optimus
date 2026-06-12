@@ -125,7 +125,58 @@ services:
     <<: *optimus-service
     command: ["python", "-m", "optimus.services.scheduler"]
 
+  # ---- Optional monitoring stack -------------------------------------------
+  # Opt-in only: these services carry `profiles: [monitoring]`, so a plain
+  # `docker compose up` does NOT start them. Bring them up with:
+  #
+  #   docker compose --profile monitoring up -d prometheus grafana
+  #
+  # Prometheus scrapes all six services on the shared compose network and
+  # evaluates the alert rules in monitoring/alerts.yml. Grafana is provisioned
+  # with the Prometheus datasource and the Optimus overview dashboard.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      # Local self-host defaults; change the admin password for any real use.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   redis-data:
   nats-data:
+  prometheus-data:
+  grafana-data:

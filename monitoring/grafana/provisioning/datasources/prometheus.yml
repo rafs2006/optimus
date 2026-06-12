@@ -1,0 +1,16 @@
+# Provisioned Prometheus datasource for Grafana. Grafana reads this on startup
+# (mounted under /etc/grafana/provisioning/datasources) so the datasource exists
+# with no manual setup. The URL uses the compose service name on the shared
+# network.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    uid: optimus-prometheus
+    editable: false
+    jsonData:
+      timeInterval: 15s

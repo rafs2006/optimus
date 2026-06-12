@@ -190,7 +190,12 @@ running services locally, test conventions, and PR expectations) and
 [`docs/architecture.md`](docs/architecture.md) for the system design. Additional
 references: [`docs/security-audit.md`](docs/security-audit.md),
 [`docs/performance-notes.md`](docs/performance-notes.md),
-[`docs/sharding.md`](docs/sharding.md) (gateway sharding for large fleets), and
+[`docs/scaling.md`](docs/scaling.md) (consolidated guide for huge servers and
+large fleets: sharding, detection replicas, distributed rate limiting,
+retention, pooling, monitoring, and alerting),
+[`docs/sharding.md`](docs/sharding.md) (gateway sharding for large fleets),
+[`docs/privacy-policy-template.md`](docs/privacy-policy-template.md) (privacy
+policy template for Discord bot verification), and
 [`docs/eval/baseline.md`](docs/eval/baseline.md).
 
 ## License
