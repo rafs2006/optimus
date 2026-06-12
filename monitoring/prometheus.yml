@@ -1,0 +1,46 @@
+# Prometheus scrape config for the optimus monitoring profile.
+#
+# Every optimus service exposes Prometheus metrics at /metrics on port 8080
+# (the same aiohttp health server that serves /healthz and /readyz). Within the
+# compose network each service is reachable by its compose service name, so we
+# scrape <service>:8080 directly — no host ports are published.
+#
+# This file is mounted read-only into the prometheus container and referenced by
+# alerting_rules below.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    deployment: optimus
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: optimus
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8080"]
+        labels:
+          service: gateway
+      - targets: ["ingest:8080"]
+        labels:
+          service: ingest
+      - targets: ["detection:8080"]
+        labels:
+          service: detection
+      - targets: ["moderation:8080"]
+        labels:
+          service: moderation
+      - targets: ["interactions:8080"]
+        labels:
+          service: interactions
+      - targets: ["scheduler:8080"]
+        labels:
+          service: scheduler
+
+  # Prometheus scrapes itself so the monitoring stack is observable too.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,163 @@
+# Prometheus alerting rules for optimus.
+#
+# Thresholds are intentionally conservative: each `for:` window is long enough
+# to ride out a single missed scrape, a rolling deploy, or a brief burst, so a
+# firing alert reflects a sustained condition an operator should look at rather
+# than transient noise. Tune per deployment — the comments explain the intent.
+
+groups:
+  - name: optimus-availability
+    rules:
+      # A scrape target is unreachable. `up` is 0 when Prometheus cannot scrape
+      # the service's /metrics endpoint at all (process crashed, OOM, network).
+      # 2m absorbs a normal restart/rolling deploy before paging.
+      - alert: OptimusServiceDown
+        expr: up{job="optimus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "optimus service {{ $labels.service }} is down"
+          description: >-
+            Prometheus has been unable to scrape {{ $labels.service }}
+            ({{ $labels.instance }}) for over 2 minutes. The process is likely
+            crashed, OOM-killed, or network-partitioned.
+
+      # Readiness is failing while the process is still up. We cannot scrape
+      # /readyz directly, but a service that is up yet not processing work shows
+      # up as no successful scrape increments; this rule keys off the absence of
+      # readiness by proxy: the health server is reachable (up==1) but the
+      # service reports it is not ready via the readiness gauge if present.
+      # Optimus does not export a readiness gauge, so we approximate "readiness
+      # failing" as: the service is up but has stopped acking bus messages while
+      # messages are still inflight — a stalled consumer that /readyz would also
+      # reflect. 10m is deliberately long to avoid flapping on idle services.
+      - alert: OptimusConsumerStalled
+        expr: |
+          up{job="optimus"} == 1
+          and on(service) (
+            max by (service) (optimus_bus_messages_inflight) > 0
+            and rate(optimus_bus_messages_acked_total[10m]) == 0
+          )
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "optimus {{ $labels.service }} consumer appears stalled"
+          description: >-
+            {{ $labels.service }} has messages in flight but has acked nothing
+            for 10 minutes. The consumer may be wedged on a slow dependency;
+            check /readyz and downstream Redis/Postgres/NATS health.
+
+  - name: optimus-moderation
+    rules:
+      # Circuit breaker stuck open. optimus_moderation_circuit_state:
+      # 0=closed, 1=half_open, 2=open. Open means moderation action dispatch to
+      # Discord is shedding load because the breaker tripped on repeated
+      # failures. Brief opens during a Discord blip are normal; >5m sustained
+      # open means actions are not being applied and needs attention.
+      - alert: OptimusModerationCircuitOpen
+        expr: optimus_moderation_circuit_state == 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "moderation circuit breaker open >5m"
+          description: >-
+            The moderation action circuit breaker has been OPEN for over 5
+            minutes, so moderation actions are not reaching Discord. Check the
+            Discord API status and moderation service logs.
+
+      # Per-priority queue depth sustained high. The moderation dispatcher keeps
+      # a bounded per-priority queue; a persistently deep queue means dispatch
+      # cannot keep up with inflow (rate limiting, slow Discord, or under-scaled
+      # moderation). 100 sustained for 10m is well above normal burst depth.
+      - alert: OptimusModerationQueueDepthHigh
+        expr: optimus_moderation_priority_queue_depth > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "moderation queue depth high (priority {{ $labels.priority }})"
+          description: >-
+            optimus_moderation_priority_queue_depth for priority
+            {{ $labels.priority }} has stayed above 100 for 10 minutes. Dispatch
+            is falling behind inflow; consider scaling moderation or checking the
+            circuit breaker / rate limits.
+
+  - name: optimus-ratelimit
+    rules:
+      # Redis rate-limit backend is degraded. The distributed limiter falls back
+      # to per-process in-memory buckets when Redis is unreachable, which means
+      # the shared limit is temporarily multiplied by replica count. Any
+      # increase over 5m signals an ongoing Redis problem for the limiter path.
+      - alert: OptimusRatelimitRedisFallback
+        expr: increase(optimus_ratelimit_redis_fallback_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ratelimit redis fallback active"
+          description: >-
+            The Redis rate-limit backend has fallen back to in-memory buckets
+            in the last 5 minutes (optimus_ratelimit_redis_fallback_total is
+            increasing). Effective limits are multiplied by replica count until
+            Redis recovers. Check Redis connectivity.
+
+  - name: optimus-pipeline
+    rules:
+      # Images are being dropped/rejected at a sustained rate. Covers all three
+      # reject/drop counters across the pipeline (gateway drops, ingest
+      # rejects, detection payload rejects). A trickle is normal (oversize
+      # images, bad payloads); a sustained rate over 5m suggests a misbehaving
+      # client, an attack, or a config regression.
+      - alert: OptimusGatewayDropsIncreasing
+        expr: sum(rate(optimus_gateway_images_dropped_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "gateway dropping images at >1/s"
+          description: >-
+            optimus_gateway_images_dropped_total is increasing at over 1/s
+            (averaged over 5m). Check the dominant drop reason and whether a
+            client is sending malformed or oversize attachments.
+
+      - alert: OptimusIngestRejectsIncreasing
+        expr: sum(rate(optimus_ingest_images_rejected_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ingest rejecting images at >1/s"
+          description: >-
+            optimus_ingest_images_rejected_total is increasing at over 1/s
+            (averaged over 5m). Inspect the reason label (SSRF, oversize, fetch
+            failure) to find the source.
+
+      - alert: OptimusDetectionRejectsIncreasing
+        expr: sum(rate(optimus_detection_payload_rejected_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "detection rejecting payloads at >1/s"
+          description: >-
+            optimus_detection_payload_rejected_total is increasing at over 1/s
+            (averaged over 5m). Likely a contract/version mismatch or corrupt
+            payloads from ingest.
+
+      # NATS bus is dropping poison/undecodable messages. Any sustained increase
+      # means messages are being discarded rather than processed — a contract or
+      # serialization regression.
+      - alert: OptimusBusMessagesDropped
+        expr: sum(rate(optimus_bus_messages_dropped_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "bus dropping messages (subject {{ $labels.subject }})"
+          description: >-
+            optimus_bus_messages_dropped_total is increasing over 5m. Messages
+            are undecodable/poison and being discarded. Check for a contract or
+            schema-version mismatch between publisher and consumer.

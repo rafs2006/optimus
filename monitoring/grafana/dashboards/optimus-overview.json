@@ -1,0 +1,357 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["optimus"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Optimus Overview",
+  "uid": "optimus-overview",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Pipeline",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "title": "Pipeline throughput (msgs/s)",
+      "description": "Per-subject message acks per second across the NATS bus — the end-to-end pipeline rate (image events, verdicts, action results).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (subject) (rate(optimus_bus_messages_acked_total[5m]))",
+          "legendFormat": "{{subject}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum (rate(optimus_bus_messages_acked_total[5m]))",
+          "legendFormat": "total"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Detection in-flight vs max",
+      "description": "Messages currently being processed on the detection consumer subject (events.image_fetched.v1) against the configured per-replica ceiling (OPTIMUS_DETECTION_MAX_INFLIGHT, default 10). Sustained saturation means detection is the bottleneck — add replicas.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "configured max" },
+            "properties": [
+              { "id": "custom.drawStyle", "value": "line" },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum(optimus_bus_messages_inflight{subject=\"events.image_fetched.v1\"})",
+          "legendFormat": "in-flight"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "10",
+          "legendFormat": "configured max"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Moderation",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "title": "p95 dispatch latency",
+      "description": "95th-percentile moderation dispatch latency per priority, from optimus_moderation_dispatch_latency_seconds histogram.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, priority) (rate(optimus_moderation_dispatch_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{priority}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Per-priority queue depth",
+      "description": "Current moderation dispatch queue depth per priority (optimus_moderation_priority_queue_depth). Rising depth means dispatch is falling behind inflow.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "optimus_moderation_priority_queue_depth",
+          "legendFormat": "{{priority}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Circuit breaker states",
+      "description": "Moderation action circuit breaker state over time: 0=closed, 1=half-open, 2=open. Open means actions are being shed because Discord dispatch is failing.",
+      "type": "state-timeline",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "closed", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "half-open", "color": "yellow", "index": 1 } } },
+            { "type": "value", "options": { "2": { "text": "open", "color": "red", "index": 2 } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "left",
+        "rowHeight": 0.9,
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "optimus_moderation_circuit_state",
+          "legendFormat": "circuit state"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Circuit breaker transitions",
+      "description": "Rate of circuit breaker state transitions (optimus_moderation_circuit_transitions_total), labelled by from/to state. Spikes indicate flapping.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (from_state, to_state) (rate(optimus_moderation_circuit_transitions_total[5m]))",
+          "legendFormat": "{{from_state}} -> {{to_state}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Reliability & retention",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "id": 102,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "title": "Ratelimit Redis fallbacks",
+      "description": "Rate of distributed-ratelimit fallbacks to in-memory buckets (optimus_ratelimit_redis_fallback_total). Non-zero means Redis is unreachable for the limiter and effective limits are multiplied by replica count.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "showPoints": "never" },
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum(rate(optimus_ratelimit_redis_fallback_total[5m]))",
+          "legendFormat": "fallbacks/s"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Reject / drop counters",
+      "description": "Per-second rate of images and payloads rejected or dropped across the pipeline: gateway drops, ingest rejects, detection payload rejects, and bus drops — broken out by reason.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (reason) (rate(optimus_gateway_images_dropped_total[5m]))",
+          "legendFormat": "gateway drop: {{reason}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (reason) (rate(optimus_ingest_images_rejected_total[5m]))",
+          "legendFormat": "ingest reject: {{reason}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (reason) (rate(optimus_detection_payload_rejected_total[5m]))",
+          "legendFormat": "detection reject: {{reason}}"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (reason) (rate(optimus_bus_messages_dropped_total[5m]))",
+          "legendFormat": "bus drop: {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Retention purges (rows affected)",
+      "description": "Rows deleted per second by the scheduler retention_purge job (optimus_scheduler_rows_affected_total). Zero when OPTIMUS_DETECTION_RETENTION_DAYS is unset (purge disabled).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rps",
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "optimus-prometheus" },
+          "expr": "sum by (task) (rate(optimus_scheduler_rows_affected_total[15m]))",
+          "legendFormat": "{{task}}"
+        }
+      ]
+    }
+  ]
+}

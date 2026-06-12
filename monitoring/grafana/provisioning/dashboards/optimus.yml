@@ -1,0 +1,15 @@
+# Provisioned dashboard provider. Grafana loads every dashboard JSON found under
+# the configured path on startup (mounted at /var/lib/grafana/dashboards), so the
+# optimus dashboard appears automatically with no import step.
+apiVersion: 1
+
+providers:
+  - name: optimus
+    orgId: 1
+    folder: Optimus
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
