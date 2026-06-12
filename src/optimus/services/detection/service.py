@@ -15,6 +15,7 @@ from contextlib import AbstractAsyncContextManager
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from optimus.bus import Bus
 from optimus.bus.nats import EventBus
 from optimus.contracts.events import (
     SUBJECT_IMAGE_FETCHED,
@@ -52,7 +53,7 @@ class DetectionService:
     def __init__(
         self,
         settings: Settings,
-        bus: EventBus,
+        bus: Bus,
         worker: DetectionWorker,
         index_manager: IndexManager,
         session_scope_factory: SessionScope,
@@ -110,13 +111,34 @@ class DetectionService:
                 pass
 
 
-def build_service(settings: Settings, bus: EventBus, redis: object | None) -> DetectionService:
-    """Wire a :class:`DetectionService` from settings and shared clients."""
-    engine = create_engine()
-    factory = create_session_factory(engine)
+def build_service(
+    settings: Settings,
+    bus: Bus,
+    redis: object | None,
+    *,
+    session_scope_factory: SessionScope | None = None,
+    enable_swarm: bool = True,
+) -> DetectionService:
+    """Wire a :class:`DetectionService` from settings and shared clients.
 
-    def scope() -> AbstractAsyncContextManager[AsyncSession]:
-        return session_scope(factory)
+    ``session_scope_factory`` lets the simple-mode composer pass a shared engine's
+    scope instead of opening a second one; distributed mode leaves it ``None`` so
+    the service owns its own engine exactly as before.
+
+    ``enable_swarm`` gates the cross-guild :class:`SwarmCorrelator`, which needs a
+    real Redis (it issues a Lua ``EVAL``). Simple mode passes ``enable_swarm=False``
+    so it can share the in-memory store for the idempotency guard without that
+    store needing to emulate ``EVAL``; a single-process bot has no fleet-wide swarm
+    signal to correlate anyway. Distributed mode keeps it on, unchanged.
+    """
+    if session_scope_factory is not None:
+        scope = session_scope_factory
+    else:
+        engine = create_engine()
+        factory = create_session_factory(engine)
+
+        def scope() -> AbstractAsyncContextManager[AsyncSession]:
+            return session_scope(factory)
 
     index_manager = IndexManager(scope, max_guilds=settings.detection_guild_index_cap)
 
@@ -127,7 +149,7 @@ def build_service(settings: Settings, bus: EventBus, redis: object | None) -> De
             min_guilds=settings.swarm_min_guilds,
             window_seconds=settings.swarm_window_seconds,
         )
-        if redis is not None
+        if redis is not None and enable_swarm
         else None
     )
 

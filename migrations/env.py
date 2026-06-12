@@ -21,7 +21,15 @@ target_metadata = Base.metadata
 
 
 def _sync_url() -> str:
-    return get_settings().database_url
+    # A URL set on the alembic config (the programmatic simple-mode upgrade does
+    # this via ``set_main_option``) wins, so we migrate exactly the database the
+    # caller asked for. Otherwise fall back to ``effective_database_url``, which
+    # resolves to the SQLite file in simple mode and the configured Postgres URL
+    # otherwise.
+    configured = config.get_main_option("sqlalchemy.url")
+    if configured:
+        return configured
+    return get_settings().effective_database_url
 
 
 def run_migrations_offline() -> None:

@@ -34,6 +34,19 @@ def _parse_shard_ids(raw: str) -> tuple[int, ...]:
     return tuple(sorted(ids))
 
 
+class Mode(StrEnum):
+    """Process-composition mode.
+
+    ``SIMPLE`` (the default) runs every service in one asyncio process over an
+    in-process bus with SQLite and in-memory backends — zero external services,
+    ideal for getting started. ``DISTRIBUTED`` is the six-service deployment wired
+    over NATS/Redis/Postgres, run via the per-service entrypoints.
+    """
+
+    SIMPLE = "simple"
+    DISTRIBUTED = "distributed"
+
+
 class Tenancy(StrEnum):
     """Deployment tenancy mode."""
 
@@ -74,6 +87,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    #: Process-composition mode. ``simple`` (default) runs everything in one
+    #: process with zero external services; ``distributed`` is the six-service
+    #: NATS/Redis/Postgres deployment. See :class:`Mode`.
+    mode: Mode = Mode.SIMPLE
+
     tenancy: Tenancy = Tenancy.SINGLE
 
     # Discord
@@ -97,6 +115,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://optimus:optimus@localhost:5432/optimus"
     redis_url: str = "redis://localhost:6379/0"
     nats_url: str = "nats://localhost:4222"
+    #: SQLite file used in ``simple`` mode (zero external services). The async
+    #: driver (aiosqlite) is already a dependency; nothing else is required.
+    #: Override with ``OPTIMUS_SIMPLE_DATABASE_URL`` to point at a different path.
+    simple_database_url: str = "sqlite+aiosqlite:///optimus.db"
 
     # Database connection pool (SQLAlchemy async engine, QueuePool).
     #: Persistent connections kept open per engine (i.e. per process/replica).
@@ -333,6 +355,16 @@ class Settings(BaseSettings):
     def is_multi_tenant(self) -> bool:
         """Whether multi-tenant (SaaS) mode is active."""
         return self.tenancy is Tenancy.MULTI
+
+    @property
+    def is_simple_mode(self) -> bool:
+        """Whether single-process ``simple`` mode is active."""
+        return self.mode is Mode.SIMPLE
+
+    @property
+    def effective_database_url(self) -> str:
+        """The DB URL for the active mode: SQLite in simple, configured otherwise."""
+        return self.simple_database_url if self.is_simple_mode else self.database_url
 
 
 @lru_cache(maxsize=1)

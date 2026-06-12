@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from sqlalchemy.sql.elements import TextClause
 
+from optimus.bus import Bus
 from optimus.bus.nats import EventBus
 from optimus.contracts.events import SUBJECT_INDEX_INVALIDATE, IndexInvalidateEvent
 from optimus.core.config import Settings, get_settings
@@ -102,7 +103,7 @@ class SchedulerService:
     def __init__(
         self,
         settings: Settings,
-        bus: EventBus,
+        bus: Bus,
         scope: SessionScope,
         *,
         delete_object: Callable[[str], Awaitable[None]] | None = None,
