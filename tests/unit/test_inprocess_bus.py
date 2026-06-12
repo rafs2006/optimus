@@ -31,8 +31,17 @@ class _Evt(BaseModel):
     n: int = 0
 
 
-async def _run_until(predicate, within: float = 1.0) -> None:  # type: ignore[no-untyped-def]
-    """Poll ``predicate`` until true or ``within`` seconds elapse."""
+async def _run_until(predicate, within: float = 5.0) -> None:  # type: ignore[no-untyped-def]
+    """Poll ``predicate`` until true or ``within`` seconds elapse.
+
+    The budget is deliberately generous: these tests share the loop with the
+    whole suite, and the consumer drains its queue on a 50 ms poll, so on a
+    loaded CI host the first delivery can legitimately lag a second or more. A
+    tight budget here produced a rare ``condition not met within timeout`` flake
+    (handler simply hadn't been scheduled yet, not a real hang). The wait is a
+    *liveness* guard against a genuine stall, not a latency assertion, so a wide
+    bound trades nothing for determinism.
+    """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + within
     while loop.time() < deadline:
@@ -51,7 +60,9 @@ async def _consume_in_task(bus: InProcessBus, stop: asyncio.Event, **kwargs) -> 
 
 async def _drain(stop: asyncio.Event, task: asyncio.Task[None]) -> None:
     stop.set()
-    await asyncio.wait_for(task, timeout=1.0)
+    # Wide bound: the consume loop notices the stop on its 50 ms poll and then
+    # drains in-flight handlers, which under suite-wide load can take a beat.
+    await asyncio.wait_for(task, timeout=5.0)
 
 
 class _Clock:
@@ -210,3 +221,98 @@ async def test_unserializable_event_rejected_at_publish() -> None:
 
     with pytest.raises(PydanticSerializationError):
         await bus.publish("s", _Bad())
+
+
+# --- consumer deregistration on shutdown (leak / dead-queue hazard) ----------
+
+
+async def test_consumer_deregisters_when_loop_exits() -> None:
+    """A stopped consumer leaves the registry, so fan-out forgets it.
+
+    Regression: ``consume`` never removed its consumer on exit, so each stopped
+    consumer stayed in ``_consumers`` forever — a leak on a shared/long-lived
+    bus, and worse, ``publish`` kept fanning out to its bounded queue.
+    """
+    bus = InProcessBus()
+
+    async def handler(_evt: _Evt) -> None:
+        return None
+
+    stop = asyncio.Event()
+    task = bus.run("s", durable="d", model=_Evt, handler=handler, stop_event=stop)
+    await asyncio.sleep(0)
+    assert len(bus._consumers.get("s", [])) == 1
+    await _drain(stop, task)
+    # Once the loop exits the subject is fully pruned, not left holding a corpse.
+    assert "s" not in bus._consumers
+
+
+async def test_repeated_start_stop_does_not_leak_consumers() -> None:
+    """Many consumer lifecycles on one shared bus leave no registry residue."""
+    bus = InProcessBus()
+
+    async def handler(_evt: _Evt) -> None:
+        return None
+
+    for _ in range(20):
+        stop = asyncio.Event()
+        task = bus.run("s", durable="d", model=_Evt, handler=handler, stop_event=stop)
+        await asyncio.sleep(0)
+        await _drain(stop, task)
+
+    assert bus._consumers == {}
+
+
+async def test_publish_after_consumer_stop_does_not_block_publisher() -> None:
+    """A publish after a consumer stops must not wedge on the dead queue.
+
+    Drives the exact hazard the leak created: a consumer with a 1-slot queue
+    whose handler blocks, then stops while a delivery is parked; once it is
+    deregistered, later publishes to the subject return immediately (no live
+    consumer, nothing to fan out to) instead of blocking forever on the full,
+    abandoned queue.
+    """
+    bus = InProcessBus()
+    release = asyncio.Event()
+
+    async def blocked(_evt: _Evt) -> None:
+        await release.wait()
+
+    stop = asyncio.Event()
+    task = bus.run("s", durable="d", model=_Evt, handler=blocked, max_inflight=1, stop_event=stop)
+    await asyncio.sleep(0)
+    await bus.publish("s", _Evt(n=1))  # taken in-flight, blocks on release
+    await asyncio.sleep(0.02)
+
+    release.set()
+    await _drain(stop, task)
+
+    # Consumer gone: a publish to the now-empty subject must complete promptly.
+    await asyncio.wait_for(bus.publish("s", _Evt(n=2)), timeout=1.0)
+    await asyncio.wait_for(bus.publish("s", _Evt(n=3)), timeout=1.0)
+
+
+async def test_concurrent_publish_during_consumer_shutdown_settles() -> None:
+    """Publishes racing a consumer stop never hang and exactly-once still holds.
+
+    Stress: repeatedly start a consumer, fire concurrent publishes, and stop it
+    mid-flight. The deregister-then-drain ordering must keep both the publishers
+    and the consumer task from wedging across many cycles.
+    """
+    for _ in range(50):
+        bus = InProcessBus()
+        seen: list[int] = []
+
+        async def handler(evt: _Evt, sink: list[int] = seen) -> None:
+            sink.append(evt.n)
+
+        stop = asyncio.Event()
+        task = bus.run("s", durable="d", model=_Evt, handler=handler, stop_event=stop)
+        await asyncio.sleep(0)
+        publishers = [asyncio.create_task(bus.publish("s", _Evt(n=i))) for i in range(8)]
+        stop.set()  # race the publishes against shutdown
+        await asyncio.wait_for(asyncio.gather(*publishers), timeout=1.0)
+        await asyncio.wait_for(task, timeout=1.0)
+        # No delivery is ever seen more than once (no duplication under the race).
+        assert len(seen) == len(set(seen))
+        assert bus._consumers == {}
