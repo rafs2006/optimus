@@ -349,6 +349,37 @@ async def test_in_memory_rate_limit_evict_idle_bounds_memory() -> None:
     assert len(limiter._buckets) == 0
 
 
+async def test_in_memory_sweep_interval_triggers_eviction_on_use() -> None:
+    clock = {"t": 0.0}
+    limiter = InMemoryRateLimiter(time_source=lambda: clock["t"], sweep_interval=5.0)
+    limit = RateLimit(capacity=2, refill_rate=1.0)
+    # First acquire arms the gate (no sweep on a cold map).
+    for i in range(50):
+        assert await limiter.acquire(f"key-{i}", limit)
+    assert len(limiter._buckets) == 50
+    # Within the interval, no opportunistic sweep happens even after refill.
+    clock["t"] = 4.0
+    assert await limiter.acquire("trigger", limit)
+    assert len(limiter._buckets) == 51
+    # Once the interval elapses, the next acquire sweeps fully-refilled buckets.
+    clock["t"] = 12.0
+    assert await limiter.acquire("trigger", limit)
+    # Only the active "trigger" bucket (just spent a token) survives the sweep.
+    assert list(limiter._buckets) == ["trigger"]
+
+
+async def test_in_memory_sweep_disabled_by_default() -> None:
+    clock = {"t": 0.0}
+    limiter = InMemoryRateLimiter(time_source=lambda: clock["t"])
+    limit = RateLimit(capacity=2, refill_rate=1.0)
+    for i in range(10):
+        assert await limiter.acquire(f"key-{i}", limit)
+    clock["t"] = 1000.0
+    # No sweep_interval: the map is never swept opportunistically.
+    assert await limiter.acquire("another", limit)
+    assert len(limiter._buckets) == 11
+
+
 def test_rate_limit_rejects_nonpositive_config() -> None:
     with pytest.raises(ValueError, match="capacity must be positive"):
         RateLimit(capacity=0, refill_rate=1.0)

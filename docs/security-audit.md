@@ -83,8 +83,10 @@ tests in `tests/unit/test_interactions_handlers.py` and
   is prefixed and built from numeric ids; every writer sets a TTL (token bucket
   `EXPIRE`, `SET ... EX`, swarm `EXPIRE`), so an attacker cannot grow the keyspace
   without bound. Token-bucket and swarm mutations are atomic Lua. The in-memory
-  fallback limiter has `evict_idle` to bound memory. (`redis.eval` is server-side
-  Lua, not Python `eval`.)
+  fallback limiter has `evict_idle` to bound memory, and the ingest fallback now
+  drives it on a time-gated opportunistic sweep (`sweep_interval`) so the
+  process-local map stays bounded in the degraded no-Redis path too (Cycle 14).
+  (`redis.eval` is server-side Lua, not Python `eval`.)
 - **Signing** (`globaldb/signing.py`): Ed25519 over a canonical sorted-JSON
   encoding; `verify_record` is fail-closed (returns `False`, never raises, on a
   missing/short/bad signature or key).

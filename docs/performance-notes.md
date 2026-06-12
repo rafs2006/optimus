@@ -19,31 +19,55 @@ Findings from the Cycle 6 performance/async pass. Each entry is either **fixed**
   unit-tested that way and used at one async call site), so the change is
   surgical. Covered by `test_worker_offloads_decode_and_hash_to_thread`.
 
+### `IndexManager` per-guild index cache is now LRU-bounded (Cycle 14)
+- **Location:** `src/optimus/services/detection/index.py` `IndexManager`
+- **Was:** `_guilds: dict[int, HashIndex]` retained one BK-tree index per guild
+  ever queried, never evicting. Growth was bounded by the number of guilds the
+  bot is in (not per-message/per-user churn), and each index is expensive to
+  rebuild (a Postgres query per guild) — a legitimate hot-path cache, but
+  unbounded for very large fleets.
+- **Fix:** the cache is now an `OrderedDict` LRU bounded by
+  `Settings.detection_guild_index_cap` (default 1024; `None` = unbounded). Each
+  read touches the entry to most-recent; once the cap is exceeded the
+  least-recently-used guild index is dropped and rebuilt on demand the next time
+  it is queried (the rebuild-on-demand path is unchanged). Eviction runs
+  synchronously *after* a freshly built index is stored and moved to most-recent,
+  so within the single event loop it can never evict the index a caller is about
+  to return. Each eviction increments `optimus_detection_guild_index_evicted_total`
+  and logs `guild_index_evicted`. Covered by
+  `test_guild_index_lru_evicts_least_recently_used`,
+  `test_guild_index_invalidate_respects_lru_cap`, and
+  `test_guild_index_unbounded_by_default`.
+
+### In-memory rate-limiter fallback is now swept in the ingest service (Cycle 14)
+- **Location:** `src/optimus/services/ingest/service.py` `build_worker`;
+  `src/optimus/core/ratelimit.py` `InMemoryRateLimiter`
+- **Was:** `InMemoryRateLimiter` exposed `evict_idle` to bound its `_buckets`
+  map, but nothing called it for the ingest fallback. Keys are `guild:{id}`, so
+  growth is bounded by guild count rather than user churn, and this path is only
+  reached in a degraded (no-Redis) mode.
+- **Fix:** `InMemoryRateLimiter` gained an optional `sweep_interval`; when set,
+  `acquire` opportunistically runs `evict_idle` at most once per interval (a
+  time-gated compare on the single event loop, so the sweep never races an
+  in-flight `acquire`). The ingest fallback now passes
+  `Settings.ingest_inmemory_sweep_seconds` (default 300s). `sweep_interval=None`
+  (the default) preserves the old behavior for every other caller. Covered by
+  `test_in_memory_sweep_interval_triggers_eviction_on_use` and
+  `test_in_memory_sweep_disabled_by_default`.
+
+### `mod_circuit_*` settings are now wired to the moderation breaker (Cycle 14)
+- **Location:** `src/optimus/services/moderation/service.py` `build_coordinator`
+- **Was:** `mod_circuit_failure_threshold` / `mod_circuit_recovery_seconds`
+  existed in `Settings` but `ActionExecutor` was constructed without a `breaker`,
+  so it fell back to `CircuitBreaker()`'s own defaults (5 / 30.0). Those defaults
+  happened to match the config defaults, so behavior was correct but the settings
+  were inert.
+- **Fix:** `build_coordinator` now constructs the `CircuitBreaker` from
+  `Settings.mod_circuit_failure_threshold` and `mod_circuit_recovery_seconds` and
+  injects it. Defaults are preserved exactly (5 / 30.0). Covered by
+  `test_build_coordinator_wires_circuit_settings`.
+
 ## Documented (real, deferred — too invasive for a single-fix pass)
-
-### `IndexManager` per-guild index cache is never evicted
-- **Location:** `src/optimus/services/detection/index.py` `IndexManager._guilds`
-- **Observation:** `_guilds: dict[int, HashIndex]` retains one BK-tree index per
-  guild ever queried, never evicting. Growth is bounded by the number of guilds
-  the bot is in (not per-message/per-user churn), and each index is expensive to
-  rebuild (a Postgres query per guild), so it is a legitimate hot-path cache —
-  unlike the per-user rate-limiter map that motivated `evict_idle`.
-- **Recommendation:** for very large fleets, add an LRU bound (e.g. cap entries,
-  evict least-recently-used) so a bot in tens of thousands of guilds cannot hold
-  every index resident simultaneously. Deferred because it changes rebuild-cost
-  characteristics and needs a sizing decision + eviction tests.
-
-### In-memory rate-limiter fallback is not swept in the ingest service
-- **Location:** `src/optimus/services/ingest/service.py` `build_worker`
-  (constructs `InMemoryRateLimiter()` when Redis is unavailable)
-- **Observation:** `InMemoryRateLimiter` exposes `evict_idle` (added in a prior
-  cycle) to bound its `_buckets` map, but nothing calls it for the ingest
-  fallback. Keys are `guild:{id}`, so growth is bounded by guild count rather
-  than user churn, and this path is only reached in a degraded (no-Redis) mode.
-- **Recommendation:** when running with the in-memory fallback long-term, run a
-  periodic `evict_idle` sweep (e.g. a small background loop or piggy-backed on
-  the scheduler). Deferred because it only matters in a degraded mode and needs
-  a sweep cadence decision.
 
 ### Unused `_use_embedding` flag on the detection worker
 - **Location:** `src/optimus/services/detection/worker.py` (`use_embedding` /

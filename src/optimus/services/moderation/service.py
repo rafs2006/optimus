@@ -32,6 +32,7 @@ from optimus.contracts.events import (
     SwarmAlertEvent,
     VerdictEvent,
 )
+from optimus.core.circuit import CircuitBreaker
 from optimus.core.config import Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.logging import configure_logging, get_logger
@@ -129,6 +130,10 @@ def build_coordinator(
     cooldown = Cooldown(redis, window_seconds=settings.mod_dm_cooldown_seconds)
     guard = _ActionIdempotency(redis)
 
+    breaker = CircuitBreaker(
+        failure_threshold=settings.mod_circuit_failure_threshold,
+        recovery_time=settings.mod_circuit_recovery_seconds,
+    )
     executor = ActionExecutor(
         rest,  # type: ignore[arg-type]
         rate_limiter,
@@ -139,6 +144,7 @@ def build_coordinator(
         ),
         idempotency_acquire=guard.acquire,
         dm_cooldown=cooldown,
+        breaker=breaker,
     )
 
     async def config(guild_id: int) -> GuildModConfig:

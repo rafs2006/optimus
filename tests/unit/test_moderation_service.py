@@ -196,6 +196,32 @@ async def test_build_coordinator_config_defaults_for_unconfigured_guild(
     await redis.aclose()
 
 
+async def test_build_coordinator_wires_circuit_settings(scope: SessionScope) -> None:
+    # The breaker defaults must match documented behavior, and overrides must flow
+    # through from Settings into the executor's breaker.
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    default_settings = get_settings()
+    coordinator = build_coordinator(
+        default_settings, scope, rest=object(), redis=redis, bot_user_id=1
+    )
+    breaker = coordinator._executor._breaker  # type: ignore[attr-defined]
+    assert breaker._failure_threshold == default_settings.mod_circuit_failure_threshold
+    assert breaker._recovery_time == default_settings.mod_circuit_recovery_seconds
+    # Defaults are preserved exactly (the previously-unwired ActionExecutor used 5/30).
+    assert breaker._failure_threshold == 5
+    assert breaker._recovery_time == 30.0
+
+    custom = default_settings.model_copy(
+        update={"mod_circuit_failure_threshold": 2, "mod_circuit_recovery_seconds": 7.5}
+    )
+    coordinator2 = build_coordinator(custom, scope, rest=object(), redis=redis, bot_user_id=1)
+    breaker2 = coordinator2._executor._breaker  # type: ignore[attr-defined]
+    assert breaker2._failure_threshold == 2
+    assert breaker2._recovery_time == 7.5
+    await redis.aclose()
+
+
 def test_action_idempotency_guard_acquires_once() -> None:
     import asyncio
 

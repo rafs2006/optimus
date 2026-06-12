@@ -105,7 +105,7 @@ def build_service(settings: Settings, bus: EventBus, redis: object | None) -> De
     def scope() -> AbstractAsyncContextManager[AsyncSession]:
         return session_scope(factory)
 
-    index_manager = IndexManager(scope)
+    index_manager = IndexManager(scope, max_guilds=settings.detection_guild_index_cap)
 
     guard = IdempotencyGuard(redis) if redis is not None else _NullGuard()
     swarm = (

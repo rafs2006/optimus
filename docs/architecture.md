@@ -204,7 +204,10 @@ Candidate lookup uses a **BK-tree** keyed on pHash
 the triangle inequality gives sub-linear Hamming-radius queries. The
 [`IndexManager`](../src/optimus/services/detection/index.py) lazily builds and
 caches one `HashIndex` per guild plus the global promoted-hash index, each rebuilt
-from Postgres and invalidated on the `index_invalidate` signal.
+from Postgres and invalidated on the `index_invalidate` signal. The per-guild
+cache is an LRU bounded by `detection_guild_index_cap` (default 1024): the
+least-recently-used guild index is evicted and rebuilt on demand, so a bot in a
+very large fleet cannot hold every index resident at once.
 
 For each pHash candidate, [`ensemble.compare`](../src/optimus/hashing/ensemble.py)
 computes a **weighted-average normalized Hamming distance** across all four hashes
@@ -285,8 +288,9 @@ flowchart LR
   per-guild **token bucket** (`modact:<guild_id>`, capacity 5 / refill 1/s by
   default) bounds the Discord action rate. The Redis implementation is a single
   atomic Lua script; an `InMemoryRateLimiter` fallback (with `evict_idle` to bound
-  its map) is used when Redis is unavailable. Ingest applies the same primitive to
-  per-guild fetches.
+  its map, driven by a time-gated opportunistic sweep in the ingest fallback) is
+  used when Redis is unavailable. Ingest applies the same primitive to per-guild
+  fetches.
 - **Circuit breaker** ([`core/circuit.py`](../src/optimus/core/circuit.py)) — trips
   open after `mod_circuit_failure_threshold=5` consecutive REST failures, fails
   fast for `mod_circuit_recovery_seconds=30`, then allows a bounded number of
