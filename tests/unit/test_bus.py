@@ -54,7 +54,7 @@ class _FakeSub:
         self._pending = list(msgs)
         self.fetch_sizes: list[int] = []
 
-    async def fetch(self, batch: int, timeout: float = 5.0) -> list[_FakeMsg]:
+    async def fetch(self, batch: int, timeout: float = 5.0) -> list[_FakeMsg]:  # noqa: ASYNC109
         self.fetch_sizes.append(batch)
         if not self._pending:
             # Real NATS waits out the network timeout here, yielding to the loop;
