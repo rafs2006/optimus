@@ -200,6 +200,14 @@ class PriorityDispatcher[T]:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
         async with self._not_empty:
+            if not self._running:
+                # The dispatcher was (or is being) stopped. Enqueuing here would
+                # park the future on a heap no worker will ever drain, hanging the
+                # caller forever. Fail it the same way stop() fails still-queued
+                # work — cancelled — so a verdict in flight during shutdown unwinds
+                # promptly instead of wedging the consumer that awaits it.
+                future.cancel()
+                return future
             if len(self._heap) >= self._max_queue and priority is not Priority.PROTECT:
                 DROPPED.labels(priority=priority.label, reason="queue_full").inc()
                 _log.warning(

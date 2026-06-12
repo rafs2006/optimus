@@ -299,3 +299,58 @@ async def test_start_is_idempotent() -> None:
     future = await dispatcher.submit(Priority.PROTECT, noop)
     assert await future == 1
     await dispatcher.stop()
+
+
+async def test_submit_after_stop_does_not_hang() -> None:
+    """A submit once the pool is stopped must not park a future on a dead heap.
+
+    Regression: ``submit`` used to enqueue unconditionally, so a verdict that
+    raced ``stop()`` (shutdown ordering) left ``await future`` blocked forever —
+    no worker remained to drain the heap. The returned future must resolve
+    promptly (cancelled, matching how ``stop()`` fails still-queued work) so the
+    awaiting consumer unwinds instead of wedging.
+    """
+    dispatcher: PriorityDispatcher[int] = PriorityDispatcher(concurrency=2)
+    await dispatcher.start()
+    await dispatcher.stop()
+
+    async def noop() -> int:
+        return 1
+
+    future = await dispatcher.submit(Priority.NOTIFY, noop)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(future, timeout=1.0)
+    # The rejected submit must not have grown the pending heap.
+    assert dispatcher.depth == 0
+
+
+async def test_submit_racing_stop_never_wedges_caller() -> None:
+    """Concurrent submits during ``stop()`` all settle; none hang.
+
+    Stresses the shutdown-ordering window: a flood of submits issued while the
+    dispatcher is being stopped must each end resolved or cancelled, never left
+    pending on a heap with no workers.
+    """
+    dispatcher: PriorityDispatcher[int] = PriorityDispatcher(concurrency=4, max_queue=10_000)
+    await dispatcher.start()
+
+    async def work() -> int:
+        await asyncio.sleep(0)
+        return 1
+
+    async def flood() -> list[asyncio.Future[int]]:
+        out: list[asyncio.Future[int]] = []
+        for _ in range(500):
+            out.append(await dispatcher.submit(Priority.PROTECT, work))
+        return out
+
+    flood_task = asyncio.create_task(flood())
+    await asyncio.sleep(0)  # let some submits land before stopping
+    await dispatcher.stop()
+    futures = await flood_task
+
+    # Every future must be settled (done), regardless of which side of the stop
+    # boundary it fell on — never an indefinitely pending heap entry.
+    for f in futures:
+        assert f.done(), "a submit left a future pending after stop()"
+    assert dispatcher.depth == 0

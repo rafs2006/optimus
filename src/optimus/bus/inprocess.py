@@ -110,7 +110,11 @@ class InProcessBus:
         if msg_id is not None and self._is_duplicate(subject, msg_id):
             return
         MESSAGES_PUBLISHED.labels(subject=subject).inc()
-        for consumer in self._consumers.get(subject, ()):
+        # Snapshot the consumer list: fan-out awaits on a full queue, and a
+        # consumer whose loop exits during that await deregisters itself (mutating
+        # the live list). Iterating a copy keeps the loop stable and avoids a
+        # "list changed size during iteration" mid-fan-out.
+        for consumer in list(self._consumers.get(subject, ())):
             await consumer.queue.put(_Delivery(event=event))
 
     def _is_duplicate(self, subject: str, msg_id: str) -> bool:
@@ -154,6 +158,24 @@ class InProcessBus:
         )
         self._consumers.setdefault(subject, []).append(consumer)
         return consumer
+
+    def _unregister(self, consumer: _Consumer) -> None:
+        """Remove a consumer from fan-out; idempotent and safe to call twice.
+
+        Called when a consumer's delivery loop exits so :meth:`publish` stops
+        enqueuing to a queue nothing will ever drain. Prunes the subject's list
+        (and the subject key itself once empty) to keep the registry bounded
+        across repeated consumer start/stop cycles on a shared bus.
+        """
+        consumers = self._consumers.get(consumer.subject)
+        if not consumers:
+            return
+        try:
+            consumers.remove(consumer)
+        except ValueError:
+            return
+        if not consumers:
+            del self._consumers[consumer.subject]
 
     def run(
         self,
@@ -237,6 +259,11 @@ class InProcessBus:
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
         finally:
+            # Deregister before draining so a concurrent publish stops fanning out
+            # to this (now-stopping) consumer's queue. Otherwise the consumer stays
+            # in self._consumers after its loop exits, leaking the entry and — once
+            # its bounded queue fills — blocking publish() forever on a dead queue.
+            self._unregister(consumer)
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
