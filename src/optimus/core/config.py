@@ -88,6 +88,9 @@ class Settings(BaseSettings):
 
     # Rate limiting
     ratelimit_redis_prefix: str = "optimus:rl"
+    #: Opportunistic idle-bucket sweep cadence for the interactions in-memory
+    #: rate-limiter fallback (seconds), used only when Redis is unavailable.
+    interactions_inmemory_sweep_seconds: float = Field(default=300.0, gt=0.0)
 
     # Moderation
     #: Confidence at or above which a verdict is queued for moderator review.

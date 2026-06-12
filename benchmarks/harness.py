@@ -24,9 +24,9 @@ import numpy as np
 
 from benchmarks.corpus import Corpus, CorpusImage
 from optimus.hashing import perceptual
-from optimus.hashing.ensemble import PRESETS, compare
+from optimus.hashing.ensemble import PRESETS
 from optimus.services.detection.index import HashIndex, KnownHash
-from optimus.services.detection.matcher import DEFAULT_CANDIDATE_RADIUS
+from optimus.services.detection.matcher import DEFAULT_CANDIDATE_RADIUS, _best_over_indexes
 
 # A no-match image gets this sentinel score (worse than any real distance, which
 # is bounded by 1.0). Keeps thresholding uniform without special-casing None.
@@ -86,13 +86,11 @@ def score_corpus(
     scored: list[Scored] = []
     for img in corpus.all_images():
         h = _hashes(img)
-        best_score = NO_MATCH_SCORE
-        best_campaign: str | None = None
-        for known in index.candidates(h["phash"], candidate_radius):
-            result = compare(h, known.as_dict(), sensitivity)
-            if result.score < best_score:
-                best_score = result.score
-                best_campaign = known.campaign_id
+        # Delegate to the production matcher so the benchmark cannot silently
+        # diverge from how detection actually picks the best candidate.
+        result, known = _best_over_indexes(h, [index], sensitivity, radius=candidate_radius)
+        best_score = result.score if result is not None else NO_MATCH_SCORE
+        best_campaign = known.campaign_id if known is not None else None
         scored.append(Scored(image=img, best_score=best_score, matched_campaign=best_campaign))
     return scored
 

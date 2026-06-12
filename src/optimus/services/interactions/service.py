@@ -329,6 +329,19 @@ def _component_context(interaction: Any) -> InteractionContext:  # pragma: no co
     )
 
 
+def build_rate_limiter(settings: Settings, redis: object | None) -> RateLimiter:
+    """Construct the interactions limiter: Redis-backed, or an in-memory fallback.
+
+    The fallback opportunistically sweeps idle per-user buckets so the
+    process-local map cannot grow without bound while Redis is unavailable.
+    """
+    from optimus.core.ratelimit import InMemoryRateLimiter, RedisRateLimiter
+
+    if redis is not None:
+        return RedisRateLimiter(redis)
+    return InMemoryRateLimiter(sweep_interval=settings.interactions_inmemory_sweep_seconds)
+
+
 def _open_redis(settings: Settings) -> object | None:  # pragma: no cover - boot glue
     try:
         import redis.asyncio as aioredis
@@ -345,7 +358,6 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     from optimus.core.config import get_settings
     from optimus.core.health import HealthServer
     from optimus.core.logging import configure_logging
-    from optimus.core.ratelimit import InMemoryRateLimiter, RedisRateLimiter
     from optimus.core.readiness import db_check, redis_check
     from optimus.db.engine import create_engine, create_session_factory, session_scope
 
@@ -359,9 +371,7 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
         return session_scope(factory)
 
     redis = _open_redis(settings)
-    rate_limiter: RateLimiter = (
-        RedisRateLimiter(redis) if redis is not None else InMemoryRateLimiter()
-    )
+    rate_limiter = build_rate_limiter(settings, redis)
     service = InteractionService(scope, rate_limiter, settings)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
