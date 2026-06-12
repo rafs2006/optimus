@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from functools import partial
 
+from optimus.bus import Bus
 from optimus.bus.nats import EventBus
 from optimus.contracts.events import (
     SUBJECT_IMAGE_FETCHED,
@@ -27,7 +28,7 @@ from optimus.services.ingest.worker import IngestWorker, RateLimitedError
 _log = get_logger(__name__)
 
 
-async def _handle(worker: IngestWorker, bus: EventBus, event: MessageImageEvent) -> None:
+async def _handle(worker: IngestWorker, bus: Bus, event: MessageImageEvent) -> None:
     """Consumer callback: fetch and (if successful) publish the fetched event."""
     try:
         fetched = await worker.handle(event)

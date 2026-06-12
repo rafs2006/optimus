@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import hikari
 
+from optimus.bus import Bus
 from optimus.bus.nats import EventBus
 from optimus.contracts.events import (
     SUBJECT_GUILD_JOINED,
@@ -107,7 +108,7 @@ class GatewayService:
     def __init__(
         self,
         settings: Settings,
-        bus: EventBus,
+        bus: Bus,
         config_cache: GuildConfigCache,
         health: HealthServer,
     ) -> None:

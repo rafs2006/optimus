@@ -1352,6 +1352,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "aiosqlite" },
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "fastapi" },
@@ -1375,7 +1376,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "aiosqlite" },
     { name = "fakeredis" },
     { name = "hypothesis" },
     { name = "mypy" },
@@ -1397,7 +1397,7 @@ evidence = [
 requires-dist = [
     { name = "aioboto3", marker = "extra == 'evidence'", specifier = ">=15.5.0" },
     { name = "aiohttp", specifier = ">=3.14.1" },
-    { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.22.1" },
+    { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.36.1" },

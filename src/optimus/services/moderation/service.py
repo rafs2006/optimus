@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from optimus.bus import Bus
 from optimus.bus.nats import EventBus
 from optimus.contracts.events import (
     SUBJECT_ACTION_RESULT,
@@ -36,7 +37,7 @@ from optimus.core.circuit import CircuitBreaker
 from optimus.core.config import Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.logging import configure_logging, get_logger
-from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit, RedisRateLimiter
+from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiter, RedisRateLimiter
 from optimus.core.readiness import nats_check, redis_check
 from optimus.db.engine import (
     SessionScope,
@@ -69,7 +70,7 @@ class ModerationService:
     def __init__(
         self,
         settings: Settings,
-        bus: EventBus,
+        bus: Bus,
         coordinator: ModerationCoordinator,
         session_scope_factory: SessionScope,
     ) -> None:
@@ -126,19 +127,25 @@ def build_coordinator(
     rest: object,
     redis: object,
     bot_user_id: int,
+    rate_limiter: RateLimiter | None = None,
 ) -> tuple[ModerationCoordinator, PriorityDispatcher[ActionResult]]:
     """Wire a :class:`ModerationCoordinator` from settings and shared clients.
 
     Returns the coordinator and its :class:`PriorityDispatcher`; the caller owns
     the dispatcher lifecycle (``start``/``stop``).
+
+    ``rate_limiter`` is injectable so simple mode can supply the process-local
+    :class:`InMemoryRateLimiter` (no Redis Lua ``EVAL``); when omitted the
+    distributed default is the shared :class:`RedisRateLimiter`, unchanged.
     """
     # A runtime Redis outage degrades to a per-process per-guild bucket rather
     # than crashing the action path; the bucket count is bounded by guild count.
-    rate_limiter = RedisRateLimiter(
-        redis,
-        prefix=settings.ratelimit_redis_prefix,
-        fallback=InMemoryRateLimiter(),
-    )
+    if rate_limiter is None:
+        rate_limiter = RedisRateLimiter(
+            redis,
+            prefix=settings.ratelimit_redis_prefix,
+            fallback=InMemoryRateLimiter(),
+        )
     cooldown = Cooldown(redis, window_seconds=settings.mod_dm_cooldown_seconds)
     guard = _ActionIdempotency(redis)
 
