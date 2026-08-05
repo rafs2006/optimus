@@ -23,7 +23,10 @@ from optimus.core.ratelimit import RateLimit
 from optimus.db.repositories import GuildRepository
 from optimus.services.interactions.service import DbDeps
 
-GUILD_ID = 1402357722430570498
+# Arbitrary synthetic IDs -- this suite runs against an isolated in-memory
+# aiosqlite database, so these are not tied to any real Discord guild/channel.
+GUILD_ID = 111111111111111111
+TEST_CHANNEL_ID = 222222222222222222
 
 
 class _NoopRateLimiter:
@@ -49,7 +52,7 @@ def _make_deps(session: AsyncSession) -> DbDeps:
         ("optin_evidence_storage", True, "optin_evidence_storage", True),
         # The regression case: command field name "review_channel" differs
         # from the mapped column "review_channel_id".
-        ("review_channel", 1408603778206142525, "review_channel_id", 1408603778206142525),
+        ("review_channel", TEST_CHANNEL_ID, "review_channel_id", TEST_CHANNEL_ID),
     ],
 )
 async def test_set_config_field_persists_to_the_correct_column(
@@ -76,10 +79,10 @@ async def test_set_review_channel_then_get_config_round_trips(session: AsyncSess
     failed to persist.
     """
     deps = _make_deps(session)
-    await deps.set_config_field(GUILD_ID, "review_channel", 1408603778206142525)
+    await deps.set_config_field(GUILD_ID, "review_channel", TEST_CHANNEL_ID)
 
     config = await deps.get_config(GUILD_ID)
-    assert config["review_channel"] == 1408603778206142525
+    assert config["review_channel"] == TEST_CHANNEL_ID
 
 
 async def test_set_config_field_rejects_unmapped_field_name(session: AsyncSession) -> None:
