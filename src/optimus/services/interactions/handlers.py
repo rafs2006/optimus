@@ -189,7 +189,16 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         rows = await deps.list_guild_hashes(ctx.guild_id)
         if not rows:
             return InteractionResponse("command.hash_list_empty")
-        return InteractionResponse("command.hash_list_header", {"count": len(rows)})
+        shown = rows[:_HASH_LIST_LIMIT]
+        entry_lines = "\n".join(_render_hash_entry(r) for r in shown)
+        if len(rows) > len(shown):
+            return InteractionResponse(
+                "command.hash_list_header_truncated",
+                {"count": len(rows), "entries": entry_lines, "more": len(rows) - len(shown)},
+            )
+        return InteractionResponse(
+            "command.hash_list_header", {"count": len(rows), "entries": entry_lines}
+        )
     if sub == "import":
         entries = validate_import(str(ctx.options["file"]))
         added = await _import_hashes(deps, ctx.guild_id, entries, added_by=ctx.user_id)
@@ -206,6 +215,17 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     if sub == "reviewmsg":
         return await _review_message(ctx, deps)
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
+
+
+#: Max hash entries rendered by ``/scamhash list`` — keeps the reply well under
+#: Discord's 2000-character message cap; the full set is available via export.
+_HASH_LIST_LIMIT = 20
+
+
+def _render_hash_entry(row: GuildHash) -> str:
+    """One display line per hash: id, source, and who added it (when known)."""
+    added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
+    return f"\u2022 `{row.hash_id}` \u2014 {row.source}{added_by}"
 
 
 async def _cmd_review_message(
@@ -347,6 +367,7 @@ _CONFIG_VIEW_ORDER = (
     "action_policy",
     "mod_queue_threshold",
     "review_channel",
+    "ban_purge_hours",
     "safe_mode",
     "retention_days",
     "locale",
@@ -395,7 +416,10 @@ async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     summary = await deps.stats_summary(ctx.guild_id)
     if not summary or summary.get("detections", 0) == 0:
         return InteractionResponse("command.stats_empty")
-    return InteractionResponse("command.stats_header", {"hours": summary.get("hours", 24)})
+    return InteractionResponse(
+        "command.stats_header",
+        {"hours": summary.get("hours", 24), "detections": summary.get("detections", 0)},
+    )
 
 
 async def _cmd_submit_global(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:

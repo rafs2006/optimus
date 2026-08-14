@@ -500,11 +500,30 @@ async def test_scamhash_remove_not_found_does_not_audit() -> None:
 async def test_scamhash_list_non_empty() -> None:
     deps = FakeDeps()
     deps.hashes["abc"] = GuildHash(
-        hash_id="abc", phash=1, dhash=2, whash=3, ahash=0, source="local"
+        hash_id="abc", phash=1, dhash=2, whash=3, ahash=0, source="local", added_by=42
     )
     resp = await handle_command(_ctx("scamhash", subcommand="list"), deps)
     assert resp.i18n_key == "command.hash_list_header"
     assert resp.params["count"] == 1
+    # The entries must actually be rendered — the header alone showed an empty
+    # list after the colon in production.
+    assert "`abc`" in resp.params["entries"]
+    assert "local" in resp.params["entries"]
+    assert "<@42>" in resp.params["entries"]
+
+
+@pytest.mark.asyncio
+async def test_scamhash_list_truncates_past_limit() -> None:
+    deps = FakeDeps()
+    for i in range(25):
+        deps.hashes[f"h{i:02}"] = GuildHash(
+            hash_id=f"h{i:02}", phash=i, dhash=0, whash=0, ahash=0, source="local"
+        )
+    resp = await handle_command(_ctx("scamhash", subcommand="list"), deps)
+    assert resp.i18n_key == "command.hash_list_header_truncated"
+    assert resp.params["count"] == 25
+    assert resp.params["more"] == 5
+    assert resp.params["entries"].count("\n") == 19  # 20 rendered lines
 
 
 @pytest.mark.asyncio
@@ -588,6 +607,7 @@ def test_every_config_view_field_is_settable_under_the_same_name(field: str) -> 
         "action_policy": "report_only",
         "mod_queue_threshold": "0.5",
         "review_channel": "none",
+        "ban_purge_hours": "24",
         "safe_mode": "false",
         "retention_days": "30",
         "locale": "en",
@@ -646,6 +666,7 @@ async def test_stats_non_empty() -> None:
     resp = await handle_command(_ctx("stats"), FakeDeps())
     assert resp.i18n_key == "command.stats_header"
     assert resp.params["hours"] == 24
+    assert "detections" in resp.params  # header renders a body, not a bare colon
 
 
 # --- submit_global -------------------------------------------------------------
