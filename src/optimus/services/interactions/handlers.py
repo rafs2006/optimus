@@ -45,6 +45,11 @@ from optimus.services.moderation.review import ParsedCustomId, ReviewAction
 
 _log = get_logger(__name__)
 
+#: Keep ``/scamhash list`` safely below Discord's 2,000-character message limit
+#: even if every rendered line maxes out (64-char hash id, 32-char source, and
+#: a full-width ``by <@user>`` mention ≈ 130 chars per line).
+_HASH_LIST_PREVIEW_LIMIT = 12
+
 
 @dataclass(frozen=True, slots=True)
 class InteractionContext:
@@ -189,16 +194,15 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         rows = await deps.list_guild_hashes(ctx.guild_id)
         if not rows:
             return InteractionResponse("command.hash_list_empty")
-        shown = rows[:_HASH_LIST_LIMIT]
-        entry_lines = "\n".join(_render_hash_entry(r) for r in shown)
-        if len(rows) > len(shown):
-            return InteractionResponse(
-                "command.hash_list_header_truncated",
-                {"count": len(rows), "entries": entry_lines, "more": len(rows) - len(shown)},
-            )
-        return InteractionResponse(
-            "command.hash_list_header", {"count": len(rows), "entries": entry_lines}
-        )
+        shown = sorted(rows, key=lambda r: r.hash_id)[:_HASH_LIST_PREVIEW_LIMIT]
+        params: dict[str, Any] = {
+            "count": len(rows),
+            "hashes": "\n".join(_render_hash_entry(r) for r in shown),
+        }
+        if len(rows) <= _HASH_LIST_PREVIEW_LIMIT:
+            return InteractionResponse("command.hash_list_header", params)
+        params["remaining"] = len(rows) - len(shown)
+        return InteractionResponse("command.hash_list_truncated", params)
     if sub == "import":
         entries = validate_import(str(ctx.options["file"]))
         added = await _import_hashes(deps, ctx.guild_id, entries, added_by=ctx.user_id)
@@ -215,11 +219,6 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     if sub == "reviewmsg":
         return await _review_message(ctx, deps)
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
-
-
-#: Max hash entries rendered by ``/scamhash list`` — keeps the reply well under
-#: Discord's 2000-character message cap; the full set is available via export.
-_HASH_LIST_LIMIT = 20
 
 
 def _render_hash_entry(row: GuildHash) -> str:
@@ -337,7 +336,11 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
         return InteractionResponse("command.reviewmsg_result_safe_mode", params)
     if policy in ("none", "report_only"):
         return InteractionResponse("command.reviewmsg_result_report_only", params)
-    return InteractionResponse("command.reviewmsg_result_actioned", params)
+    review_channel = config.get("review_channel")
+    if review_channel is None:
+        return InteractionResponse("command.reviewmsg_result_submitted_no_channel", params)
+    params["review_channel"] = review_channel
+    return InteractionResponse("command.reviewmsg_result_submitted", params)
 
 
 async def _cmd_config(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
