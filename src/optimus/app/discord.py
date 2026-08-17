@@ -46,12 +46,17 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
     import hikari
 
     config_cache = GuildConfigCache(app.store, app._scope)
-    gateway = GatewayService(settings, app.bus, config_cache, app.health)
+    bot = hikari.GatewayBot(token=settings.discord_token, intents=GATEWAY_INTENTS)
+
+    async def _fetch_message(channel_id: int, message_id: int) -> hikari.Message:
+        return await bot.rest.fetch_message(channel_id, message_id)
+
+    gateway = GatewayService(
+        settings, app.bus, config_cache, app.health, fetch_message=_fetch_message
+    )
     interactions = InteractionService(
         app._scope, InMemoryRateLimiter(), settings, detection=app.detection
     )
-
-    bot = hikari.GatewayBot(token=settings.discord_token, intents=GATEWAY_INTENTS)
 
     # Readiness should track the gateway, not just the DB: a wedged gateway
     # session (the "commands all time out" incident) previously left /readyz
@@ -67,6 +72,10 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
     @bot.listen(hikari.GuildMessageCreateEvent)
     async def _on_message(event: hikari.GuildMessageCreateEvent) -> None:
         await gateway.on_message(event)
+
+    @bot.listen(hikari.GuildMessageUpdateEvent)
+    async def _on_message_update(event: hikari.GuildMessageUpdateEvent) -> None:
+        await gateway.on_message_update(event)
 
     @bot.listen(hikari.GuildJoinEvent)
     async def _on_guild_join(event: hikari.GuildJoinEvent) -> None:
