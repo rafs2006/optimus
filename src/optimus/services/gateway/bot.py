@@ -16,8 +16,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import OrderedDict
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Protocol
 
 import hikari
 
@@ -45,6 +45,25 @@ if TYPE_CHECKING:
 
     #: REST fallback for partial updates: ``(channel_id, message_id) -> Message``.
     FetchMessage = Callable[[int, int], Awaitable[hikari.Message]]
+
+
+class HistoryReader(Protocol):
+    """The REST surface a join-time history backfill needs.
+
+    Kept behind a protocol so the backfill logic is unit-testable without a
+    live hikari REST client (mirroring ``FetchMessage`` above).
+    """
+
+    async def list_text_channel_ids(self, guild_id: int) -> list[int]:
+        """Ids of the guild's textable channels, in Discord's order."""
+        ...
+
+    async def fetch_recent_messages(
+        self, channel_id: int, *, after: datetime, limit: int
+    ) -> list[hikari.Message]:
+        """Up to ``limit`` of the channel's *newest* messages created after ``after``."""
+        ...
+
 
 _log = get_logger(__name__)
 
@@ -220,12 +239,14 @@ class GatewayService:
         health: HealthServer,
         *,
         fetch_message: FetchMessage | None = None,
+        history: HistoryReader | None = None,
     ) -> None:
         self._settings = settings
         self._bus = bus
         self._config = config_cache
         self._health = health
         self._fetch_message = fetch_message
+        self._history = history
         self._inflight: set[asyncio.Task[None]] = set()
         # LRU of already-published (message_id, image_url) pairs, so an edited
         # message only re-enters the pipeline for images we have not seen.
@@ -304,6 +325,62 @@ class GatewayService:
                 ),
             )
         _log.info("gateway_guild_joined", guild_id=int(event.guild_id))
+        if self._history is not None and self._settings.gateway_join_scan_days > 0:
+            # Backfill in the background: joining a big guild must not block
+            # the event listener. The task is tracked so drain() awaits it.
+            self.track(asyncio.create_task(self._join_backfill(int(event.guild_id))))
+
+    async def _join_backfill(self, guild_id: int) -> None:
+        """Scan the last ``gateway_join_scan_days`` of history in a new guild.
+
+        Mods usually install the bot *because* a scam wave is already underway,
+        so the messages that motivated the install are in recent history, not
+        the future. Reuses the exact live-scan path (per-guild filters, image
+        extraction, publish) with ``only_unseen=True`` so a message that also
+        arrives live is not published twice. Bounded by channel and per-channel
+        message caps; a channel the bot cannot read (missing permission) is
+        skipped rather than failing the whole backfill.
+        """
+        assert self._history is not None  # guarded by the caller
+        after = datetime.now(UTC) - timedelta(days=self._settings.gateway_join_scan_days)
+        try:
+            channel_ids = await self._history.list_text_channel_ids(guild_id)
+        except Exception as exc:
+            _log.warning("join_backfill_channels_failed", guild_id=guild_id, error=str(exc))
+            return
+        channels_read = 0
+        messages_scanned = 0
+        for channel_id in channel_ids[: self._settings.gateway_join_scan_max_channels]:
+            try:
+                messages = await self._history.fetch_recent_messages(
+                    channel_id,
+                    after=after,
+                    limit=self._settings.gateway_join_scan_messages_per_channel,
+                )
+            except Exception as exc:
+                # Typical: no READ_MESSAGE_HISTORY / VIEW_CHANNEL in this channel.
+                _log.info(
+                    "join_backfill_channel_skipped",
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    error=str(exc),
+                )
+                continue
+            channels_read += 1
+            for message in messages:
+                await self._scan(
+                    message_to_incoming(message, guild_id=guild_id),
+                    trigger="join_backfill",
+                    only_unseen=True,
+                )
+                messages_scanned += 1
+        _log.info(
+            "join_backfill_done",
+            guild_id=guild_id,
+            channels=channels_read,
+            messages=messages_scanned,
+            days=self._settings.gateway_join_scan_days,
+        )
 
     @staticmethod
     def _should_scan(config: GuildConfig, msg: IncomingMessage) -> bool:
