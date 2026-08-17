@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-from optimus.services.interactions.service import to_context
+from optimus.services.interactions.service import _resolve_add_options, to_context
 
 
 @dataclass(frozen=True)
@@ -149,3 +149,46 @@ def test_to_context_descends_through_subcommand_group_to_parameterless_leaf() ->
 
     assert ctx.subcommand == "view"
     assert ctx.options == {}
+
+
+# --- /scamhash add attachment resolution ----------------------------------------
+
+
+def _add_ctx(image_value: Any | None) -> Any:
+    from optimus.services.interactions.handlers import InteractionContext
+
+    return InteractionContext(
+        guild_id=123,
+        user_id=456,
+        member_permissions=8,
+        command="scamhash",
+        subcommand="add",
+        options={} if image_value is None else {"image": image_value},
+    )
+
+
+def _attachment(att_id: int, media_type: str | None) -> SimpleNamespace:
+    return SimpleNamespace(id=att_id, url=f"https://cdn/{att_id}.bin", media_type=media_type)
+
+
+def test_resolve_add_options_maps_resolved_image_to_id_and_url() -> None:
+    interaction = SimpleNamespace(
+        resolved=SimpleNamespace(attachments={999: _attachment(999, "image/png")})
+    )
+    ctx = _resolve_add_options(_add_ctx(999), interaction)
+    assert ctx.options == {"attachment_id": 999, "url": "https://cdn/999.bin"}
+
+
+def test_resolve_add_options_drops_non_image_attachments() -> None:
+    """A PDF (or anything non-image) resolves to empty options -> add_not_image."""
+    interaction = SimpleNamespace(
+        resolved=SimpleNamespace(attachments={999: _attachment(999, "application/pdf")})
+    )
+    ctx = _resolve_add_options(_add_ctx(999), interaction)
+    assert ctx.options == {}
+
+
+def test_resolve_add_options_without_resolved_data_yields_empty_options() -> None:
+    ctx = _resolve_add_options(_add_ctx(999), SimpleNamespace(resolved=None))
+    assert ctx.options == {}
+    assert ctx.subcommand == "add"

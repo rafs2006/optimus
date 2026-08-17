@@ -593,10 +593,40 @@ def _context_menu_context(interaction: Any) -> InteractionContext:
     )
 
 
-async def _resolve_reviewmsg_options(
+def _resolve_add_options(ctx: InteractionContext, interaction: Any) -> InteractionContext:
+    """Resolve ``/scamhash add image:<attachment>`` into ``(id, url)`` options.
+
+    Discord sends an ATTACHMENT option's *value* as a bare snowflake id; the
+    actual attachment object (with its CDN url) rides separately on
+    ``interaction.resolved.attachments``. Non-image uploads are dropped here
+    (options left empty) so the handler answers ``command.add_not_image``
+    instead of attempting a doomed fetch/decode round-trip.
+    """
+    options: dict[str, Any] = {}
+    resolved_attachments = getattr(getattr(interaction, "resolved", None), "attachments", None)
+    raw = ctx.options.get("image")
+    if raw is not None and resolved_attachments:
+        for snowflake, attachment in resolved_attachments.items():
+            if int(snowflake) != int(raw):
+                continue
+            if (attachment.media_type or "").startswith("image/"):
+                options = {"attachment_id": int(attachment.id), "url": attachment.url}
+            break
+    return InteractionContext(
+        guild_id=ctx.guild_id,
+        user_id=ctx.user_id,
+        member_permissions=ctx.member_permissions,
+        command=ctx.command,
+        subcommand=ctx.subcommand,
+        options=options,
+        locale=ctx.locale,
+    )
+
+
+async def _resolve_review_options(
     ctx: InteractionContext, interaction: Any, *, rest: Any
 ) -> InteractionContext:
-    """Resolve ``/scamhash reviewmsg message:<link-or-id>`` via REST.
+    """Resolve ``/scamhash review message:<link-or-id>`` via REST.
 
     Unlike the context-menu entry point, a slash command only carries the
     moderator-typed string -- the target message must be fetched explicitly.
@@ -681,8 +711,13 @@ def to_context(interaction: Any) -> InteractionContext:
 
 async def run_interaction(  # pragma: no cover - hikari glue
     service: InteractionService, interaction: Any
-) -> str:
-    """Handle one interaction end-to-end and return the ephemeral message."""
+) -> tuple[str, str | None]:
+    """Handle one interaction end-to-end.
+
+    Returns ``(message, attachment_body)`` -- the rendered ephemeral text plus
+    an optional file body (e.g. a ``/scamhash export`` JSON document) that
+    :func:`respond_to_interaction` uploads alongside the message.
+    """
     import hikari
 
     with correlation_context():
@@ -690,23 +725,23 @@ async def run_interaction(  # pragma: no cover - hikari glue
             if isinstance(interaction, hikari.CommandInteraction):
                 ctx = to_context(interaction)
                 locale = ctx.locale
-                if ctx.command == "scamhash" and ctx.subcommand == "reviewmsg":
-                    ctx = await _resolve_reviewmsg_options(
-                        ctx, interaction, rest=interaction.app.rest
-                    )
+                if ctx.command == "scamhash" and ctx.subcommand == "review":
+                    ctx = await _resolve_review_options(ctx, interaction, rest=interaction.app.rest)
+                elif ctx.command == "scamhash" and ctx.subcommand == "add":
+                    ctx = _resolve_add_options(ctx, interaction)
                 response = await service.dispatch_command(ctx)
             elif isinstance(interaction, hikari.ComponentInteraction):
                 ctx = _component_context(interaction)
                 locale = ctx.locale
                 response = await service.dispatch_button(ctx, interaction.custom_id)
             else:
-                return ""
+                return "", None
         except InteractionRejected as rejected:
-            return error_message(rejected.reason, locale)
+            return error_message(rejected.reason, locale), None
         except Exception:
             _log.exception("interaction_failed")
-            return translate("button.expired", locale)
-        return render(response, locale)
+            return translate("button.expired", locale), None
+        return render(response, locale), response.attachment
 
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
@@ -726,11 +761,23 @@ async def respond_to_interaction(service: InteractionService, interaction: Any) 
         _log.exception("interaction_defer_failed", **log_context)
         return
 
-    message = await run_interaction(service, interaction)
+    message, attachment_body = await run_interaction(service, interaction)
     if not message:
         return
     try:
-        await interaction.edit_initial_response(message)
+        if attachment_body is not None:
+            # Ephemeral responses support attachments; exports ride along as a
+            # real downloadable file instead of being silently dropped.
+            await interaction.edit_initial_response(
+                message,
+                attachment=hikari.Bytes(
+                    attachment_body.encode("utf-8"),
+                    "scamhash-export.json",
+                    mimetype="application/json",
+                ),
+            )
+        else:
+            await interaction.edit_initial_response(message)
     except Exception:
         _log.exception("interaction_edit_failed", **log_context)
 
