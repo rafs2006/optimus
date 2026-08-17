@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from optimus.services.interactions.logic import Permission
+from optimus.services.interactions.logic import CONFIG_FIELDS, Permission
 
 if TYPE_CHECKING:
     import hikari
@@ -34,12 +34,17 @@ OPT_ATTACHMENT = 11
 
 @dataclass(frozen=True, slots=True)
 class Option:
-    """One command (or subcommand) option."""
+    """One command (or subcommand) option.
+
+    ``choices`` (STRING options only) turns free-text input into a Discord
+    picker so users cannot typo a value the handler would reject.
+    """
 
     name: str
     description: str
     type: int
     required: bool = False
+    choices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,41 +77,60 @@ class Command:
 COMMANDS: tuple[Command, ...] = (
     Command(
         name="scamhash",
-        description="Manage this server's known scam-image hashes.",
+        description="Manage this server's scam-image blocklist.",
         required_permission=Permission.MANAGE_GUILD,
         subcommands=(
             SubCommand(
                 name="add",
-                description="Add a scam hash from an image or a hex hash value.",
+                description="Block a scam image: attach it and future reposts get caught.",
                 options=(
-                    Option("image", "An image to hash and add.", OPT_ATTACHMENT),
-                    Option("phash", "Perceptual hash (hex) if not adding an image.", OPT_STRING),
-                    Option("dhash", "Difference hash (hex).", OPT_STRING),
-                    Option("whash", "Wavelet hash (hex).", OPT_STRING),
+                    Option(
+                        "image",
+                        "The scam image to block (screenshot or saved copy).",
+                        OPT_ATTACHMENT,
+                        required=True,
+                    ),
                 ),
             ),
             SubCommand(
                 name="remove",
-                description="Remove a scam hash by its id.",
-                options=(Option("hash_id", "The hash id to remove.", OPT_STRING, required=True),),
+                description="Unblock an image by its hash id (shown by /scamhash list).",
+                options=(
+                    Option(
+                        "hash_id",
+                        "The hash id to remove — copy it from /scamhash list.",
+                        OPT_STRING,
+                        required=True,
+                    ),
+                ),
             ),
-            SubCommand(name="list", description="List this server's scam hashes."),
+            SubCommand(
+                name="list",
+                description="Show the scam images blocked on this server.",
+            ),
             SubCommand(
                 name="import",
-                description="Import scam hashes from an attached JSON file.",
-                options=(Option("file", "A JSON export file.", OPT_ATTACHMENT, required=True),),
-            ),
-            SubCommand(name="export", description="Export this server's scam hashes as JSON."),
-            SubCommand(
-                name="reviewmsg",
-                description=(
-                    "Hash images on a past message, add as scam hashes, "
-                    "and act on the author if not already banned."
+                description="Load blocked hashes from a file made by /scamhash export.",
+                options=(
+                    Option(
+                        "file",
+                        "A JSON file created by /scamhash export on another server.",
+                        OPT_ATTACHMENT,
+                        required=True,
+                    ),
                 ),
+            ),
+            SubCommand(
+                name="export",
+                description="Download this server's blocked hashes as a JSON file.",
+            ),
+            SubCommand(
+                name="review",
+                description="Mark a posted message as scam: block its images, act on author.",
                 options=(
                     Option(
                         "message",
-                        "A message link or ID to review.",
+                        "Message link or ID (right-click the message > Copy Message Link).",
                         OPT_STRING,
                         required=True,
                     ),
@@ -116,30 +140,48 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="config",
-        description="View or change this server's configuration.",
+        description="View or change this server's bot settings.",
         required_permission=Permission.MANAGE_GUILD,
         subcommands=(
-            SubCommand(name="view", description="Show the current configuration."),
+            SubCommand(name="view", description="Show all current settings and their values."),
             SubCommand(
                 name="set",
-                description="Set a configuration field.",
+                description="Change one setting.",
                 options=(
-                    Option("field", "The field to set.", OPT_STRING, required=True),
-                    Option("value", "The new value.", OPT_STRING, required=True),
+                    Option(
+                        "field",
+                        "The setting to change.",
+                        OPT_STRING,
+                        required=True,
+                        choices=CONFIG_FIELDS,
+                    ),
+                    Option(
+                        "value",
+                        "The new value, e.g. true, delete_ban, 0.85, 14, #channel.",
+                        OPT_STRING,
+                        required=True,
+                    ),
                 ),
             ),
         ),
     ),
     Command(
         name="stats",
-        description="Show detection statistics for this server.",
+        description="Show detection activity and database status for this server.",
         required_permission=Permission.MANAGE_GUILD,
     ),
     Command(
         name="submit_global",
-        description="Submit a confirmed scam hash to the shared global database.",
+        description="Propose one of this server's hashes for the shared global list.",
         required_permission=Permission.MANAGE_GUILD,
-        options=(Option("hash_id", "The local hash id to submit.", OPT_STRING, required=True),),
+        options=(
+            Option(
+                "hash_id",
+                "A hash id from /scamhash list to submit for cross-server review.",
+                OPT_STRING,
+                required=True,
+            ),
+        ),
     ),
     Command(
         name="delete_server_data",
@@ -245,6 +287,7 @@ def _to_option(option: Option) -> hikari.CommandOption:
         name=option.name,
         description=option.description,
         is_required=option.required,
+        choices=[hikari.CommandChoice(name=c, value=c) for c in option.choices],
     )
 
 

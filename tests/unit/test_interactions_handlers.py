@@ -274,19 +274,45 @@ async def test_forget_me_allowed_in_dm_without_permission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scamhash_add_audits_and_stores() -> None:
+async def test_scamhash_add_hashes_the_image_audits_and_stores() -> None:
     deps = FakeDeps()
-    resp = await handle_command(_ctx("scamhash", subcommand="add", phash="deadbeef"), deps)
+    resp = await handle_command(
+        _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+    )
     assert resp.i18n_key == "command.hash_added"
-    assert deps.hashes
+    stored = deps.hashes[f"{5:016x}"]  # FakeDeps hashes to phash == attachment_id
+    assert stored.source == "local"
+    assert stored.added_by == 99
     assert deps.audits[0][2] == "scamhash.add"
+
+
+@pytest.mark.asyncio
+async def test_scamhash_add_without_resolved_image_is_rejected_gently() -> None:
+    """No usable image (wrong file type / nothing resolved) -> guidance, no store."""
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("scamhash", subcommand="add"), deps)
+    assert resp.i18n_key == "command.add_not_image"
+    assert not deps.hashes
+
+
+@pytest.mark.asyncio
+async def test_scamhash_add_undecodable_image_reports_reason() -> None:
+    deps = FakeDeps(attachment_outcomes={5: AttachmentHashError("bad image")})
+    resp = await handle_command(
+        _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+    )
+    assert resp.i18n_key == "command.add_fetch_failed"
+    assert resp.params["reason"] == "bad image"
+    assert not deps.hashes
 
 
 @pytest.mark.asyncio
 async def test_scamhash_add_rate_limited() -> None:
     deps = FakeDeps(hash_rate_ok=False)
     with pytest.raises(InteractionRejected) as exc:
-        await handle_command(_ctx("scamhash", subcommand="add", phash="1"), deps)
+        await handle_command(
+            _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+        )
     assert exc.value.reason is CommandError.RATE_LIMITED
 
 
@@ -573,6 +599,13 @@ async def test_scamhash_export_roundtrips() -> None:
     assert resp.attachment is not None and '"phash":7' in resp.attachment
 
 
+@pytest.mark.asyncio
+async def test_scamhash_export_with_no_hashes_explains_instead_of_empty_file() -> None:
+    resp = await handle_command(_ctx("scamhash", subcommand="export"), FakeDeps())
+    assert resp.i18n_key == "command.export_empty"
+    assert resp.attachment is None
+
+
 # --- config view + stats -------------------------------------------------------
 
 
@@ -779,7 +812,7 @@ async def test_review_button_actions_audit(action: ReviewAction, key: str) -> No
 def _review_ctx(
     *,
     command: str = "scamhash",
-    subcommand: str | None = "reviewmsg",
+    subcommand: str | None = "review",
     attachments: list[tuple[int, str]] | None = None,
     channel_id: int = 111,
     message_id: int = 222,

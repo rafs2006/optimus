@@ -34,7 +34,6 @@ from optimus.services.interactions.logic import (
     Permission,
     build_export,
     has_permission,
-    parse_hash_hex,
     validate_config_set,
     validate_import,
 )
@@ -179,8 +178,18 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     if sub == "add":
         if not await deps.hash_rate_ok(ctx.user_id):
             raise InteractionRejected(CommandError.RATE_LIMITED)
-        gh = _build_hash_from_options(ctx.options, added_by=ctx.user_id)
-        stored = await deps.add_guild_hash(ctx.guild_id, gh)
+        attachment_id, url = ctx.options.get("attachment_id"), ctx.options.get("url")
+        if attachment_id is None or url is None:
+            # The glue layer found no usable image on the interaction (wrong
+            # file type, or Discord sent no resolved attachment).
+            return InteractionResponse("command.add_not_image")
+        try:
+            hashes = await deps.compute_attachment_hashes(
+                attachment_id=int(attachment_id), url=str(url)
+            )
+        except AttachmentHashError as exc:
+            return InteractionResponse("command.add_fetch_failed", {"reason": str(exc)})
+        stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
         await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
         return InteractionResponse("command.hash_added", {"hash_id": stored.hash_id})
     if sub == "remove":
@@ -212,11 +221,13 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         )
     if sub == "export":
         rows = await deps.list_guild_hashes(ctx.guild_id)
+        if not rows:
+            return InteractionResponse("command.export_empty")
         body = build_export(
             [_ImportHash(phash=r.phash, dhash=r.dhash, whash=r.whash) for r in rows]
         )
         return InteractionResponse("command.export_ok", {"count": len(rows)}, attachment=body)
-    if sub == "reviewmsg":
+    if sub == "review":
         return await _review_message(ctx, deps)
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
@@ -233,7 +244,7 @@ async def _cmd_review_message(
     """Entry point for the "Review as scam" message context-menu command.
 
     ``required_permission("review_message")`` gates this the same as
-    ``/scamhash reviewmsg`` (``MANAGE_GUILD``); the glue layer has already
+    ``/scamhash review`` (``MANAGE_GUILD``); the glue layer has already
     resolved the target message's attachments/author into ``ctx.options``
     since a context-menu command carries no typed options of its own.
     """
@@ -241,7 +252,7 @@ async def _cmd_review_message(
 
 
 async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
-    """Shared core for both the ``/scamhash reviewmsg`` and context-menu entry points.
+    """Shared core for both the ``/scamhash review`` and context-menu entry points.
 
     Expects the glue layer to have pre-resolved the target message into
     ``ctx.options``: ``channel_id``, ``message_id``, ``author_id`` (all ints),
@@ -499,36 +510,22 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
 }
 
 
-def _build_hash_from_options(options: dict[str, Any], *, added_by: int) -> GuildHash:
-    """Build a :class:`GuildHash` from ``/scamhash add`` options.
+def _hashes_to_guild_hash(hashes: AttachmentHashes, added_by: int) -> GuildHash:
+    """Build a :class:`GuildHash` from a freshly hashed ``/scamhash add`` image.
 
-    Accepts either a precomputed image hash triple supplied by the glue layer
-    (``phash``/``dhash``/``whash`` as ints, e.g. hashed from an attachment) or
-    hex strings the user typed. ``hash_id`` is derived deterministically.
+    ``hash_id`` is derived deterministically from the perceptual hash so
+    re-adding the same image is idempotent (the upsert replaces the row).
     """
-    p, d, w = options.get("phash"), options.get("dhash"), options.get("whash")
-    if isinstance(p, int) and isinstance(d, int) and isinstance(w, int):
-        phash, dhash, whash = p, d, w
-    else:
-        phash = parse_hash_hex(str(p))
-        dhash = parse_hash_hex(str(d)) if d is not None else 0
-        whash = parse_hash_hex(str(w)) if w is not None else 0
-    hash_id = options.get("hash_id") or f"{phash:016x}"
-    # Mirror (flip) hashes are supplied as ints by the glue layer only when it
-    # hashed an actual attachment (it also flips the pixels); typed-hex adds have
-    # no image and leave them NULL.
-    mp, md, mw = options.get("mphash"), options.get("mdhash"), options.get("mwhash")
-    mirror_given = isinstance(mp, int) and isinstance(md, int) and isinstance(mw, int)
     return GuildHash(
-        hash_id=str(hash_id),
-        phash=phash,
-        dhash=dhash,
-        whash=whash,
-        ahash=0,
-        mphash=mp if mirror_given else None,
-        mdhash=md if mirror_given else None,
-        mwhash=mw if mirror_given else None,
-        mahash=options.get("mahash") if mirror_given else None,
+        hash_id=f"{hashes.phash:016x}",
+        phash=hashes.phash,
+        dhash=hashes.dhash,
+        whash=hashes.whash,
+        ahash=hashes.ahash,
+        mphash=hashes.mphash,
+        mdhash=hashes.mdhash,
+        mwhash=hashes.mwhash,
+        mahash=hashes.mahash,
         source="local",
         added_by=added_by,
     )

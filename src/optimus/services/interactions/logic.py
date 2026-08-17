@@ -202,6 +202,23 @@ _BOOL_FIELDS = frozenset(
 )
 _ACTION_POLICIES = frozenset({"report_only", "delete", "delete_timeout", "delete_ban"})
 
+#: Every field ``validate_config_set`` accepts, in the order shown to users as
+#: Discord option choices on ``/config set field:``. Keep in sync with the
+#: branches below (asserted by tests).
+CONFIG_FIELDS: tuple[str, ...] = (
+    "sensitivity",
+    "action_policy",
+    "mod_queue_threshold",
+    "retention_days",
+    "ban_purge_hours",
+    "locale",
+    "review_channel",
+    "optin_global_db",
+    "optin_scan_bots",
+    "optin_evidence_storage",
+    "safe_mode",
+)
+
 
 def validate_config_set(field: str, raw_value: str) -> ConfigChange:
     """Validate and coerce a ``/config set <field> <value>`` pair.

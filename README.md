@@ -71,11 +71,14 @@ instead of a traceback.
 Optimus only acts on images you've shown it. In your server, use the slash
 commands (registered automatically on first run):
 
-- **`/scamhash add`** — attach a scam image (or paste a hash) to register it.
-  From now on Optimus catches re-posts of that image and variants of it.
-- **`/scamhash list`** / **`/scamhash remove`** — review or drop registered hashes.
-- **`/scamhash import`** / **`/scamhash export`** — share hash sets as JSON between
-  servers.
+- **`/scamhash add`** — attach a scam image to block it. From now on Optimus
+  catches re-posts of that image and variants of it.
+- **`/scamhash review`** — point at a message that was already posted (link or
+  ID, or right-click → Apps → *Review as scam*): its images are blocked and the
+  author is actioned per your `action_policy`.
+- **`/scamhash list`** / **`/scamhash remove`** — review or drop blocked hashes.
+- **`/scamhash export`** — download this server's hashes as a JSON file;
+  **`/scamhash import`** loads that file on another server.
 - **`/config set`** — choose what happens on a match (report / delete / timeout /
   ban), the detection **sensitivity** (`strict` / `balanced` / `permissive`), and
   the moderator review channel. **`/config view`** shows the current settings.
