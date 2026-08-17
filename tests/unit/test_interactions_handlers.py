@@ -48,6 +48,8 @@ class FakeDeps:
         self.config_set: list[tuple[str, Any]] = []
         self.resolved: list[tuple[int, bool]] = []
         self._hash_rate_ok = flags.get("hash_rate_ok", True)
+        self._report_rate_ok = flags.get("report_rate_ok", True)
+        self.user_reports: list[dict[str, Any]] = []
         self._appeal_ok = flags.get("appeal_ok", True)
         self._recent_detection = flags.get("recent_detection", 555)
         self._owned_detections: set[int] = set(flags.get("owned_detections", {77}))
@@ -121,6 +123,9 @@ class FakeDeps:
     async def hash_rate_ok(self, user_id: int) -> bool:
         return self._hash_rate_ok
 
+    async def report_rate_ok(self, user_id: int) -> bool:
+        return self._report_rate_ok
+
     async def appeal_cooldown_ok(self, user_id: int) -> bool:
         return self._appeal_ok
 
@@ -190,6 +195,27 @@ class FakeDeps:
                 "attachment_id": attachment_id,
                 "uploader_id": uploader_id,
                 "matched_hash_id": matched_hash_id,
+            }
+        )
+
+    async def submit_user_report(
+        self,
+        guild_id: int,
+        *,
+        channel_id: int,
+        message_id: int,
+        attachment_id: int,
+        uploader_id: int,
+        reporter_id: int,
+    ) -> None:
+        self.user_reports.append(
+            {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "attachment_id": attachment_id,
+                "uploader_id": uploader_id,
+                "reporter_id": reporter_id,
             }
         )
 
@@ -1053,3 +1079,71 @@ async def test_context_menu_review_message_denied_without_manage_guild() -> None
     with pytest.raises(InteractionRejected) as exc:
         await handle_command(ctx, FakeDeps())
     assert exc.value.reason is CommandError.NO_PERMISSION
+
+
+# --- "Report scam to mods" member context-menu command --------------------------
+
+
+@pytest.mark.asyncio
+async def test_report_message_files_review_and_audits() -> None:
+    deps = FakeDeps()
+    ctx = _review_ctx(command="report_message", subcommand=None, perms=NONE)
+    resp = await handle_command(ctx, deps)
+    assert resp.i18n_key == "command.report_ok"
+    assert deps.user_reports == [
+        {
+            "guild_id": 1,
+            "channel_id": 111,
+            "message_id": 222,
+            "attachment_id": 1,
+            "uploader_id": 333,
+            "reporter_id": 99,
+        }
+    ]
+    assert deps.audits == [(1, 99, "report.message", "222")]
+    # A member report never touches the blocklist or confirmed verdicts.
+    assert deps.hashes == {}
+    assert deps.confirmed_scams == []
+
+
+@pytest.mark.asyncio
+async def test_report_message_requires_no_permission() -> None:
+    """Unlike review_message, a member with zero permissions can report."""
+    deps = FakeDeps()
+    resp = await handle_command(
+        _review_ctx(command="report_message", subcommand=None, perms=NONE), deps
+    )
+    assert resp.i18n_key == "command.report_ok"
+
+
+@pytest.mark.asyncio
+async def test_report_message_without_images_short_circuits() -> None:
+    deps = FakeDeps()
+    ctx = _review_ctx(command="report_message", subcommand=None, perms=NONE, attachments=[])
+    resp = await handle_command(ctx, deps)
+    assert resp.i18n_key == "command.report_no_images"
+    assert deps.user_reports == []
+
+
+@pytest.mark.asyncio
+async def test_report_message_rate_limited() -> None:
+    deps = FakeDeps(report_rate_ok=False)
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_review_ctx(command="report_message", subcommand=None), deps)
+    assert exc.value.reason is CommandError.RATE_LIMITED
+    assert deps.user_reports == []
+
+
+@pytest.mark.asyncio
+async def test_report_message_guild_only() -> None:
+    ctx = InteractionContext(
+        guild_id=None,
+        user_id=99,
+        member_permissions=0,
+        command="report_message",
+        subcommand=None,
+        options={"channel_id": 111, "message_id": 222, "author_id": 333, "attachments": []},
+    )
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(ctx, FakeDeps())
+    assert exc.value.reason is CommandError.GUILD_ONLY

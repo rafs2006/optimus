@@ -97,6 +97,7 @@ class InteractionDeps(Protocol):
     async def disable_safe_mode(self, guild_id: int) -> None: ...
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None: ...
     async def hash_rate_ok(self, user_id: int) -> bool: ...
+    async def report_rate_ok(self, user_id: int) -> bool: ...
     async def appeal_cooldown_ok(self, user_id: int) -> bool: ...
     async def audit(
         self, guild_id: int, actor_id: int, action: str, *, target: str | None = None
@@ -151,6 +152,24 @@ class InteractionDeps(Protocol):
         Feeds the same ``verdict.v1`` path a live detection would, so the
         guild's configured ``action_policy`` (e.g. delete + ban) is applied
         exactly as it would be for a message caught in real time.
+        """
+        ...
+
+    async def submit_user_report(
+        self,
+        guild_id: int,
+        *,
+        channel_id: int,
+        message_id: int,
+        attachment_id: int,
+        uploader_id: int,
+        reporter_id: int,
+    ) -> None:
+        """File a member's scam report into the mod-review queue.
+
+        Never stores a hash and never auto-acts -- it only surfaces a review
+        card (with the reporter attributed) for moderators to decide on.
+        Deduplicated per reported message.
         """
         ...
 
@@ -236,6 +255,37 @@ def _render_hash_entry(row: GuildHash) -> str:
     """One display line per hash: id, source, and who added it (when known)."""
     added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
     return f"\u2022 `{row.hash_id}` \u2014 {row.source}{added_by}"
+
+
+async def _cmd_report_message(
+    ctx: InteractionContext, deps: InteractionDeps
+) -> InteractionResponse:
+    """Entry point for the member-facing "Report scam to mods" context menu.
+
+    Open to every member (no permission gate), so it is deliberately inert:
+    it files the message into the mod-review queue and nothing else. No hash
+    is stored, nothing is deleted, nobody is actioned -- a hostile member
+    mass-reporting innocent messages can, at worst, put cards in front of the
+    mods (bounded by a tight per-user rate limit and per-message dedupe).
+    """
+    if ctx.guild_id is None:
+        raise InteractionRejected(CommandError.GUILD_ONLY)
+    if not await deps.report_rate_ok(ctx.user_id):
+        raise InteractionRejected(CommandError.RATE_LIMITED)
+    attachments: list[tuple[int, str]] = list(ctx.options["attachments"])
+    if not attachments:
+        return InteractionResponse("command.report_no_images")
+    message_id = int(ctx.options["message_id"])
+    await deps.submit_user_report(
+        ctx.guild_id,
+        channel_id=int(ctx.options["channel_id"]),
+        message_id=message_id,
+        attachment_id=attachments[0][0],
+        uploader_id=int(ctx.options["author_id"]),
+        reporter_id=ctx.user_id,
+    )
+    await deps.audit(ctx.guild_id, ctx.user_id, "report.message", target=str(message_id))
+    return InteractionResponse("command.report_ok")
 
 
 async def _cmd_review_message(
@@ -507,6 +557,7 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "forget_me": _cmd_forget_me,
     "appeal": _cmd_appeal,
     "review_message": _cmd_review_message,
+    "report_message": _cmd_report_message,
 }
 
 

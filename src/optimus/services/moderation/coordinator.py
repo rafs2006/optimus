@@ -218,6 +218,7 @@ class ModerationCoordinator:
                     confidence=event.confidence,
                     action_taken=action_taken,
                     matched_hash_id=event.matched_hash_id,
+                    reported_by=event.reported_by,
                     locale=cfg.locale,
                 ),
             )

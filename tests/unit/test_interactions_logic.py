@@ -342,3 +342,30 @@ def test_parse_message_reference_rejects_invalid(bad: str) -> None:
     with pytest.raises(InteractionRejected) as exc:
         parse_message_reference(bad)
     assert exc.value.reason is CommandError.MESSAGE_NOT_FOUND
+
+
+def test_report_message_command_is_open_to_all_members() -> None:
+    from optimus.services.interactions.commands import (
+        MESSAGE_COMMAND_DISPATCH,
+        MESSAGE_COMMAND_LABELS,
+        REPORT_MESSAGE_COMMAND,
+    )
+
+    cmd = next(c for c in MESSAGE_COMMANDS if c.name == REPORT_MESSAGE_COMMAND)
+    assert cmd.required_permission is None
+    assert required_permission(REPORT_MESSAGE_COMMAND) is None
+    # Label round-trips through the dispatch map used by _context_menu_context.
+    label = MESSAGE_COMMAND_LABELS[REPORT_MESSAGE_COMMAND]
+    assert MESSAGE_COMMAND_DISPATCH[label] == REPORT_MESSAGE_COMMAND
+
+
+def test_report_context_menu_builder_has_no_permission_gate() -> None:
+    import hikari
+    import hikari.api as hikari_api
+
+    builders = build_context_menu_command_builders()
+    report = next(b for b in builders if b.name == "Report scam to mods")
+    assert report.type is hikari.CommandType.MESSAGE
+    # No default_member_permissions -> visible to every member.
+    assert report.default_member_permissions in (hikari.UNDEFINED, None)
+    assert isinstance(report, hikari_api.ContextMenuCommandBuilder)

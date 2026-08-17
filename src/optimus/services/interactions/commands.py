@@ -218,11 +218,19 @@ class ContextMenuCommand:
 #: The command name used for dispatch (``ctx.command``) -- distinct from the
 #: user-visible menu label, which can be changed without touching handler code.
 REVIEW_MESSAGE_COMMAND = "review_message"
+#: Member-facing report: anyone can flag an image message to the mods. Unlike
+#: ``review_message`` it never blocks, deletes, or bans anything by itself --
+#: it only files the message into the mod-review queue.
+REPORT_MESSAGE_COMMAND = "report_message"
 
 MESSAGE_COMMANDS: tuple[ContextMenuCommand, ...] = (
     ContextMenuCommand(
         name=REVIEW_MESSAGE_COMMAND,
         required_permission=Permission.MANAGE_GUILD,
+    ),
+    ContextMenuCommand(
+        name=REPORT_MESSAGE_COMMAND,
+        required_permission=None,
     ),
 )
 
@@ -230,6 +238,13 @@ MESSAGE_COMMANDS: tuple[ContextMenuCommand, ...] = (
 #: command, keyed by dispatch name.
 MESSAGE_COMMAND_LABELS: dict[str, str] = {
     REVIEW_MESSAGE_COMMAND: "Review as scam",
+    REPORT_MESSAGE_COMMAND: "Report scam to mods",
+}
+
+#: Reverse map: Discord sends the menu *label* as ``command_name`` on the
+#: interaction; dispatch runs on the stable internal name.
+MESSAGE_COMMAND_DISPATCH: dict[str, str] = {
+    label: name for name, label in MESSAGE_COMMAND_LABELS.items()
 }
 
 
@@ -294,9 +309,11 @@ def _to_option(option: Option) -> hikari.CommandOption:
 def build_context_menu_command_builders() -> list[hikari.api.ContextMenuCommandBuilder]:
     """Build hikari ``ContextMenuCommandBuilder`` objects for global registration.
 
-    Message context-menu commands only ever run inside a guild here (every
-    entry in :data:`MESSAGE_COMMANDS` requires ``MANAGE_GUILD``), so they are
-    always scoped to guild context, unlike the DM-permitting slash commands.
+    Message context-menu commands only ever run inside a guild here (they all
+    act on a guild message), so they are always scoped to guild context,
+    unlike the DM-permitting slash commands. A command with no
+    ``required_permission`` (the member report) is visible to every member;
+    permission-gated ones are hidden from members without that permission.
     """
     import hikari
 

@@ -95,6 +95,11 @@ def _default_fetch(settings: Settings) -> FetchFn:
 
 #: Per-user budgets for the rate-limited commands.
 HASH_RATE = RateLimit(capacity=10.0, refill_rate=1.0 / 6.0)
+#: Member scam reports: small burst, slow refill -- a member has no reason to
+#: file reports faster than mods could ever look at them, and the report path
+#: is open to *everyone* in the guild, so it gets a much tighter budget than
+#: the moderator-only hash commands.
+REPORT_RATE = RateLimit(capacity=3.0, refill_rate=1.0 / 60.0)
 
 #: Maps a rejection reason to the i18n key for its ephemeral message. Reasons
 #: whose enum value differs from the catalog suffix are remapped explicitly.
@@ -289,6 +294,9 @@ class DbDeps:
     async def hash_rate_ok(self, user_id: int) -> bool:
         return await self._rl.acquire(f"scamhash:{user_id}", HASH_RATE)
 
+    async def report_rate_ok(self, user_id: int) -> bool:
+        return await self._rl.acquire(f"report:{user_id}", REPORT_RATE)
+
     async def appeal_cooldown_ok(self, user_id: int) -> bool:
         return await self._rl.acquire(
             f"appeal:{user_id}", RateLimit(capacity=1.0, refill_rate=1.0 / self._appeal_cooldown)
@@ -373,6 +381,49 @@ class DbDeps:
         # session, would block on our own lock until busy_timeout and raise
         # "database is locked": a self-deadlock every retry reproduces
         # identically. The bus publish is deferred until after commit.
+        await self._detection.persist_confirmed_match(self._session, verdict)
+        self.pending_verdicts.append(verdict)
+
+    async def submit_user_report(
+        self,
+        guild_id: int,
+        *,
+        channel_id: int,
+        message_id: int,
+        attachment_id: int,
+        uploader_id: int,
+        reporter_id: int,
+    ) -> None:
+        """File a member's scam report into the mod-review queue.
+
+        Unlike :meth:`submit_confirmed_scam` this is deliberately *not* a
+        confirmed verdict: it carries ``Verdict.AMBIGUOUS`` with no matched
+        hash, which the moderation policy always routes to the mod queue and
+        never auto-acts on (auto-action additionally requires a SCAM verdict),
+        regardless of the guild's ``action_policy``. No hash is stored either
+        -- a member report must never be able to poison the guild's blocklist;
+        only a moderator pressing *Confirm scam* on the queued card does that.
+        Idempotency is keyed on the reported message, so twenty members
+        reporting the same scam produce one review card, not twenty.
+        """
+        if self._detection is None:  # pragma: no cover - always wired at app startup
+            _log.warning("report_no_detection_service", guild_id=guild_id)
+            return
+        idempotency_key = f"userreport:{guild_id}:{message_id}:{attachment_id}"
+        verdict = VerdictEvent(
+            correlation_id=get_correlation_id() or idempotency_key,
+            occurred_at=datetime.now(UTC),
+            guild_id=guild_id,
+            channel_id=channel_id,
+            message_id=message_id,
+            attachment_id=attachment_id,
+            uploader_id=uploader_id,
+            idempotency_key=idempotency_key,
+            verdict=Verdict.AMBIGUOUS,
+            confidence=1.0,
+            matched_hash_id=None,
+            reported_by=reporter_id,
+        )
         await self._detection.persist_confirmed_match(self._session, verdict)
         self.pending_verdicts.append(verdict)
 
@@ -567,14 +618,22 @@ def _image_attachments(attachments: Any) -> list[tuple[int, str]]:
 
 
 def _context_menu_context(interaction: Any) -> InteractionContext:
-    """Adapt a MESSAGE context-menu interaction ("Review as scam").
+    """Adapt a MESSAGE context-menu interaction (review or member report).
 
     The target message and its author are already resolved by Discord onto
     the interaction itself (``interaction.resolved``), so this needs no REST
     round-trip, unlike the slash-command path in :func:`resolve_review_options`.
+    Discord sends the menu *label* as ``command_name``; dispatch runs on the
+    stable internal name via :data:`MESSAGE_COMMAND_DISPATCH`.
     """
-    from optimus.services.interactions.commands import REVIEW_MESSAGE_COMMAND
+    from optimus.services.interactions.commands import (
+        MESSAGE_COMMAND_DISPATCH,
+        REVIEW_MESSAGE_COMMAND,
+    )
 
+    command = MESSAGE_COMMAND_DISPATCH.get(
+        str(getattr(interaction, "command_name", "")), REVIEW_MESSAGE_COMMAND
+    )
     message = interaction.resolved.messages[interaction.target_id]
     member = interaction.member
     perms = int(member.permissions) if member is not None and member.permissions else 0
@@ -582,7 +641,7 @@ def _context_menu_context(interaction: Any) -> InteractionContext:
         guild_id=int(interaction.guild_id) if interaction.guild_id is not None else None,
         user_id=int(interaction.user.id),
         member_permissions=perms,
-        command=REVIEW_MESSAGE_COMMAND,
+        command=command,
         options={
             "channel_id": int(message.channel_id),
             "message_id": int(message.id),
