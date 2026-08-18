@@ -87,6 +87,16 @@ commands (registered automatically on first run):
 Members can run **`/appeal`** on a detection, and **`/forget_me`** to erase their
 data. That's the whole product — register scam images, pick an action, done.
 
+### What gets scanned
+
+Optimus scans images **live** in every server it's in — new messages and edits
+(scam-swapped-in-by-edit included) — from the moment it joins. On joining a
+server it also **backfills the last 3 days of message history** (scam waves
+usually start *before* someone installs the bot), bounded to 50 channels and
+the newest 200 messages per channel. Tune with `OPTIMUS_GATEWAY_JOIN_SCAN_DAYS`
+(`0` disables the join scan), `OPTIMUS_GATEWAY_JOIN_SCAN_MAX_CHANNELS`, and
+`OPTIMUS_GATEWAY_JOIN_SCAN_MESSAGES_PER_CHANNEL`.
+
 ## How detection works (the short version)
 
 Every image is reduced to a four-hash **perceptual fingerprint** (pHash, dHash,

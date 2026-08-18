@@ -199,6 +199,18 @@ class Settings(BaseSettings):
     #: extras are dropped (counted) so one message with a flood of attachments
     #: cannot fan out an unbounded number of fetch/decode jobs.
     gateway_max_attachments: int = Field(default=10, ge=1)
+    #: On joining a guild, backfill-scan this many days of recent message
+    #: history for scam images (0 disables the join scan entirely). Scam
+    #: campaigns often predate the bot's invitation -- mods typically install
+    #: it *because* of an ongoing wave -- so a bounded look-back catches the
+    #: messages that motivated the install.
+    gateway_join_scan_days: int = Field(default=3, ge=0)
+    #: Upper bound on how many text channels one join backfill will read.
+    gateway_join_scan_max_channels: int = Field(default=50, ge=1)
+    #: Upper bound on messages read per channel during a join backfill (the
+    #: *newest* messages within the look-back window are kept). Caps both
+    #: Discord REST traffic and how much work one huge guild can enqueue.
+    gateway_join_scan_messages_per_channel: int = Field(default=200, ge=1)
     ingest_fetch_rate_capacity: float = 20.0
     ingest_fetch_rate_refill: float = 10.0
     #: Opportunistic idle-bucket sweep cadence for the in-memory rate-limiter

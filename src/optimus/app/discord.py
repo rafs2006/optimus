@@ -20,6 +20,9 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
 from optimus.core.config import Settings
 from optimus.core.guild_config import GuildConfigCache
 from optimus.core.logging import get_logger
@@ -51,8 +54,33 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
     async def _fetch_message(channel_id: int, message_id: int) -> hikari.Message:
         return await bot.rest.fetch_message(channel_id, message_id)
 
+    class _RestHistoryReader:
+        """Join-backfill history access via the live bot's REST client."""
+
+        async def list_text_channel_ids(self, guild_id: int) -> list[int]:
+            channels = await bot.rest.fetch_guild_channels(guild_id)
+            return [int(c.id) for c in channels if isinstance(c, hikari.TextableGuildChannel)]
+
+        async def fetch_recent_messages(
+            self, channel_id: int, *, after: datetime, limit: int
+        ) -> list[hikari.Message]:
+            # Newest-first, stopping at the look-back cutoff, capped at `limit`:
+            # when a busy channel has more than `limit` messages in the window,
+            # the *newest* ones (most likely to still be live scams) are kept.
+            iterator = (
+                bot.rest.fetch_messages(channel_id)
+                .take_while(lambda m: m.created_at >= after)
+                .limit(limit)
+            )
+            return list(await iterator)
+
     gateway = GatewayService(
-        settings, app.bus, config_cache, app.health, fetch_message=_fetch_message
+        settings,
+        app.bus,
+        config_cache,
+        app.health,
+        fetch_message=_fetch_message,
+        history=_RestHistoryReader(),
     )
     interactions = InteractionService(
         app._scope, InMemoryRateLimiter(), settings, detection=app.detection
