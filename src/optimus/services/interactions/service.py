@@ -53,8 +53,10 @@ from optimus.services.interactions.attachment_hash import (
     hash_attachment,
 )
 from optimus.services.interactions.handlers import (
+    DetectionFacts,
     InteractionContext,
     InteractionResponse,
+    ModerationRest,
     handle_command,
     handle_component,
     handle_review_button,
@@ -143,6 +145,7 @@ class DbDeps:
         appeal_cooldown_seconds: int = 3600,
         fetch: FetchFn | None = None,
         detection: DetectionService | None = None,
+        rest: ModerationRest | None = None,
     ) -> None:
         self._session = session
         self._rl = rate_limiter
@@ -150,6 +153,7 @@ class DbDeps:
         self._appeal_cooldown = appeal_cooldown_seconds
         self._fetch = fetch or _default_fetch(settings)
         self._detection = detection
+        self._rest = rest
         #: Confirmed-scam verdicts persisted in this request's transaction but
         #: not yet published to the moderation bus. :meth:`InteractionService._run`
         #: publishes these only after the transaction commits -- publishing
@@ -284,6 +288,78 @@ class DbDeps:
     async def reverse_detection_action(self, guild_id: int, detection_id: int) -> None:
         repo = DetectionRepository(self._session, guild_id)
         await repo.set_action_taken(detection_id, "reversed")
+
+    async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None:
+        row = await DetectionRepository(self._session, guild_id).get(detection_id)
+        if row is None:
+            return None
+        return DetectionFacts(
+            detection_id=row.id,
+            channel_id=row.channel_id,
+            message_id=row.message_id,
+            attachment_id=row.attachment_id,
+            uploader_id=row.uploader_id,
+            hashes=row.hashes,
+        )
+
+    async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None:
+        await DetectionRepository(self._session, guild_id).set_action_taken(detection_id, action)
+
+    async def set_detection_hashes(
+        self, guild_id: int, detection_id: int, hashes: dict[str, int]
+    ) -> None:
+        await DetectionRepository(self._session, guild_id).set_hashes(detection_id, hashes)
+
+    # -- Discord REST enforcement, all best-effort ------------------------------
+    #
+    # A review click must never explode because Discord refused one call (the
+    # message is already gone, role hierarchy blocks the ban, ...). Handlers
+    # get a plain bool/None and turn failures into ephemeral i18n replies.
+
+    async def rest_delete_message(self, channel_id: int, message_id: int) -> bool:
+        if self._rest is None:
+            return False
+        try:
+            await self._rest.delete_message(channel_id, message_id)
+        except Exception:
+            _log.warning("rest_delete_failed", channel_id=channel_id, message_id=message_id)
+            return False
+        return True
+
+    async def rest_ban(
+        self, guild_id: int, user_id: int, *, reason: str, purge_seconds: int
+    ) -> bool:
+        if self._rest is None:
+            return False
+        try:
+            await self._rest.ban_member(guild_id, user_id, reason, purge_seconds=purge_seconds)
+        except Exception:
+            _log.warning("rest_ban_failed", guild_id=guild_id, user_id=user_id)
+            return False
+        return True
+
+    async def rest_unban(self, guild_id: int, user_id: int, *, reason: str) -> bool:
+        if self._rest is None:
+            return False
+        try:
+            await self._rest.unban_member(guild_id, user_id, reason)
+        except Exception:
+            # Includes the "was never banned" 404 -- callers treat unban as
+            # idempotent cleanup, so this is log-only by design.
+            _log.warning("rest_unban_failed", guild_id=guild_id, user_id=user_id)
+            return False
+        return True
+
+    async def rest_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None:
+        if self._rest is None:
+            return None
+        try:
+            return await self._rest.fetch_attachment_url(channel_id, message_id, attachment_id)
+        except Exception:
+            _log.warning("rest_attachment_url_failed", channel_id=channel_id, message_id=message_id)
+            return None
 
     async def disable_safe_mode(self, guild_id: int) -> None:
         await GuildRepository(self._session).set_safe_mode(guild_id, False)
@@ -439,12 +515,14 @@ class InteractionService:
         *,
         fetch: FetchFn | None = None,
         detection: DetectionService | None = None,
+        rest: ModerationRest | None = None,
     ) -> None:
         self._scope = scope
         self._rl = rate_limiter
         self._settings = settings
         self._fetch = fetch
         self._detection = detection
+        self._rest = rest
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
         """Run a slash command within a fresh transactional session scope."""
@@ -507,6 +585,7 @@ class InteractionService:
                         self._settings,
                         fetch=self._fetch,
                         detection=self._detection,
+                        rest=self._rest,
                     )
                     response: InteractionResponse = await call(deps)
             except OperationalError as exc:
@@ -770,12 +849,15 @@ def to_context(interaction: Any) -> InteractionContext:
 
 async def run_interaction(  # pragma: no cover - hikari glue
     service: InteractionService, interaction: Any
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, str | None]:
     """Handle one interaction end-to-end.
 
-    Returns ``(message, attachment_body)`` -- the rendered ephemeral text plus
-    an optional file body (e.g. a ``/scamhash export`` JSON document) that
-    :func:`respond_to_interaction` uploads alongside the message.
+    Returns ``(message, attachment_body, card_note)`` -- the rendered
+    ephemeral text, an optional file body (e.g. a ``/scamhash export`` JSON
+    document) that :func:`respond_to_interaction` uploads alongside the
+    message, and an optional localized status line to append to the review
+    card itself so every moderator in the shared review channel sees who
+    handled the report (the ephemeral reply is visible only to the clicker).
     """
     import hikari
 
@@ -794,13 +876,18 @@ async def run_interaction(  # pragma: no cover - hikari glue
                 locale = ctx.locale
                 response = await service.dispatch_button(ctx, interaction.custom_id)
             else:
-                return "", None
+                return "", None, None
         except InteractionRejected as rejected:
-            return error_message(rejected.reason, locale), None
+            return error_message(rejected.reason, locale), None, None
         except Exception:
             _log.exception("interaction_failed")
-            return translate("button.expired", locale), None
-        return render(response, locale), response.attachment
+            return translate("button.expired", locale), None, None
+        card_note = (
+            translate(response.card_note_key, locale, **response.card_note_params)
+            if response.card_note_key is not None
+            else None
+        )
+        return render(response, locale), response.attachment, card_note
 
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
@@ -820,7 +907,9 @@ async def respond_to_interaction(service: InteractionService, interaction: Any) 
         _log.exception("interaction_defer_failed", **log_context)
         return
 
-    message, attachment_body = await run_interaction(service, interaction)
+    message, attachment_body, card_note = await run_interaction(service, interaction)
+    if card_note:
+        await _append_card_note(interaction, card_note, log_context)
     if not message:
         return
     try:
@@ -839,6 +928,28 @@ async def respond_to_interaction(service: InteractionService, interaction: Any) 
             await interaction.edit_initial_response(message)
     except Exception:
         _log.exception("interaction_edit_failed", **log_context)
+
+
+async def _append_card_note(interaction: Any, card_note: str, log_context: dict[str, Any]) -> None:
+    """Append a handled-by status line to the review card message, once.
+
+    The card lives in the shared review channel, so this line is what tells
+    the *other* moderators the report is already dealt with. Best-effort and
+    idempotent: a retried/double click whose note already sits in the content
+    is skipped, and any REST failure (card deleted, missing permission) is
+    logged without failing the interaction -- the clicker already got their
+    ephemeral confirmation.
+    """
+    card = getattr(interaction, "message", None)
+    if card is None:  # pragma: no cover - slash commands have no source message
+        return
+    try:
+        content = card.content or ""
+        if card_note in content:
+            return
+        await card.edit(f"{content}\n\n{card_note}" if content else card_note)
+    except Exception:
+        _log.warning("card_note_edit_failed", **log_context)
 
 
 def _component_context(interaction: Any) -> InteractionContext:  # pragma: no cover - hikari glue
@@ -905,7 +1016,6 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
 
     redis = _open_redis(settings)
     rate_limiter = build_rate_limiter(settings, redis)
-    service = InteractionService(scope, rate_limiter, settings)
 
     health = HealthServer(host=settings.health_host, port=settings.health_port)
     # Interactions serve appeals/commands straight from Postgres, so DB
@@ -916,6 +1026,12 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     await health.start()
 
     bot = hikari.GatewayBot(token=settings.discord_token, intents=hikari.Intents.GUILDS)
+    # The review buttons enforce through Discord REST (delete/ban/unban and
+    # re-fetching attachment URLs), so the standalone service wires the bot's
+    # REST client in just like the combined app in optimus.app.discord does.
+    from optimus.services.moderation.rest_adapter import HikariRestActions
+
+    service = InteractionService(scope, rate_limiter, settings, rest=HikariRestActions(bot.rest))
 
     @bot.listen(hikari.InteractionCreateEvent)
     async def _on_interaction(event: hikari.InteractionCreateEvent) -> None:

@@ -72,7 +72,7 @@
     "appeal_opened": "Your appeal has been opened and sent to the server moderators."
   },
   "button": {
-    "confirmed_scam": "Detection #{detection_id} confirmed as scam.",
+    "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",
     "marked_false_positive": "Detection #{detection_id} marked as a false positive; the image was whitelisted and any action reversed.",
     "uploader_banned": "Uploader has been banned.",
     "uploader_unbanned": "Uploader has been unbanned.",
@@ -82,6 +82,15 @@
     "appeal_approved": "The appeal has been approved and the action reversed.",
     "appeal_denied": "The appeal has been denied.",
     "expired": "This interaction is no longer valid.",
-    "not_permitted": "You do not have permission to do that."
+    "not_permitted": "You do not have permission to do that.",
+    "confirmed_no_hash": "Detection #{detection_id} confirmed and the message deleted, but the image could not be re-fetched, so no hash was blocklisted.",
+    "marked_false_positive_no_hash": "Detection #{detection_id} marked as a false positive and any action reversed. The image could not be re-fetched, so nothing was whitelisted.",
+    "detection_missing": "Detection #{detection_id} was not found in this server.",
+    "action_failed": "Discord refused that action. Check that the bot has the Ban Members permission and that its role sits above the target user's roles.",
+    "no_image": "The original image is no longer available, so there is nothing to whitelist.",
+    "confirm_first": "This image's hash is not on this server's blocklist yet. Press Confirm scam first, then submit it to the global database."
+  },
+  "card": {
+    "handled": "✅ **{action}** — handled by <@{user_id}>"
   }
 }

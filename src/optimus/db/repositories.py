@@ -321,6 +321,13 @@ class DetectionRepository:
         )
         return int((await self._session.execute(stmt)).scalar_one()) > 0
 
+    async def get(self, detection_id: int) -> Detection | None:
+        """Return one detection by id, scoped to this guild (cross-guild ids miss)."""
+        stmt = select(Detection).where(
+            Detection.guild_id == self._guild_id, Detection.id == detection_id
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def set_action_taken(self, detection_id: int, action: str) -> int:
         """Record the action applied to a detection; return rows affected."""
         from sqlalchemy import update
@@ -329,6 +336,19 @@ class DetectionRepository:
             update(Detection)
             .where(Detection.guild_id == self._guild_id, Detection.id == detection_id)
             .values(action_taken=action)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    async def set_hashes(self, detection_id: int, hashes: dict[str, int]) -> int:
+        """Backfill the hash ensemble onto a detection filed without one."""
+        from sqlalchemy import update
+
+        stmt = (
+            update(Detection)
+            .where(Detection.guild_id == self._guild_id, Detection.id == detection_id)
+            .values(hashes=hashes)
         )
         result = await self._session.execute(stmt)
         await self._session.flush()

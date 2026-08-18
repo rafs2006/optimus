@@ -64,6 +64,25 @@ class HikariRestActions:
     async def unban_member(self, guild_id: int, user_id: int, reason: str) -> None:
         await self._rest.unban_user(guild_id, user_id, reason=reason)
 
+    async def fetch_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None:
+        """Return a fresh CDN URL for one attachment, or ``None`` if it is gone.
+
+        Discord CDN URLs are signed and expire, so anything stored at detection
+        time may be stale; re-fetching the message mints a fresh URL. A deleted
+        message (or a detached attachment) yields ``None``, never an exception
+        -- callers treat "image gone" as a soft, reportable condition.
+        """
+        try:
+            message = await self._rest.fetch_message(channel_id, message_id)
+        except hikari.NotFoundError:
+            return None
+        for attachment in message.attachments:
+            if int(attachment.id) == attachment_id:
+                return str(attachment.url)
+        return None
+
     async def send_dm(self, user_id: int, content: str) -> None:
         channel = await self._rest.create_dm_channel(user_id)
         await self._rest.create_message(channel.id, content)

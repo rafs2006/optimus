@@ -162,6 +162,10 @@ class DetectionService:
                         attachment_id=v.attachment_id,
                         uploader_id=v.uploader_id,
                         distances=dict(v.distances),
+                        # Persisted so the review-card buttons can blocklist or
+                        # whitelist this exact image later without re-fetching
+                        # bytes from an expired CDN URL.
+                        hashes=v.hashes.model_dump() if v.hashes is not None else None,
                         verdict=v.verdict.value,
                         idempotency_key=v.idempotency_key,
                     )
