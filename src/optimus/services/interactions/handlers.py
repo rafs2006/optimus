@@ -132,6 +132,10 @@ class ModerationRest(Protocol):
         self, channel_id: int, message_id: int, attachment_id: int
     ) -> str | None: ...
 
+    async def create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int: ...
+
 
 class InteractionDeps(Protocol):
     """Side-effecting collaborators a handler needs, all per-request scoped."""
@@ -172,6 +176,12 @@ class InteractionDeps(Protocol):
     async def rest_attachment_url(
         self, channel_id: int, message_id: int, attachment_id: int
     ) -> str | None: ...
+    async def rest_create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int | None:
+        """Create the private review channel; ``None`` when REST is unavailable/refused."""
+        ...
+
     async def disable_safe_mode(self, guild_id: int) -> None: ...
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None: ...
     async def hash_rate_ok(self, user_id: int) -> bool: ...
@@ -553,6 +563,50 @@ def _render_config_value(field: str, value: Any) -> str:
     return str(value)
 
 
+#: Name of the review channel ``/setup`` creates when none is linked yet.
+REVIEW_CHANNEL_NAME = "optimus-review"
+
+
+async def _cmd_setup(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    """Wire up the shared mod-review channel where detections await approval.
+
+    Three shapes, in priority order:
+
+    - ``channel`` option given: point reviews at that existing channel (also
+      how you re-point after a mistake) -- visibility stays whatever the mods
+      configured on it, the bot never edits someone else's channel perms.
+    - No option, nothing linked yet: create a fresh private ``#optimus-review``
+      (deny @everyone, allow the bot + the optional ``mod_role``; admins bypass
+      overwrites) and link it.
+    - No option, already linked: report the current channel instead of piling
+      up duplicate channels on every re-run.
+    """
+    assert ctx.guild_id is not None
+    channel_opt = ctx.options.get("channel")
+    if channel_opt is not None:
+        channel_id = int(channel_opt)
+        await deps.set_config_field(ctx.guild_id, "review_channel", channel_id)
+        await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(channel_id))
+        return InteractionResponse("command.setup_linked", {"channel_id": channel_id})
+    config = await deps.get_config(ctx.guild_id)
+    existing = config.get("review_channel")
+    if existing is not None:
+        return InteractionResponse("command.setup_already", {"channel_id": existing})
+    mod_role = ctx.options.get("mod_role")
+    # Network before the transaction's first write (SQLite write-lock discipline).
+    created = await deps.rest_create_review_channel(
+        ctx.guild_id,
+        name=REVIEW_CHANNEL_NAME,
+        mod_role_ids=[int(mod_role)] if mod_role is not None else [],
+    )
+    if created is None:
+        return InteractionResponse("command.setup_failed")
+    await deps.set_config_field(ctx.guild_id, "review_channel", created)
+    await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(created))
+    key = "command.setup_created" if mod_role is not None else "command.setup_created_no_role"
+    return InteractionResponse(key, {"channel_id": created})
+
+
 async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
     assert ctx.guild_id is not None
     summary = await deps.stats_summary(ctx.guild_id)
@@ -629,6 +683,7 @@ _CommandHandler = Callable[
 _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "scamhash": _cmd_scamhash,
     "config": _cmd_config,
+    "setup": _cmd_setup,
     "stats": _cmd_stats,
     "submit_global": _cmd_submit_global,
     "delete_server_data": _cmd_delete_server_data,

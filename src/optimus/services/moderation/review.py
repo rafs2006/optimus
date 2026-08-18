@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from optimus.i18n import translate
 
@@ -172,11 +172,3 @@ def build_action_rows(detection_id: int) -> list[object]:
     if buttons_in_row:
         rows.append(row)
     return rows
-
-
-class ChannelProvisioner(Protocol):
-    """REST surface needed to auto-provision a private mod-review channel."""
-
-    async def create_review_channel(
-        self, guild_id: int, *, name: str, mod_role_ids: list[int]
-    ) -> int: ...

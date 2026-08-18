@@ -361,6 +361,25 @@ class DbDeps:
             _log.warning("rest_attachment_url_failed", channel_id=channel_id, message_id=message_id)
             return None
 
+    async def rest_create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int | None:
+        """Create the private review channel; ``None`` when REST refuses.
+
+        A refusal is almost always the bot missing the Manage Channels
+        permission -- surfaced to the moderator as ``command.setup_failed``
+        rather than an unhandled interaction error.
+        """
+        if self._rest is None:
+            return None
+        try:
+            return await self._rest.create_review_channel(
+                guild_id, name=name, mod_role_ids=mod_role_ids
+            )
+        except Exception:
+            _log.warning("rest_create_review_channel_failed", guild_id=guild_id)
+            return None
+
     async def disable_safe_mode(self, guild_id: int) -> None:
         await GuildRepository(self._session).set_safe_mode(guild_id, False)
 

@@ -7,6 +7,9 @@ understand the internals, run the distributed topology, or operate at scale.
 
 ## Start here
 
+- [moderator-guide.md](moderator-guide.md) — the guide for your mod team:
+  first-time setup, the shared review channel, what every review-card button
+  actually does, and the full command/settings reference.
 - [simple-mode.md](simple-mode.md) — how the default single-process mode composes
   the whole bot with zero external services, and the one durability trade-off.
 

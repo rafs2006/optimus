@@ -76,6 +76,10 @@ class FakeDeps:
         self._attachment_url = flags.get("attachment_url", "https://cdn/att.png")
         self._rest_ban_ok = flags.get("rest_ban_ok", True)
         self._rest_unban_ok = flags.get("rest_unban_ok", True)
+        #: id the fake provisioner returns; ``None`` models a REST refusal
+        #: (bot missing Manage Channels).
+        self._created_channel_id = flags.get("created_channel_id", 555)
+        self.created_channels: list[dict[str, Any]] = []
         self.deleted_messages: list[tuple[int, int]] = []
         self.bans: list[dict[str, Any]] = []
         self.unbans: list[tuple[int, int]] = []
@@ -244,6 +248,16 @@ class FakeDeps:
         self, channel_id: int, message_id: int, attachment_id: int
     ) -> str | None:
         return self._attachment_url
+
+    async def rest_create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int | None:
+        if self._created_channel_id is None:
+            return None
+        self.created_channels.append(
+            {"guild_id": guild_id, "name": name, "mod_role_ids": mod_role_ids}
+        )
+        return self._created_channel_id
 
     async def submit_confirmed_scam(
         self,
@@ -979,6 +993,76 @@ async def test_config_set_field_name_matches_config_view_field_name() -> None:
     view_resp = await handle_command(_ctx("config", subcommand="view"), deps)
     assert "**review_channel**: `<#1402357722430570498>`" in view_resp.params["summary"]
     assert "review_channel_id" not in view_resp.params["summary"]
+
+
+# --- /setup: provision or link the shared review channel -----------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_creates_private_channel_and_links_it() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup", mod_role=777), deps)
+    assert resp.i18n_key == "command.setup_created"
+    assert resp.params == {"channel_id": 555}
+    assert deps.created_channels == [
+        {"guild_id": 1, "name": "optimus-review", "mod_role_ids": [777]}
+    ]
+    assert ("review_channel", 555) in deps.config_set
+    assert deps.audits[0][2] == "setup.review_channel"
+
+
+@pytest.mark.asyncio
+async def test_setup_without_role_creates_admin_only_channel() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup"), deps)
+    # Different reply key: it must warn that only admins + the bot can see it.
+    assert resp.i18n_key == "command.setup_created_no_role"
+    assert deps.created_channels[0]["mod_role_ids"] == []
+    assert ("review_channel", 555) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_links_existing_channel_without_creating() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup", channel=888), deps)
+    assert resp.i18n_key == "command.setup_linked"
+    assert resp.params == {"channel_id": 888}
+    assert not deps.created_channels
+    assert ("review_channel", 888) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_with_channel_option_repoints_over_existing() -> None:
+    deps = FakeDeps(config={"review_channel": 444})
+    resp = await handle_command(_ctx("setup", channel=888), deps)
+    assert resp.i18n_key == "command.setup_linked"
+    assert ("review_channel", 888) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_rerun_reports_existing_channel_instead_of_duplicating() -> None:
+    deps = FakeDeps(config={"review_channel": 444})
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == "command.setup_already"
+    assert resp.params == {"channel_id": 444}
+    assert not deps.created_channels
+    assert not deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_rest_refusal_reports_failure_without_writes() -> None:
+    deps = FakeDeps(created_channel_id=None)
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == "command.setup_failed"
+    assert not deps.config_set
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_setup_requires_manage_guild() -> None:
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("setup", perms=NONE), FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
 
 
 @pytest.mark.asyncio

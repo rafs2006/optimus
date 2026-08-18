@@ -76,6 +76,37 @@ async def test_delete_message_treats_not_found_as_success(rest: Any) -> None:
     await HikariRestActions(rest).delete_message(10, 20)
 
 
+async def test_create_review_channel_locks_down_visibility_at_creation(rest: Any) -> None:
+    rest.fetch_my_user.return_value.id = hikari.Snowflake(42)
+    rest.create_guild_text_channel.return_value.id = hikari.Snowflake(9000)
+    adapter = HikariRestActions(rest)
+    got = await adapter.create_review_channel(1, name="optimus-review", mod_role_ids=[777])
+    assert got == 9000
+    call = rest.create_guild_text_channel.await_args
+    assert call.args == (1, "optimus-review")
+    overwrites = {int(o.id): o for o in call.kwargs["permission_overwrites"]}
+    # @everyone (role id == guild id) is denied VIEW at creation time -- there
+    # is no window where the review queue is publicly visible.
+    everyone = overwrites[1]
+    assert everyone.type is hikari.PermissionOverwriteType.ROLE
+    assert everyone.deny & hikari.Permissions.VIEW_CHANNEL
+    # The bot itself and the chosen mod role can see and use the channel.
+    assert overwrites[42].allow & hikari.Permissions.VIEW_CHANNEL
+    assert overwrites[42].allow & hikari.Permissions.SEND_MESSAGES
+    mod = overwrites[777]
+    assert mod.type is hikari.PermissionOverwriteType.ROLE
+    assert mod.allow & hikari.Permissions.VIEW_CHANNEL
+
+
+async def test_create_review_channel_without_mod_role_has_no_role_grant(rest: Any) -> None:
+    rest.fetch_my_user.return_value.id = hikari.Snowflake(42)
+    rest.create_guild_text_channel.return_value.id = hikari.Snowflake(9000)
+    await HikariRestActions(rest).create_review_channel(1, name="optimus-review", mod_role_ids=[])
+    overwrites = rest.create_guild_text_channel.await_args.kwargs["permission_overwrites"]
+    # Only @everyone-deny + bot-allow: admins bypass overwrites, nobody else sees it.
+    assert [int(o.id) for o in overwrites] == [1, 42]
+
+
 async def test_non_protocol_attributes_delegate_to_hikari(rest: Any) -> None:
     adapter = HikariRestActions(rest)
     # The coordinator's target resolver and report poster share this object.
