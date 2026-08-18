@@ -121,3 +121,31 @@ def test_build_embed_renders_title_and_one_field_per_report_field() -> None:
     rendered = {(f.name, f.value) for f in embed.fields}
     assert rendered == set(expected)
     assert all(f.is_inline for f in embed.fields)
+
+
+def test_report_fields_show_reporter_for_member_reports() -> None:
+    data = ReportData(
+        detection_id=12,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=4,
+        verdict="ambiguous",
+        confidence=1.0,
+        action_taken="report_only",
+        reported_by=777,
+    )
+    fields = dict(report_fields(data))
+    assert fields["Reported by"] == "<@777>"
+    # And absent for automated detections.
+    data_auto = ReportData(
+        detection_id=13,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=4,
+        verdict="scam",
+        confidence=0.9,
+        action_taken="delete_ban",
+    )
+    assert "Reported by" not in dict(report_fields(data_auto))

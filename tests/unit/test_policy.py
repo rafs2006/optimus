@@ -95,3 +95,14 @@ def test_at_exact_queue_threshold_queues() -> None:
 def test_invalid_threshold_ordering_raises() -> None:
     with pytest.raises(ValueError, match="auto_act_threshold"):
         decide(_inp(mod_queue_threshold=0.9, auto_act_threshold=0.5))
+
+
+def test_member_report_verdict_shape_never_auto_acts() -> None:
+    """The exact verdict a "Report scam to mods" report produces (AMBIGUOUS,
+    confidence 1.0) must always land in the mod queue with no action, even on
+    a delete_ban guild -- a member report may never punish anyone by itself."""
+    out = decide(
+        _inp(verdict=Verdict.AMBIGUOUS, confidence=1.0, configured_action=Action.DELETE_BAN)
+    )
+    assert out.decision is Decision.MOD_QUEUE
+    assert out.action is Action.REPORT_ONLY

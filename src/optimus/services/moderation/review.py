@@ -69,6 +69,9 @@ class ReportData:
     matched_hash_id: str | None = None
     swarm_guilds: int | None = None
     evidence_url: str | None = None
+    #: Set when a member filed this via "Report scam to mods" -- shown on the
+    #: card so moderators know it is a human report, not an automated match.
+    reported_by: int | None = None
     locale: str = "en"
 
 
@@ -91,6 +94,8 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
     ]
     if data.matched_hash_id:
         fields.append((translate("report.field_matched_hash", loc), data.matched_hash_id))
+    if data.reported_by:
+        fields.append((translate("report.field_reported_by", loc), f"<@{data.reported_by}>"))
     if data.swarm_guilds:
         fields.append(
             (
