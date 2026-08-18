@@ -122,6 +122,23 @@ class HashSet(BaseModel):
     ahash: int = Field(ge=0, lt=1 << 64)
 
 
+class OcrFindings(BaseModel):
+    """What the OCR/QR risk scan read out of an image.
+
+    Produced by :mod:`optimus.services.detection.riskscan`; carried on
+    :class:`VerdictEvent` so the review card can show the evidence.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    risk_level: str
+    risk_score: int = Field(ge=0)
+    signals: list[str] = Field(default_factory=list)
+    #: Rendered as "seen-domain \u2192 impersonated-domain" pairs.
+    lookalike_domains: list[str] = Field(default_factory=list)
+    qr_urls: list[str] = Field(default_factory=list)
+
+
 class VerdictEvent(_Event):
     """The detection outcome for one image. Subject: ``verdict.v1``."""
 
@@ -139,6 +156,10 @@ class VerdictEvent(_Event):
     #: context-menu report (not automated detection), the reporter's user id.
     #: Surfaced on the mod-review card so moderators see who flagged it.
     reported_by: int | None = None
+    #: Set when the OCR/QR risk scan (not a hash match) drove or informed this
+    #: verdict -- surfaced on the mod-review card so moderators see *why* an
+    #: image with no matching hash was flagged.
+    ocr: OcrFindings | None = None
     distances: dict[str, int] = Field(default_factory=dict)
 
 

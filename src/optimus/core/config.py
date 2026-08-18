@@ -234,6 +234,11 @@ class Settings(BaseSettings):
     #: Max per-guild hash indexes held resident (LRU); least-recently-used are
     #: evicted and rebuilt on demand. Sized for very large fleets.
     detection_guild_index_cap: int = Field(default=1024, ge=1)
+    # OCR/QR risk scan of images the hash index has never seen. Advisory only:
+    # high/critical findings become AMBIGUOUS verdicts (mod queue, no action).
+    # Costs up to ~3s of CPU per unmatched image (bounded in ocr_extract), so
+    # very large deployments can turn it off and rely on hashes alone.
+    detection_ocr_risk_scan: bool = True
 
     # Bus back-pressure / redelivery
     #: Max messages a single detection replica processes concurrently. Also set

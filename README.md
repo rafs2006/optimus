@@ -109,6 +109,16 @@ sensitivity preset is what gives the zero-false-positive bias. Detection quality
 is measured against a fixture corpus — see
 [docs/detection-eval.md](docs/detection-eval.md).
 
+Hashes only catch images that have been seen before, so images with **no hash
+match** get a second look: an **OCR + QR risk scan** reads the text out of the
+image (Tesseract), decodes QR codes (decode only — payloads are never fetched),
+repairs defanged URLs (`hxxps://`, `perplexity[.]com`), flags lookalikes of
+official AI-company domains, and scores phishing signals (credential harvesting,
+wallet connect prompts, crypto addresses, urgency language). High/critical
+findings go to the **mod queue as ambiguous** with the evidence on the review
+card — this lane never deletes, bans, or stores a hash on its own. Disable with
+`OPTIMUS_DETECTION_OCR_RISK_SCAN=false` if you'd rather run hashes alone.
+
 ## More
 
 **You don't need any of this to run the bot.** These cover the internals and

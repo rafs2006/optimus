@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from prometheus_client import Counter
 
-from optimus.contracts.events import Action, VerdictEvent
+from optimus.contracts.events import Action, OcrFindings, VerdictEvent
 from optimus.core.logging import get_logger
 from optimus.services.moderation.actions import ActionExecutor, ActionRequest, ActionResult
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
@@ -26,6 +26,29 @@ from optimus.services.moderation.priority import (
 from optimus.services.moderation.review import ReportData
 
 _log = get_logger(__name__)
+
+#: Discord embed field values cap at 1024 chars; leave headroom for the
+#: ellipsis marker when a hostile image OCRs into a wall of text.
+_OCR_SUMMARY_MAX = 1000
+
+
+def _ocr_summary(ocr: OcrFindings | None) -> str | None:
+    """Render OCR/QR risk findings into one review-card field value."""
+    if ocr is None:
+        return None
+    parts = [f"{ocr.risk_level} (score {ocr.risk_score})"]
+    if ocr.signals:
+        parts.append("signals: " + ", ".join(ocr.signals))
+    if ocr.lookalike_domains:
+        parts.append("lookalike: " + ", ".join(ocr.lookalike_domains))
+    if ocr.qr_urls:
+        # Wrap in backticks so Discord never auto-links a scam URL on the card.
+        parts.append("QR: " + ", ".join(f"`{url}`" for url in ocr.qr_urls))
+    summary = " | ".join(parts)
+    if len(summary) > _OCR_SUMMARY_MAX:
+        summary = summary[:_OCR_SUMMARY_MAX] + "…"
+    return summary
+
 
 ACTIONS_TAKEN = Counter(
     "optimus_moderation_actions_total",
@@ -219,6 +242,7 @@ class ModerationCoordinator:
                     action_taken=action_taken,
                     matched_hash_id=event.matched_hash_id,
                     reported_by=event.reported_by,
+                    ocr_summary=_ocr_summary(event.ocr),
                     locale=cfg.locale,
                 ),
             )
