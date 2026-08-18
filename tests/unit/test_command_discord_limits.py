@@ -79,7 +79,7 @@ def test_subcommand_name_and_description_within_discord_limits(command: Command)
     ids=lambda c: c.name,
 )
 def test_option_name_and_description_within_discord_limits(command: Command) -> None:
-    # Top-level options (e.g. /submit_global hash_id:<...>).
+    # Top-level options (e.g. /setup channel:<...>).
     for opt in command.options:
         _assert_valid_slash_name(opt.name)
         _assert_valid_description(opt.description, context=f"/{command.name} {opt.name}")

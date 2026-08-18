@@ -85,10 +85,31 @@ def test_config_field_choices_match_the_validator() -> None:
         validate_config_set("not_a_field", "x")
 
 
-def test_builder_carries_required_flag_on_top_level_options() -> None:
-    submit = next(b for b in build_command_builders() if b.name == "submit_global")
-    hash_opt = next(o for o in submit.options if o.name == "hash_id")
-    assert hash_opt.is_required is True
+def test_builder_carries_required_flag_on_options() -> None:
+    # Top-level optional options stay optional (/setup mod_role/channel)...
+    setup = next(b for b in build_command_builders() if b.name == "setup")
+    assert setup.options and all(o.is_required is False for o in setup.options)
+    # ...and required options nested under subcommands stay required.
+    global_cmd = next(b for b in build_command_builders() if b.name == "global")
+    approve = next(o for o in global_cmd.options if o.name == "approve_server")
+    assert approve.options is not None
+    server_opt = next(o for o in approve.options if o.name == "server_id")
+    assert server_opt.is_required is True
+
+
+def test_submit_global_removed_and_global_help_present() -> None:
+    names = {c.name for c in COMMANDS}
+    assert "submit_global" not in names
+    assert {"global", "help"} <= names
+    help_cmd = next(c for c in COMMANDS if c.name == "help")
+    assert help_cmd.guild_only is False
+    assert help_cmd.required_permission is None
+    global_cmd = next(c for c in COMMANDS if c.name == "global")
+    assert {s.name for s in global_cmd.subcommands} == {
+        "approve_server",
+        "revoke_server",
+        "servers",
+    }
 
 
 def test_required_permission_lookup() -> None:

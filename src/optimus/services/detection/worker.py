@@ -74,6 +74,9 @@ GuildIndexFn = Callable[[int], Awaitable[HashIndex]]
 GlobalIndexFn = Callable[[], Awaitable[HashIndex]]
 WhitelistFn = Callable[[int], Awaitable[list[WhitelistEntry]]]
 SensitivityFn = Callable[[int], Awaitable[Sensitivity]]
+#: Per-guild ``optin_global_db`` lookup: only opted-in guilds are matched
+#: against the shared global hash set.
+GlobalOptinFn = Callable[[int], Awaitable[bool]]
 IdempotencyAcquire = Callable[[str], Awaitable[bool]]
 
 
@@ -93,12 +96,16 @@ class DetectionWorker:
         whitelist: WhitelistFn,
         sensitivity: SensitivityFn,
         idempotency_acquire: IdempotencyAcquire,
+        global_optin: GlobalOptinFn | None = None,
         swarm: SwarmCorrelator | None = None,
         limits: DecodeLimits | None = None,
         risk_scan: Callable[[bytes], OcrFindings | None] | None = None,
     ) -> None:
         self._guild_index = guild_index
         self._global_index = global_index
+        # None (e.g. legacy wiring in tests) preserves the old always-on
+        # behavior; production wiring always passes the per-guild lookup.
+        self._global_optin = global_optin
         self._whitelist = whitelist
         self._sensitivity = sensitivity
         self._acquire = idempotency_acquire
@@ -130,7 +137,11 @@ class DetectionWorker:
             return DetectionResult(verdict=self._verdict(event, _non_decision()))
 
         guild_idx = await self._guild_index(event.guild_id)
-        global_idx = await self._global_index()
+        # optin_global_db is enforced *here*, at match time: a guild that has
+        # not opted in is never compared against hashes other communities
+        # promoted — consuming the shared set is symmetric with contributing.
+        use_global = self._global_optin is None or await self._global_optin(event.guild_id)
+        global_idx = await self._global_index() if use_global else HashIndex([])
         whitelist = await self._whitelist(event.guild_id)
         sensitivity = await self._sensitivity(event.guild_id)
 
@@ -181,6 +192,7 @@ class DetectionWorker:
                     verdict=new_verdict,
                     confidence=new_conf,
                     matched_hash_id=outcome.matched_hash_id,
+                    matched_source=outcome.matched_source,
                     campaign_id=outcome.campaign_id,
                     distances=outcome.distances,
                 )
@@ -274,6 +286,7 @@ class DetectionWorker:
             confidence=outcome.confidence,
             hashes=hash_set,
             matched_hash_id=outcome.matched_hash_id,
+            matched_source=outcome.matched_source,
             ocr=ocr,
             distances=outcome.distances,
         )

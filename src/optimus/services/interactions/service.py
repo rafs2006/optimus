@@ -37,6 +37,7 @@ from optimus.db.repositories import (
     DetectionRepository,
     GlobalHashRepository,
     GlobalSubmitterRepository,
+    GlobalTrustedGuildRepository,
     GuildHashRepository,
     GuildPurgeRepository,
     GuildRepository,
@@ -44,7 +45,7 @@ from optimus.db.repositories import (
     UserOptoutRepository,
     WhitelistRepository,
 )
-from optimus.globaldb.service import GlobalHashService
+from optimus.globaldb.service import GlobalHashService, SubmissionDenied
 from optimus.i18n import translate
 from optimus.ingest.fetcher import FetchedImage, fetch_image
 from optimus.services.interactions.attachment_hash import (
@@ -114,7 +115,6 @@ _ERROR_KEYS: dict[CommandError, str] = {
     CommandError.IMPORT_TOO_LARGE: "command.import_too_large",
     CommandError.UNKNOWN_FIELD: "command.config_unknown_field",
     CommandError.INVALID_VALUE: "command.config_invalid_value",
-    CommandError.BELOW_THRESHOLD: "command.submit_global_below_threshold",
     CommandError.MESSAGE_NOT_FOUND: "command.reviewmsg_not_found",
     CommandError.FETCH_FAILED: "command.reviewmsg_fetch_failed",
 }
@@ -413,6 +413,73 @@ class DbDeps:
             signing_public_key_b64=self._settings.global_signing_public_key,
         )
 
+    async def is_trusted_guild(self, guild_id: int) -> bool:
+        return await GlobalTrustedGuildRepository(self._session).contains(guild_id)
+
+    async def trust_guild(self, guild_id: int, *, added_by: int) -> bool:
+        return await GlobalTrustedGuildRepository(self._session).add(guild_id, added_by=added_by)
+
+    async def untrust_guild(self, guild_id: int) -> bool:
+        return await GlobalTrustedGuildRepository(self._session).remove(guild_id)
+
+    async def list_trusted_guilds(self) -> list[int]:
+        rows = await GlobalTrustedGuildRepository(self._session).list_all()
+        return [row.guild_id for row in rows]
+
+    async def global_vote(
+        self,
+        *,
+        hash_id: str,
+        phash: int,
+        dhash: int,
+        whash: int,
+        voter_user_id: int,
+        voter_guild_id: int,
+    ) -> str | None:
+        service = self.global_service()
+        row = await GlobalHashRepository(self._session).get(hash_id)
+        if row is None:
+            # First vote anywhere: create the candidate, then approve it.
+            try:
+                await service.submit(
+                    hash_id=hash_id,
+                    phash=phash,
+                    dhash=dhash,
+                    whash=whash,
+                    submitter_user_id=voter_user_id,
+                    submitter_guild_id=voter_guild_id,
+                )
+            except SubmissionDenied as denied:
+                # Rate limit / reputation gate. The local confirm already
+                # happened; the global vote just doesn't count this time.
+                _log.info("global_vote_denied", hash_id=hash_id, reason=denied.reason)
+                return None
+        elif row.status == "revoked":
+            # A disputed hash stays dead — votes must not silently resurrect
+            # something a community already proved was a false positive.
+            return None
+        result = await service.approve(
+            hash_id=hash_id, approver_user_id=voter_user_id, approver_guild_id=voter_guild_id
+        )
+        return "promoted" if result.promoted else "candidate"
+
+    async def global_dispute(self, hash_id: str) -> bool:
+        row = await GlobalHashRepository(self._session).get(hash_id)
+        if row is None or row.status == "revoked":
+            return False
+        await self.global_service().revoke(hash_id)
+        return True
+
+    async def rest_owner_ids(self) -> set[int]:
+        if self._rest is None:
+            return set()
+        try:
+            return await self._rest.fetch_owner_ids()
+        except Exception:
+            # Fail closed: no owner ids means owner-only commands refuse.
+            _log.warning("rest_owner_ids_failed")
+            return set()
+
     async def compute_attachment_hashes(self, *, attachment_id: int, url: str) -> AttachmentHashes:
         # No DB access here on purpose -- see the docstring on the protocol
         # method in handlers.InteractionDeps for why this must stay decoupled
@@ -469,6 +536,7 @@ class DbDeps:
             verdict=Verdict.SCAM,
             confidence=1.0,
             matched_hash_id=matched_hash_id,
+            matched_source="guild",
         )
         # Persist through THIS request's session -- the transaction already
         # holds SQLite's write lock (store_attachment_hash flushed an INSERT

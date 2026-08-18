@@ -152,6 +152,9 @@ class VerdictEvent(_Event):
     confidence: float = Field(ge=0.0, le=1.0)
     hashes: HashSet | None = None
     matched_hash_id: str | None = None
+    #: Which index the match came from: ``"guild"`` or ``"global"``. Global
+    #: matches are review-only — the policy engine never auto-acts on them.
+    matched_source: str | None = None
     #: When the verdict originates from a member's "Report scam to mods"
     #: context-menu report (not automated detection), the reporter's user id.
     #: Surfaced on the mod-review card so moderators see who flagged it.

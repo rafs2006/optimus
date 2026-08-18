@@ -74,7 +74,6 @@ class CommandError(StrEnum):
     IMPORT_TOO_LARGE = "import_too_large"
     UNKNOWN_FIELD = "config_unknown_field"
     INVALID_VALUE = "config_invalid_value"
-    BELOW_THRESHOLD = "submit_global_below_threshold"
     MESSAGE_NOT_FOUND = "reviewmsg_not_found"
     FETCH_FAILED = "reviewmsg_fetch_failed"
 

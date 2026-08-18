@@ -106,3 +106,17 @@ def test_member_report_verdict_shape_never_auto_acts() -> None:
     )
     assert out.decision is Decision.MOD_QUEUE
     assert out.action is Action.REPORT_ONLY
+
+
+def test_global_match_never_auto_acts() -> None:
+    """Zero trust: a global-DB match at max confidence on a delete_ban guild
+    still only produces a review card -- other communities' moderators can
+    never delete or ban here."""
+    out = decide(_inp(confidence=1.0, configured_action=Action.DELETE_BAN, global_match=True))
+    assert out == PolicyOutcome(Decision.MOD_QUEUE, Action.REPORT_ONLY, "global_match_review_only")
+
+
+def test_global_match_below_queue_threshold_stays_silent() -> None:
+    out = decide(_inp(confidence=0.4, global_match=True))
+    assert out.decision is Decision.NONE
+    assert out.action is Action.NONE

@@ -6,6 +6,7 @@ import pytest
 
 from optimus.services.moderation import review as review_mod
 from optimus.services.moderation.review import (
+    BUTTON_LABELS,
     REVIEW_BUTTONS,
     ReportData,
     ReviewAction,
@@ -35,8 +36,11 @@ def test_decode_rejects_foreign_custom_id() -> None:
     assert decode_custom_id("om:v1:confirm_scam:notint") is None
 
 
-def test_all_buttons_are_offered() -> None:
-    assert set(REVIEW_BUTTONS) == set(ReviewAction)
+def test_all_buttons_are_offered_except_legacy_submit_global() -> None:
+    # SUBMIT_GLOBAL stays in the enum so clicks on old cards still decode,
+    # but new cards no longer offer it: Confirm scam casts the global vote.
+    assert set(REVIEW_BUTTONS) == set(ReviewAction) - {ReviewAction.SUBMIT_GLOBAL}
+    assert ReviewAction.SUBMIT_GLOBAL in BUTTON_LABELS
 
 
 def test_build_action_rows_default_layout() -> None:
@@ -149,3 +153,31 @@ def test_report_fields_show_reporter_for_member_reports() -> None:
         action_taken="delete_ban",
     )
     assert "Reported by" not in dict(report_fields(data_auto))
+
+
+def test_report_fields_flag_global_matches() -> None:
+    data = ReportData(
+        detection_id=9,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=4,
+        verdict="scam",
+        confidence=0.95,
+        action_taken="report_only",
+        global_match=True,
+    )
+    fields = dict(report_fields(data))
+    assert "never auto-acted" in fields["Source"]
+
+    data_local = ReportData(
+        detection_id=9,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=4,
+        verdict="scam",
+        confidence=0.95,
+        action_taken="delete_ban",
+    )
+    assert "Source" not in dict(report_fields(data_local))

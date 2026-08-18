@@ -67,6 +67,10 @@ class ReportData:
     confidence: float
     action_taken: str
     matched_hash_id: str | None = None
+    #: True when the match came from the shared global scam set (other
+    #: communities' confirmations). Rendered as an explicit call-to-action:
+    #: the bot never auto-acts on these — a local Confirm is required.
+    global_match: bool = False
     swarm_guilds: int | None = None
     evidence_url: str | None = None
     #: Set when a member filed this via "Report scam to mods" -- shown on the
@@ -97,6 +101,10 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
     ]
     if data.matched_hash_id:
         fields.append((translate("report.field_matched_hash", loc), data.matched_hash_id))
+    if data.global_match:
+        fields.append(
+            (translate("report.field_global", loc), translate("report.field_global_value", loc))
+        )
     if data.reported_by:
         fields.append((translate("report.field_reported_by", loc), f"<@{data.reported_by}>"))
     if data.ocr_summary:
@@ -113,14 +121,16 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
     return fields
 
 
-#: The buttons shown on a report, in display order.
+#: The buttons shown on a report, in display order. ``SUBMIT_GLOBAL`` is
+#: deliberately absent: global contribution is automatic — a Confirm on an
+#: approved, opted-in server *is* the global vote. The action enum member is
+#: kept so clicks on old cards still parse (and get a friendly explanation).
 REVIEW_BUTTONS: tuple[ReviewAction, ...] = (
     ReviewAction.CONFIRM_SCAM,
     ReviewAction.FALSE_POSITIVE,
     ReviewAction.BAN_UPLOADER,
     ReviewAction.UNBAN,
     ReviewAction.WHITELIST_IMAGE,
-    ReviewAction.SUBMIT_GLOBAL,
 )
 
 BUTTON_LABELS: dict[ReviewAction, str] = {

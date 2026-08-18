@@ -132,6 +132,25 @@ class HikariRestActions:
         )
         return int(channel.id)
 
+    async def fetch_owner_ids(self) -> set[int]:
+        """User ids that own this application (single owner or team members).
+
+        Gates the owner-only ``/global`` command. Cached after the first
+        fetch — ownership changes require re-inviting the bot anyway, and the
+        gate must not cost a REST round-trip per command.
+        """
+        cached: set[int] | None = self.__dict__.get("_owner_ids")
+        if cached is not None:
+            return cached
+        app = await self._rest.fetch_application()
+        ids: set[int] = set()
+        if app.owner is not None:
+            ids.add(int(app.owner.id))
+        if app.team is not None:
+            ids.update(int(member_id) for member_id in app.team.members)
+        self.__dict__["_owner_ids"] = ids
+        return ids
+
     async def send_dm(self, user_id: int, content: str) -> None:
         channel = await self._rest.create_dm_channel(user_id)
         await self._rest.create_message(channel.id, content)

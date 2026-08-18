@@ -23,6 +23,7 @@ from optimus.db.models import (
     GlobalHash,
     GlobalHashApproval,
     GlobalSubmitter,
+    GlobalTrustedGuild,
     Guild,
     GuildChannelIgnored,
     GuildHash,
@@ -158,6 +159,39 @@ class WhitelistRepository:
     async def list(self) -> Sequence[GuildWhitelist]:
         """Return all whitelist entries for this guild."""
         stmt = select(GuildWhitelist).where(GuildWhitelist.guild_id == self._guild_id)
+        return (await self._session.execute(stmt)).scalars().all()
+
+
+class GlobalTrustedGuildRepository:
+    """The owner-managed allowlist of servers whose confirmations count globally."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def contains(self, guild_id: int) -> bool:
+        """Whether ``guild_id`` is approved to contribute promotion votes."""
+        return await self._session.get(GlobalTrustedGuild, guild_id) is not None
+
+    async def add(self, guild_id: int, *, added_by: int) -> bool:
+        """Approve a server; returns ``False`` if it was already approved."""
+        if await self._session.get(GlobalTrustedGuild, guild_id) is not None:
+            return False
+        self._session.add(GlobalTrustedGuild(guild_id=guild_id, added_by=added_by))
+        await self._session.flush()
+        return True
+
+    async def remove(self, guild_id: int) -> bool:
+        """Revoke a server's contribution approval; ``False`` if absent."""
+        row = await self._session.get(GlobalTrustedGuild, guild_id)
+        if row is None:
+            return False
+        await self._session.delete(row)
+        await self._session.flush()
+        return True
+
+    async def list_all(self) -> Sequence[GlobalTrustedGuild]:
+        """All approved servers, oldest first."""
+        stmt = select(GlobalTrustedGuild).order_by(GlobalTrustedGuild.created_at)
         return (await self._session.execute(stmt)).scalars().all()
 
 

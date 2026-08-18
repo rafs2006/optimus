@@ -44,6 +44,11 @@ class PolicyInput:
     auto_act_threshold: float
     #: When true the guild only ever reports; never auto-acts (safe mode).
     safe_mode: bool = False
+    #: True when the match came from the shared *global* hash set rather than
+    #: this guild's own blocklist. Global entries are contributed by other
+    #: communities, so they are never trusted to auto-act — they only surface
+    #: a review card; a local moderator's Confirm makes them enforceable.
+    global_match: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +74,13 @@ def decide(inp: PolicyInput) -> PolicyOutcome:
 
     if inp.confidence < inp.mod_queue_threshold:
         return PolicyOutcome(Decision.NONE, Action.NONE, "below_queue_threshold")
+
+    # Zero trust across communities: a hash promoted by *other* servers'
+    # moderators is enough to ask this server's moderators, never enough to
+    # delete or ban here. This single rule is what makes a poisoned global
+    # entry worthless — its maximum blast radius is one spurious review card.
+    if inp.global_match:
+        return PolicyOutcome(Decision.MOD_QUEUE, Action.REPORT_ONLY, "global_match_review_only")
 
     # At/above the queue bar. Decide whether it also clears the auto-act bar.
     auto = inp.confidence >= inp.auto_act_threshold and inp.verdict is Verdict.SCAM

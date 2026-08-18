@@ -188,6 +188,23 @@ class GlobalHash(Base):
     created_at: Mapped[datetime] = _ts()
 
 
+class GlobalTrustedGuild(Base):
+    """A server approved (by the bot owner) to contribute global confirmations.
+
+    The contribution allowlist is the Sybil defense for the shared hash set:
+    only Confirm-scam clicks from guilds on this list count as promotion
+    votes. Any guild may *consume* promoted hashes (opt-in); only approved
+    guilds may push toward promotion. Managed via the owner-only ``/global``
+    command.
+    """
+
+    __tablename__ = "global_trusted_guilds"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    added_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = _ts()
+
+
 class GlobalSubmitter(Base):
     """A user's reputation as a contributor to the global hash database."""
 

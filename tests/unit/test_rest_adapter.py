@@ -114,3 +114,23 @@ async def test_non_protocol_attributes_delegate_to_hikari(rest: Any) -> None:
     assert adapter.fetch_guild is rest.fetch_guild
     assert adapter.fetch_roles is rest.fetch_roles
     assert adapter.create_message is rest.create_message
+
+
+async def test_fetch_owner_ids_single_owner_and_team(rest: Any) -> None:
+    app = create_autospec(hikari.Application, instance=True)
+    app.owner.id = 111
+    app.team.members = {222: object(), 333: object()}
+    rest.fetch_application.return_value = app
+    ids = await HikariRestActions(rest).fetch_owner_ids()
+    assert ids == {111, 222, 333}
+
+
+async def test_fetch_owner_ids_caches_after_first_fetch(rest: Any) -> None:
+    app = create_autospec(hikari.Application, instance=True)
+    app.owner.id = 111
+    app.team = None
+    rest.fetch_application.return_value = app
+    adapter = HikariRestActions(rest)
+    assert await adapter.fetch_owner_ids() == {111}
+    assert await adapter.fetch_owner_ids() == {111}
+    rest.fetch_application.assert_awaited_once()

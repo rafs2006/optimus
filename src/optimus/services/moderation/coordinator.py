@@ -129,6 +129,7 @@ class ModerationCoordinator:
                 mod_queue_threshold=cfg.mod_queue_threshold,
                 auto_act_threshold=cfg.auto_act_threshold,
                 safe_mode=cfg.safe_mode,
+                global_match=event.matched_source == "global",
             )
         )
         DECISIONS.labels(decision=outcome.decision.value).inc()
@@ -241,6 +242,7 @@ class ModerationCoordinator:
                     confidence=event.confidence,
                     action_taken=action_taken,
                     matched_hash_id=event.matched_hash_id,
+                    global_match=event.matched_source == "global",
                     reported_by=event.reported_by,
                     ocr_summary=_ocr_summary(event.ocr),
                     locale=cfg.locale,

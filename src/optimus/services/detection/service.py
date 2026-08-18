@@ -234,6 +234,13 @@ def build_service(
                 return settings.sensitivity_default
             return Sensitivity(guild.sensitivity)
 
+    async def global_optin(guild_id: int) -> bool:
+        # Default False: an unconfigured guild is never matched against the
+        # shared global set — consuming it is strictly opt-in.
+        async with scope() as session:
+            guild = await GuildRepository(session).get(guild_id)
+            return bool(guild is not None and guild.optin_global_db)
+
     limits = DecodeLimits(
         cpu_seconds=settings.decode_cpu_seconds,
         mem_bytes=settings.decode_mem_bytes,
@@ -256,6 +263,7 @@ def build_service(
         whitelist=whitelist,
         sensitivity=sensitivity,
         idempotency_acquire=guard.acquire,
+        global_optin=global_optin,
         swarm=swarm,
         limits=limits,
         risk_scan=risk_scan,

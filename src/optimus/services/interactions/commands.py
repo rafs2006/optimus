@@ -188,17 +188,47 @@ COMMANDS: tuple[Command, ...] = (
         required_permission=Permission.MANAGE_GUILD,
     ),
     Command(
-        name="submit_global",
-        description="Propose one of this server's hashes for the shared global list.",
+        name="global",
+        # Owner-only at the handler (there is no Discord-side "app owner"
+        # permission); MANAGE_GUILD here only hides it from ordinary members.
+        description="Bot owner: manage which servers may contribute to the global scam list.",
         required_permission=Permission.MANAGE_GUILD,
-        options=(
-            Option(
-                "hash_id",
-                "A hash id from /scamhash list to submit for cross-server review.",
-                OPT_STRING,
-                required=True,
+        subcommands=(
+            SubCommand(
+                name="approve_server",
+                description="Approve a server: its mods' scam confirmations count globally.",
+                options=(
+                    Option(
+                        "server_id",
+                        "The server (guild) ID to approve for global contribution.",
+                        OPT_STRING,
+                        required=True,
+                    ),
+                ),
+            ),
+            SubCommand(
+                name="revoke_server",
+                description="Remove a server from the approved contributors list.",
+                options=(
+                    Option(
+                        "server_id",
+                        "The server (guild) ID to remove.",
+                        OPT_STRING,
+                        required=True,
+                    ),
+                ),
+            ),
+            SubCommand(
+                name="servers",
+                description="List the servers approved to contribute global confirmations.",
             ),
         ),
+    ),
+    Command(
+        name="help",
+        description="What each command does and how the review workflow works.",
+        required_permission=None,
+        guild_only=False,
     ),
     Command(
         name="delete_server_data",

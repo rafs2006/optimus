@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from optimus.db.models import GuildHash, GuildWhitelist
-from optimus.globaldb.service import GlobalHashService, SubmissionDenied
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
@@ -55,8 +54,17 @@ class FakeDeps:
         self._recent_detection = flags.get("recent_detection", 555)
         self._owned_detections: set[int] = set(flags.get("owned_detections", {77}))
         self._next_appeal_id = 1
-        self._global_service = _FakeGlobalService(flags.get("submit_error"))
-        self.global_submitted: list[str] = []
+        # -- global trust lane -------------------------------------------------
+        #: guild ids approved (allowlisted) for global contribution.
+        self.trusted_guilds: set[int] = set(flags.get("trusted_guilds", set()))
+        #: application owner ids returned by rest_owner_ids.
+        self.owner_ids: set[int] = set(flags.get("owner_ids", {1000}))
+        #: what global_vote returns: "candidate", "promoted", or None (refused).
+        self._vote_result = flags.get("vote_result", "candidate")
+        #: hash_ids with a live global entry — global_dispute returns True.
+        self._global_hashes: set[str] = set(flags.get("global_hashes", set()))
+        self.global_votes: list[dict[str, Any]] = []
+        self.global_disputes: list[str] = []
         #: attachment_id -> exception to raise, or a hash_id string to return.
         self._attachment_outcomes: dict[int, Any] = flags.get("attachment_outcomes", {})
         self.confirmed_scams: list[dict[str, Any]] = []
@@ -159,8 +167,52 @@ class FakeDeps:
     ) -> None:
         self.audits.append((guild_id, actor_id, action, target))
 
-    def global_service(self) -> GlobalHashService:
-        return self._global_service  # type: ignore[return-value]
+    async def is_trusted_guild(self, guild_id: int) -> bool:
+        return guild_id in self.trusted_guilds
+
+    async def trust_guild(self, guild_id: int, *, added_by: int) -> bool:
+        if guild_id in self.trusted_guilds:
+            return False
+        self.trusted_guilds.add(guild_id)
+        return True
+
+    async def untrust_guild(self, guild_id: int) -> bool:
+        if guild_id not in self.trusted_guilds:
+            return False
+        self.trusted_guilds.discard(guild_id)
+        return True
+
+    async def list_trusted_guilds(self) -> list[int]:
+        return sorted(self.trusted_guilds)
+
+    async def global_vote(
+        self,
+        *,
+        hash_id: str,
+        phash: int,
+        dhash: int,
+        whash: int,
+        voter_user_id: int,
+        voter_guild_id: int,
+    ) -> str | None:
+        self.global_votes.append(
+            {
+                "hash_id": hash_id,
+                "phash": phash,
+                "dhash": dhash,
+                "whash": whash,
+                "voter_user_id": voter_user_id,
+                "voter_guild_id": voter_guild_id,
+            }
+        )
+        return self._vote_result
+
+    async def global_dispute(self, hash_id: str) -> bool:
+        self.global_disputes.append(hash_id)
+        return hash_id in self._global_hashes
+
+    async def rest_owner_ids(self) -> set[int]:
+        return set(self.owner_ids)
 
     async def compute_attachment_hashes(self, *, attachment_id: int, url: str) -> AttachmentHashes:
         outcome = self._attachment_outcomes.get(attachment_id, f"{attachment_id:016x}")
@@ -300,19 +352,6 @@ class FakeDeps:
                 "reporter_id": reporter_id,
             }
         )
-
-
-class _FakeGlobalService:
-    """Minimal stand-in for :class:`GlobalHashService` used by submit_global."""
-
-    def __init__(self, error: str | None) -> None:
-        self._error = error
-        self.submitted: list[str] = []
-
-    async def submit(self, *, hash_id: str, **_: Any) -> None:
-        if self._error is not None:
-            raise SubmissionDenied(self._error)
-        self.submitted.append(hash_id)
 
 
 def _ctx(command: str, *, perms: int = MANAGE, guild_id: int | None = 1, **opts: Any) -> Any:
@@ -635,37 +674,95 @@ async def test_whitelist_image_gone_reports_no_image() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_global_button_requires_confirmed_local_hash() -> None:
-    """Without a blocklisted local hash the button points at Confirm scam."""
-    deps = FakeDeps()  # detection has hashes, but nothing in the local blocklist
-    parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
-    assert resp.i18n_key == "button.confirm_first"
-    assert not deps._global_service.submitted
-
-
-@pytest.mark.asyncio
-async def test_submit_global_button_submits_confirmed_hash() -> None:
+async def test_legacy_submit_global_button_explains_removal() -> None:
+    """Clicks on cards rendered before the redesign get a self-explaining reply."""
     deps = FakeDeps()
-    # Simulate a prior Confirm scam press having blocklisted the image.
-    confirm = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    await handle_review_button(_ctx("", perms=MANAGE), confirm, deps)
     parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
     resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
-    assert resp.i18n_key == "button.submitted_global"
-    assert deps._global_service.submitted == [f"{0xABC:016x}"]
-    assert deps.audits[-1][2] == "review.submit_global"
+    assert resp.i18n_key == "button.submit_global_removed"
+    assert not deps.global_votes
+
+
+# --- Confirm scam as the global vote --------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_submit_global_button_rate_limited_rejected() -> None:
-    deps = FakeDeps(submit_error="rate_limited")
-    confirm = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    await handle_review_button(_ctx("", perms=MANAGE), confirm, deps)
-    parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
-    with pytest.raises(InteractionRejected) as exc:
-        await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
-    assert exc.value.reason is CommandError.RATE_LIMITED
+async def test_confirm_votes_globally_on_trusted_opted_in_server() -> None:
+    deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True})
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam_voted"
+    assert deps.global_votes == [
+        {
+            "hash_id": f"{0xABC:016x}",
+            "phash": 0xABC,
+            "dhash": 2,
+            "whash": 3,
+            "voter_user_id": 99,
+            "voter_guild_id": 1,
+        }
+    ]
+    assert (1, 99, "global.vote", f"{0xABC:016x}") in deps.audits
+    # The local confirm still happened: blocklist + audit + deleted message.
+    assert (1, 99, "review.confirm_scam", "5") in deps.audits
+    assert f"{0xABC:016x}" in deps.hashes
+
+
+@pytest.mark.asyncio
+async def test_confirm_reports_promotion_when_second_server_agrees() -> None:
+    deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True}, vote_result="promoted")
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam_promoted"
+
+
+@pytest.mark.asyncio
+async def test_confirm_stays_local_on_untrusted_server() -> None:
+    """Opted-in but NOT allowlisted: the anti-poisoning gate."""
+    deps = FakeDeps(config={"optin_global_db": True})
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam"
+    assert not deps.global_votes
+
+
+@pytest.mark.asyncio
+async def test_confirm_stays_local_when_not_opted_in() -> None:
+    deps = FakeDeps(trusted_guilds={1})  # allowlisted but optin_global_db is off
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam"
+    assert not deps.global_votes
+
+
+@pytest.mark.asyncio
+async def test_confirm_vote_refusal_keeps_local_confirm() -> None:
+    """A refused vote (rate limit / revoked hash) must not fail the confirm."""
+    deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True}, vote_result=None)
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam"
+    assert deps.global_votes  # attempted
+    assert not any(a[2] == "global.vote" for a in deps.audits)  # but not recorded
+
+
+@pytest.mark.asyncio
+async def test_false_positive_revokes_global_entry() -> None:
+    deps = FakeDeps(global_hashes={f"{0xABC:016x}"})
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.marked_false_positive_global_revoked"
+    assert deps.global_disputes == [f"{0xABC:016x}"]
+    assert (1, 99, "global.dispute", f"{0xABC:016x}") in deps.audits
+
+
+@pytest.mark.asyncio
+async def test_false_positive_without_global_entry_stays_local() -> None:
+    deps = FakeDeps()  # no global entry for this hash
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.marked_false_positive"
+    assert not any(a[2] == "global.dispute" for a in deps.audits)
 
 
 # --- appeal lifecycle ----------------------------------------------------------
@@ -1094,48 +1191,75 @@ async def test_stats_zero_detections_still_shows_persistence_canary() -> None:
     assert resp.params["boots"] == 2
 
 
-# --- submit_global -------------------------------------------------------------
+# --- /global (owner-only allowlist) and /help ----------------------------------
 
 
 @pytest.mark.asyncio
-async def test_submit_global_ok() -> None:
+async def test_global_refuses_non_owner() -> None:
+    deps = FakeDeps(owner_ids={1000})  # ctx.user_id is 99
+    resp = await handle_command(_ctx("global", subcommand="servers"), deps)
+    assert resp.i18n_key == "command.owner_only"
+
+
+@pytest.mark.asyncio
+async def test_global_fails_closed_when_owner_lookup_fails() -> None:
+    """An empty owner set (REST error) must refuse — never grant trust blindly."""
+    deps = FakeDeps(owner_ids=set())
+    resp = await handle_command(_ctx("global", subcommand="approve_server", server_id="2"), deps)
+    assert resp.i18n_key == "command.owner_only"
+    assert not deps.trusted_guilds
+
+
+@pytest.mark.asyncio
+async def test_global_approve_and_revoke_server() -> None:
+    deps = FakeDeps(owner_ids={99})
+    resp = await handle_command(_ctx("global", subcommand="approve_server", server_id="123"), deps)
+    assert resp.i18n_key == "command.global_server_approved"
+    assert deps.trusted_guilds == {123}
+    assert (1, 99, "global.approve_server", "123") in deps.audits
+
+    resp = await handle_command(_ctx("global", subcommand="approve_server", server_id="123"), deps)
+    assert resp.i18n_key == "command.global_server_already"
+
+    resp = await handle_command(_ctx("global", subcommand="revoke_server", server_id="123"), deps)
+    assert resp.i18n_key == "command.global_server_revoked"
+    assert not deps.trusted_guilds
+    assert (1, 99, "global.revoke_server", "123") in deps.audits
+
+    resp = await handle_command(_ctx("global", subcommand="revoke_server", server_id="123"), deps)
+    assert resp.i18n_key == "command.global_server_missing"
+
+
+@pytest.mark.asyncio
+async def test_global_servers_listing() -> None:
+    deps = FakeDeps(owner_ids={99})
+    resp = await handle_command(_ctx("global", subcommand="servers"), deps)
+    assert resp.i18n_key == "command.global_servers_none"
+
+    deps.trusted_guilds.update({5, 3})
+    resp = await handle_command(_ctx("global", subcommand="servers"), deps)
+    assert resp.i18n_key == "command.global_servers"
+    assert resp.params == {"count": 2, "listing": "\u2022 `3`\n\u2022 `5`"}
+
+
+@pytest.mark.asyncio
+async def test_global_rejects_non_numeric_server_id() -> None:
+    deps = FakeDeps(owner_ids={99})
+    resp = await handle_command(
+        _ctx("global", subcommand="approve_server", server_id="my-server"), deps
+    )
+    assert resp.i18n_key == "command.global_invalid_server"
+    assert not deps.trusted_guilds
+
+
+@pytest.mark.asyncio
+async def test_help_is_available_to_everyone() -> None:
     deps = FakeDeps()
-    deps.hashes["abc"] = GuildHash(
-        hash_id="abc", phash=1, dhash=2, whash=3, ahash=0, source="local"
-    )
-    resp = await handle_command(_ctx("submit_global", hash_id="abc"), deps)
-    assert resp.i18n_key == "command.submit_global_ok"
-    assert deps._global_service.submitted == ["abc"]
-    assert deps.audits[0][2] == "global.submit"
-
-
-@pytest.mark.asyncio
-async def test_submit_global_unknown_hash() -> None:
-    deps = FakeDeps()
-    resp = await handle_command(_ctx("submit_global", hash_id="nope"), deps)
-    assert resp.i18n_key == "command.hash_not_found"
-
-
-@pytest.mark.asyncio
-async def test_submit_global_below_threshold_rejected() -> None:
-    deps = FakeDeps(submit_error="below_threshold")
-    deps.hashes["abc"] = GuildHash(
-        hash_id="abc", phash=1, dhash=2, whash=3, ahash=0, source="local"
-    )
-    with pytest.raises(InteractionRejected) as exc:
-        await handle_command(_ctx("submit_global", hash_id="abc"), deps)
-    assert exc.value.reason is CommandError.BELOW_THRESHOLD
-
-
-@pytest.mark.asyncio
-async def test_submit_global_rate_limited_rejected() -> None:
-    deps = FakeDeps(submit_error="rate_limited")
-    deps.hashes["abc"] = GuildHash(
-        hash_id="abc", phash=1, dhash=2, whash=3, ahash=0, source="local"
-    )
-    with pytest.raises(InteractionRejected) as exc:
-        await handle_command(_ctx("submit_global", hash_id="abc"), deps)
-    assert exc.value.reason is CommandError.RATE_LIMITED
+    resp = await handle_command(_ctx("help", perms=NONE), deps)
+    assert resp.i18n_key == "command.help"
+    # The rendered text must exist in every locale and mention the guide link.
+    assert "github.com/rafs2006/optimus" in render(resp, "en")
+    assert "github.com/rafs2006/optimus" in render(resp, "sr")
 
 
 # --- /scamhash reviewmsg and the "Review as scam" context-menu entry ----------
@@ -1453,3 +1577,34 @@ async def test_report_message_guild_only() -> None:
     with pytest.raises(InteractionRejected) as exc:
         await handle_command(ctx, FakeDeps())
     assert exc.value.reason is CommandError.GUILD_ONLY
+
+
+@pytest.mark.asyncio
+async def test_config_view_explains_every_field() -> None:
+    """Each rendered field carries its `-#` subtext explanation so mods learn
+    what a setting does (and its default) without leaving Discord."""
+    full_config = {
+        "sensitivity": "balanced",
+        "action_policy": "report_only",
+        "mod_queue_threshold": 0.5,
+        "review_channel": 42,
+        "ban_purge_hours": 24,
+        "safe_mode": False,
+        "retention_days": 30,
+        "locale": "en",
+        "optin_global_db": False,
+        "optin_scan_bots": False,
+        "optin_evidence_storage": False,
+    }
+    assert set(full_config) == set(_CONFIG_VIEW_ORDER)
+    resp = await handle_command(_ctx("config", subcommand="view"), FakeDeps(config=full_config))
+    summary = resp.params["summary"]
+    assert summary.count("-# ") == len(_CONFIG_VIEW_ORDER)
+    assert "Default: report_only" in summary  # spot-check one explanation
+
+
+@pytest.mark.asyncio
+async def test_config_view_explanations_follow_guild_locale() -> None:
+    deps = FakeDeps(config={"locale": "sr"})
+    resp = await handle_command(_ctx("config", subcommand="view"), deps)
+    assert "Podrazumevano" in resp.params["summary"]  # Serbian "Default"
