@@ -59,7 +59,22 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
 
         async def list_text_channel_ids(self, guild_id: int) -> list[int]:
             channels = await bot.rest.fetch_guild_channels(guild_id)
-            return [int(c.id) for c in channels if isinstance(c, hikari.TextableGuildChannel)]
+            ids = [int(c.id) for c in channels if isinstance(c, hikari.TextableGuildChannel)]
+            # fetch_guild_channels returns no threads, and forum channels are
+            # not textable -- forum *posts* are threads. Without this, a scam
+            # wave living in threads/forum posts is invisible to the join
+            # backfill. Regular channels stay first so the max-channels cap
+            # prefers them; threads are best-effort (older API surface).
+            try:
+                threads = await bot.rest.fetch_active_threads(guild_id)
+            except hikari.HikariError:
+                _log.warning("join_backfill_threads_failed", guild_id=guild_id, exc_info=True)
+                return ids
+            seen = set(ids)
+            for thread in threads:
+                if isinstance(thread, hikari.TextableGuildChannel) and int(thread.id) not in seen:
+                    ids.append(int(thread.id))
+            return ids
 
         async def fetch_recent_messages(
             self, channel_id: int, *, after: datetime, limit: int
