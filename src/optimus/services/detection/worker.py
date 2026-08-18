@@ -20,6 +20,7 @@ from prometheus_client import Counter
 from optimus.contracts.events import (
     HashSet,
     ImageFetchedEvent,
+    OcrFindings,
     SwarmAlertEvent,
     Verdict,
     VerdictEvent,
@@ -52,6 +53,11 @@ PAYLOAD_REJECTED = Counter(
     "optimus_detection_payload_rejected_total",
     "Image payloads rejected before decode (resolved as non-decisions).",
     ["reason"],
+)
+RISK_ESCALATED = Counter(
+    "optimus_detection_risk_escalated_total",
+    "Hash-clean images escalated to the mod queue by the OCR/QR risk scan.",
+    ["risk"],
 )
 
 
@@ -89,6 +95,7 @@ class DetectionWorker:
         idempotency_acquire: IdempotencyAcquire,
         swarm: SwarmCorrelator | None = None,
         limits: DecodeLimits | None = None,
+        risk_scan: Callable[[bytes], OcrFindings | None] | None = None,
     ) -> None:
         self._guild_index = guild_index
         self._global_index = global_index
@@ -97,6 +104,7 @@ class DetectionWorker:
         self._acquire = idempotency_acquire
         self._swarm = swarm
         self._limits = limits
+        self._risk_scan = risk_scan
 
     async def handle(self, event: ImageFetchedEvent) -> DetectionResult | None:
         """Process one fetched image; return a verdict, or ``None`` if a duplicate."""
@@ -130,6 +138,36 @@ class DetectionWorker:
             frames, guild_idx, global_idx, whitelist, sensitivity
         )
 
+        # Second lane: images the hash index has never seen. OCR/QR risk-scan
+        # them, and escalate high/critical findings to AMBIGUOUS -- which the
+        # policy routes to the mod queue and never auto-acts on. Runs before
+        # the swarm correlator so a cross-guild wave of the same OCR-flagged
+        # image is correlated exactly like a hash-flagged one. Whitelisted
+        # images and hash matches skip the (expensive) scan entirely.
+        ocr: OcrFindings | None = None
+        if (
+            self._risk_scan is not None
+            and not outcome.whitelisted
+            and outcome.verdict in (Verdict.CLEAN, Verdict.NON_DECISION)
+        ):
+            findings = await asyncio.to_thread(self._risk_scan, data)
+            if findings is not None and findings.risk_level in ("high", "critical"):
+                ocr = findings
+                outcome = MatchOutcome(
+                    verdict=Verdict.AMBIGUOUS,
+                    confidence=0.9 if findings.risk_level == "critical" else 0.75,
+                    distances=outcome.distances,
+                )
+                RISK_ESCALATED.labels(risk=findings.risk_level).inc()
+                _log.info(
+                    "detection_risk_escalated",
+                    guild_id=event.guild_id,
+                    message_id=event.message_id,
+                    risk_level=findings.risk_level,
+                    risk_score=findings.risk_score,
+                    signals=findings.signals,
+                )
+
         swarm_alert: SwarmAlertEvent | None = None
         if (
             self._swarm is not None
@@ -155,7 +193,7 @@ class DetectionWorker:
                     sample_guild_ids=[event.guild_id],
                 )
 
-        verdict_event = self._verdict(event, outcome, hashes=primary)
+        verdict_event = self._verdict(event, outcome, hashes=primary, ocr=ocr)
         VERDICTS_EMITTED.labels(verdict=verdict_event.verdict.value).inc()
         return DetectionResult(verdict=verdict_event, swarm_alert=swarm_alert)
 
@@ -211,6 +249,7 @@ class DetectionWorker:
         outcome: MatchOutcome,
         *,
         hashes: dict[str, int] | None = None,
+        ocr: OcrFindings | None = None,
     ) -> VerdictEvent:
         hash_set = (
             HashSet(
@@ -235,6 +274,7 @@ class DetectionWorker:
             confidence=outcome.confidence,
             hashes=hash_set,
             matched_hash_id=outcome.matched_hash_id,
+            ocr=ocr,
             distances=outcome.distances,
         )
 

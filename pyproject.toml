@@ -20,6 +20,8 @@ dependencies = [
     "httpx>=0.28.1",
     "pillow>=12.2.0",
     "numpy>=2.4.6",
+    "opencv-python-headless>=4.10.0",
+    "pytesseract>=0.3.13",
     "PyWavelets>=1.9.0",
     "structlog>=26.1.0",
     "prometheus-client>=0.25.0",
@@ -74,7 +76,17 @@ files = ["src/optimus", "benchmarks"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["pywt.*", "onnxruntime.*", "nats", "nats.*", "PIL.*", "aioboto3.*", "botocore.*"]
+module = [
+    "pywt.*",
+    "onnxruntime.*",
+    "nats",
+    "nats.*",
+    "PIL.*",
+    "aioboto3.*",
+    "botocore.*",
+    "cv2.*",
+    "pytesseract",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

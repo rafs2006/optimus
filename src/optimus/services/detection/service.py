@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +25,7 @@ from optimus.contracts.events import (
     SUBJECT_VERDICT,
     ImageFetchedEvent,
     IndexInvalidateEvent,
+    OcrFindings,
     VerdictEvent,
 )
 from optimus.core.config import Sensitivity, Settings, get_settings
@@ -236,6 +238,14 @@ def build_service(
         max_frames=settings.max_frames,
     )
 
+    risk_scan: Callable[[bytes], OcrFindings | None] | None = None
+    if settings.detection_ocr_risk_scan:
+        # Imported lazily so deployments that disable the scan never pay the
+        # cv2/pytesseract import (or need the tesseract binary present).
+        from optimus.services.detection.riskscan import scan
+
+        risk_scan = scan
+
     worker = DetectionWorker(
         guild_index=guild_index,
         global_index=global_index,
@@ -244,6 +254,7 @@ def build_service(
         idempotency_acquire=guard.acquire,
         swarm=swarm,
         limits=limits,
+        risk_scan=risk_scan,
     )
     return DetectionService(settings, bus, worker, index_manager, scope)
 

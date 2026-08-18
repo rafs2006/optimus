@@ -16,6 +16,7 @@
     "field_action": "Preduzeta mera",
     "field_matched_hash": "Podudarni heš",
     "field_reported_by": "Prijavio",
+    "field_ocr": "OCR/QR analiza rizika",
     "field_swarm": "Roj",
     "field_swarm_value": "viđeno na {count} servera",
     "field_evidence": "Dokaz",

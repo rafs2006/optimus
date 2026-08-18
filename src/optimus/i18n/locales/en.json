@@ -16,6 +16,7 @@
     "field_action": "Action taken",
     "field_matched_hash": "Matched hash",
     "field_reported_by": "Reported by",
+    "field_ocr": "OCR/QR risk scan",
     "field_swarm": "Swarm",
     "field_swarm_value": "seen across {count} guilds",
     "field_evidence": "Evidence",
