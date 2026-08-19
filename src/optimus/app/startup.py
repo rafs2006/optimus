@@ -88,6 +88,40 @@ def _check_sqlite_writable(settings: Settings) -> None:
         ) from exc
 
 
+def _check_dashboard(settings: Settings) -> None:
+    """Reject a half-configured dashboard with one actionable message.
+
+    The dashboard is opt-in; when it is off these checks do not run. When it
+    is on, each missing companion setting would otherwise surface as a broken
+    login flow long after boot — catch it here instead.
+    """
+    if not settings.dashboard_enabled:
+        return
+    if not settings.discord_client_secret:
+        raise StartupError(
+            "OPTIMUS_DASHBOARD_ENABLED is on but OPTIMUS_DISCORD_CLIENT_SECRET is "
+            "not set. Copy the client secret from the Discord developer portal "
+            "(your application \u2192 OAuth2 \u2192 Client Secret) \u2014 the dashboard needs it "
+            "to complete Discord logins."
+        )
+    base = settings.dashboard_base_url
+    if not base or not base.startswith(("http://", "https://")):
+        raise StartupError(
+            "OPTIMUS_DASHBOARD_ENABLED is on but OPTIMUS_DASHBOARD_BASE_URL is "
+            "missing or not an http(s) URL. Set it to the public origin the bot "
+            "is reachable at (e.g. https://yourbot.up.railway.app) and register "
+            "<that URL>/dash/callback as an OAuth2 redirect in the Discord "
+            "developer portal."
+        )
+    if len(settings.dashboard_session_secret) < 32:
+        raise StartupError(
+            "OPTIMUS_DASHBOARD_ENABLED is on but OPTIMUS_DASHBOARD_SESSION_SECRET "
+            "is missing or shorter than 32 characters. Generate one with "
+            'python -c "import secrets; print(secrets.token_urlsafe(48))" and '
+            "set it \u2014 it signs dashboard login cookies."
+        )
+
+
 def validate_simple_startup(settings: Settings) -> None:
     """Run every preflight check for simple mode, raising :class:`StartupError`.
 
@@ -97,3 +131,4 @@ def validate_simple_startup(settings: Settings) -> None:
     """
     _check_token(settings)
     _check_sqlite_writable(settings)
+    _check_dashboard(settings)

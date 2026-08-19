@@ -12,6 +12,8 @@ understand the internals, run the distributed topology, or operate at scale.
   actually does, and the full command/settings reference.
 - [simple-mode.md](simple-mode.md) — how the default single-process mode composes
   the whole bot with zero external services, and the one durability trade-off.
+- [dashboard.md](dashboard.md) — the optional read-only web dashboard: scan
+  activity, detections, and audit logs in the browser, behind Discord login.
 
 ## Design
 

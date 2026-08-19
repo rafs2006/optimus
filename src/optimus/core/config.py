@@ -170,6 +170,23 @@ class Settings(BaseSettings):
     health_host: str = "0.0.0.0"  # noqa: S104 - intended bind for containerized service
     health_port: int = 8080
 
+    # Web dashboard (read-only, served on the health port under /dash)
+    #: Master switch. Off by default: enabling also requires
+    #: ``dashboard_base_url``, ``dashboard_session_secret``, and
+    #: ``discord_client_secret`` (checked at startup in simple mode).
+    dashboard_enabled: bool = False
+    #: Public origin the dashboard is reached at, e.g.
+    #: ``https://mybot.up.railway.app``. Used to build the OAuth redirect URI
+    #: (``<base>/dash/callback``) — register that exact URI in the Discord
+    #: developer portal under OAuth2 → Redirects.
+    dashboard_base_url: str = ""
+    #: Secret keying the HMAC that signs dashboard session cookies. Generate
+    #: with ``python -c "import secrets; print(secrets.token_urlsafe(48))"``;
+    #: rotating it logs every dashboard user out.
+    dashboard_session_secret: str = ""
+    #: How long a dashboard login lasts before Discord re-auth is required.
+    dashboard_session_ttl_seconds: float = Field(default=86_400.0, gt=60.0)
+
     # Gateway liveness watchdog (simple mode)
     #: How often the watchdog samples shard connectivity, in seconds.
     gateway_watchdog_interval_seconds: float = Field(default=30.0, gt=0)
