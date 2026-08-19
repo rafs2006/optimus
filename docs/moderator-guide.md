@@ -42,7 +42,7 @@ card does, and every command and setting.
 
 Every detection — an automatic hash/risk match, a member report, or a
 moderator's `/scamhash review` — posts a **review card** into the review
-channel with the evidence and six buttons:
+channel with the evidence and five buttons:
 
 | Button | What it actually does |
 | --- | --- |
@@ -51,7 +51,10 @@ channel with the evidence and six buttons:
 | **Ban uploader** | Bans the uploader and purges their recent messages (`ban_purge_hours`, default 24h, Discord cap 7 days). If Discord refuses (role hierarchy, missing Ban Members), you get an explicit error — never a silent failure. |
 | **Unban** | Lifts the uploader's ban. |
 | **Whitelist image** | Whitelists the image without touching the detection or the uploader. |
-| **Submit to global** | Proposes the confirmed hash to the shared cross-server database. Requires **Confirm scam** first — unconfirmed images can't be pushed globally (anti-poisoning). |
+
+On servers approved for global contribution (see below), **Confirm scam** and
+**False positive** additionally vote in the shared global database — no extra
+button or command needed.
 
 Notes on cards:
 
@@ -92,7 +95,7 @@ Moderator commands (require **Manage Server**):
 | `/config view` | Show all settings. |
 | `/config set <field> <value>` | Change one setting (fields below). |
 | `/stats` | Detection activity + database persistence canary. |
-| `/submit_global <hash_id>` | Propose a local hash for the shared global list. |
+| `/help` | This guide's short version, right inside Discord. Available to everyone. |
 
 Admin-only:
 
@@ -106,7 +109,41 @@ Everyone:
 | --- | --- |
 | `/appeal` | Contest your most recent detection. |
 | `/forget_me` | Erase your data and opt out of processing. |
+| `/help` | Explains the commands and the review workflow. |
 | Apps → *Report scam to mods* | File a message into the mod-review queue. |
+
+Bot owner only (anyone else gets an "owner only" refusal, even if they can
+see the command):
+
+| Command | What it does |
+| --- | --- |
+| `/global approve_server <server_id>` | Approve a server: its mods' **Confirm scam** clicks count as global votes. |
+| `/global revoke_server <server_id>` | Remove a server from the approved contributors. |
+| `/global servers` | List approved contributor servers. |
+
+## The global scam database
+
+The global database shares scam hashes across servers so a scam confirmed on
+one server can be caught everywhere. It is designed so that **no other
+community can ever cause action on your server**:
+
+- **Consuming is opt-in and review-only.** With `optin_global_db: true`, a
+  global match posts a review card marked *"Global scam database — needs your
+  confirmation"* — it is **never** auto-deleted or auto-banned, regardless of
+  your `action_policy`. Your moderator presses **Confirm scam** to act, which
+  also adds the hash to your own local blocklist (local matches of it do use
+  your action policy from then on).
+- **Contributing is allowlisted.** Only servers the bot owner approved with
+  `/global approve_server` can push toward the shared list. On those servers,
+  **Confirm scam** doubles as a vote; a hash goes live globally only after
+  moderators on **two different approved servers** independently confirm it.
+  This is the anti-poisoning gate: throwaway servers and colluding accounts
+  outside the allowlist have zero influence.
+- **False positives self-heal.** If any server marks a globally-matched image
+  as a false positive, the hash is revoked from the global list for everyone
+  and the submitter's reputation is docked.
+- Promoted hashes are cryptographically signed; rate limits and reputation
+  scores throttle even approved contributors.
 
 ## Settings reference (`/config set`)
 
@@ -119,7 +156,7 @@ Everyone:
 | `ban_purge_hours` | `0`–`168` | `24` | How much of a banned user's message history is purged (Discord caps at 7 days; `0` disables). |
 | `locale` | `en` / `sr` | `en` | Language for the bot's replies. |
 | `review_channel` | `#channel` or `none` | unset | Where review cards post. `/setup` manages this for you. |
-| `optin_global_db` | `true` / `false` | `false` | Also match against the shared cross-server scam database. |
+| `optin_global_db` | `true` / `false` | `false` | Also match against the shared cross-server scam database. Global matches only ever create review cards — they never auto-act. |
 | `optin_scan_bots` | `true` / `false` | `false` | Also scan images posted by bots and webhooks. Off by default; turn on if scam posts arrive via webhooks. |
 | `optin_evidence_storage` | `true` / `false` | `false` | Keep evidence copies of detected images. |
 | `safe_mode` | `true` / `false` | `false` | Circuit breaker: detections still post for review, but nothing is auto-deleted or auto-banned. The bot may enable this itself after repeated failures; a button on the notice turns it off. |
@@ -134,7 +171,9 @@ Everyone:
 - **The database line in `/stats`** shows a boot counter and first-boot date —
   if the boot count resets, your host is not persisting the database file.
 - **Rate limits** protect against abuse of `/scamhash add`, member reports,
-  and global submissions; hitting one is an explicit "try later" reply.
+  and global votes; hitting one is an explicit "try later" reply.
+- **`/config view` explains every setting inline** — each field shows its
+  current value, what it does, and its default, so you rarely need this page.
 - **Privacy:** no message text is stored; only perceptual hashes, ids needed
   for enforcement, and (opt-in) evidence. `/forget_me` and
   `/delete_server_data` are honored fully.

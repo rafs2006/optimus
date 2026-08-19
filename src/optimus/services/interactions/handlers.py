@@ -21,7 +21,7 @@ from typing import Any, Protocol
 
 from optimus.core.logging import get_logger
 from optimus.db.models import GuildHash, GuildWhitelist
-from optimus.globaldb.service import GlobalHashService, SubmissionDenied
+from optimus.i18n import translate
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
@@ -136,6 +136,8 @@ class ModerationRest(Protocol):
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
     ) -> int: ...
 
+    async def fetch_owner_ids(self) -> set[int]: ...
+
 
 class InteractionDeps(Protocol):
     """Side-effecting collaborators a handler needs, all per-request scoped."""
@@ -190,7 +192,61 @@ class InteractionDeps(Protocol):
     async def audit(
         self, guild_id: int, actor_id: int, action: str, *, target: str | None = None
     ) -> None: ...
-    def global_service(self) -> GlobalHashService: ...
+
+    async def is_trusted_guild(self, guild_id: int) -> bool:
+        """Whether this guild is on the owner-managed global contributor allowlist."""
+        ...
+
+    async def trust_guild(self, guild_id: int, *, added_by: int) -> bool:
+        """Approve a guild for global contribution; ``False`` if already approved."""
+        ...
+
+    async def untrust_guild(self, guild_id: int) -> bool:
+        """Remove a guild from the contributor allowlist; ``False`` if absent."""
+        ...
+
+    async def list_trusted_guilds(self) -> list[int]:
+        """Ids of all approved contributor guilds, oldest first."""
+        ...
+
+    async def global_vote(
+        self,
+        *,
+        hash_id: str,
+        phash: int,
+        dhash: int,
+        whash: int,
+        voter_user_id: int,
+        voter_guild_id: int,
+    ) -> str | None:
+        """Record one server's Confirm as a global promotion vote.
+
+        Creates the candidate if this is the first vote, then records the
+        approval. Returns ``"promoted"`` when this vote met the promotion bar
+        (distinct moderators in distinct approved servers), ``"candidate"``
+        when the vote was recorded but the bar is not met yet, or ``None``
+        when the vote was refused (rate limit, reputation) — refusal never
+        fails the local confirm, which has already happened.
+        """
+        ...
+
+    async def global_dispute(self, hash_id: str) -> bool:
+        """Revoke a global hash after a local False-positive verdict.
+
+        Returns ``True`` when a global candidate/promoted entry existed and
+        was revoked (docking the submitter's reputation), ``False`` when the
+        hash was never global — the common case for purely local detections.
+        """
+        ...
+
+    async def rest_owner_ids(self) -> set[int]:
+        """User ids allowed to run owner commands (application owner / team).
+
+        Empty set when the lookup fails — owner commands then refuse, which is
+        the safe default.
+        """
+        ...
+
     async def compute_attachment_hashes(self, *, attachment_id: int, url: str) -> AttachmentHashes:
         """Fetch and decode one attachment and compute its hash set. No DB access.
 
@@ -496,8 +552,9 @@ async def _cmd_config(ctx: InteractionContext, deps: InteractionDeps) -> Interac
     assert ctx.guild_id is not None
     if ctx.subcommand == "view":
         current = await deps.get_config(ctx.guild_id)
+        locale = str(current.get("locale", "en"))
         return InteractionResponse(
-            "command.config_view_header", {"summary": _render_config_summary(current)}
+            "command.config_view_header", {"summary": _render_config_summary(current, locale)}
         )
     change = validate_config_set(str(ctx.options["field"]), str(ctx.options["value"]))
     await deps.set_config_field(ctx.guild_id, change.field, change.value)
@@ -529,12 +586,15 @@ _CONFIG_VIEW_ORDER = (
 )
 
 
-def _render_config_summary(current: dict[str, Any]) -> str:
+def _render_config_summary(current: dict[str, Any], locale: str = "en") -> str:
     """Render a guild's config dict (from ``get_config``) as a display block.
 
     Empty (no row yet / guild never configured) renders a single explanatory
     line rather than an empty list. ``review_channel`` renders as a real
-    channel mention (or "not set") to match ``_render_config_value``.
+    channel mention (or "not set") to match ``_render_config_value``. Each
+    field carries its one-line ``config_help.*`` explanation so ``/config
+    view`` is self-documenting — mods should not need the manual to know what
+    a knob does.
     """
     if not current:
         return "_No configuration set yet \u2014 defaults are in effect._"
@@ -548,6 +608,7 @@ def _render_config_summary(current: dict[str, Any]) -> str:
         else:
             rendered = str(value)
         lines.append(f"**{config_field}**: `{rendered}`")
+        lines.append(f"-# {translate(f'config_help.{config_field}', locale)}")
     return "\n".join(lines)
 
 
@@ -626,27 +687,41 @@ async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     )
 
 
-async def _cmd_submit_global(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
-    assert ctx.guild_id is not None
-    hash_id = str(ctx.options["hash_id"])
-    local = await deps.local_hash(ctx.guild_id, hash_id)
-    if local is None:
-        return InteractionResponse("command.hash_not_found", {"hash_id": hash_id})
-    try:
-        await deps.global_service().submit(
-            hash_id=local.hash_id,
-            phash=local.phash,
-            dhash=local.dhash,
-            whash=local.whash,
-            submitter_user_id=ctx.user_id,
-            submitter_guild_id=ctx.guild_id,
+async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    # Owner-only: Discord has no "application owner" permission flag, so the
+    # gate is enforced here against the application's owner/team ids. An empty
+    # set (lookup failed) refuses — fail closed on the trust-granting command.
+    if ctx.user_id not in await deps.rest_owner_ids():
+        return InteractionResponse("command.owner_only")
+    if ctx.subcommand == "servers":
+        ids = await deps.list_trusted_guilds()
+        if not ids:
+            return InteractionResponse("command.global_servers_none")
+        listing = "\n".join(f"\u2022 `{gid}`" for gid in ids)
+        return InteractionResponse(
+            "command.global_servers", {"count": len(ids), "listing": listing}
         )
-    except SubmissionDenied as denied:
-        if denied.reason == "rate_limited":
-            raise InteractionRejected(CommandError.RATE_LIMITED) from denied
-        raise InteractionRejected(CommandError.BELOW_THRESHOLD) from denied
-    await deps.audit(ctx.guild_id, ctx.user_id, "global.submit", target=hash_id)
-    return InteractionResponse("command.submit_global_ok", {"hash_id": hash_id})
+    raw = str(ctx.options["server_id"]).strip()
+    if not raw.isdigit():
+        return InteractionResponse("command.global_invalid_server", {"value": raw})
+    server_id = int(raw)
+    if ctx.subcommand == "approve_server":
+        added = await deps.trust_guild(server_id, added_by=ctx.user_id)
+        if ctx.guild_id is not None:
+            await deps.audit(ctx.guild_id, ctx.user_id, "global.approve_server", target=raw)
+        key = "command.global_server_approved" if added else "command.global_server_already"
+        return InteractionResponse(key, {"server_id": raw})
+    if ctx.subcommand == "revoke_server":
+        removed = await deps.untrust_guild(server_id)
+        if ctx.guild_id is not None:
+            await deps.audit(ctx.guild_id, ctx.user_id, "global.revoke_server", target=raw)
+        key = "command.global_server_revoked" if removed else "command.global_server_missing"
+        return InteractionResponse(key, {"server_id": raw})
+    raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
+
+
+async def _cmd_help(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    return InteractionResponse("command.help")
 
 
 async def _cmd_delete_server_data(
@@ -685,7 +760,8 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "config": _cmd_config,
     "setup": _cmd_setup,
     "stats": _cmd_stats,
-    "submit_global": _cmd_submit_global,
+    "global": _cmd_global,
+    "help": _cmd_help,
     "delete_server_data": _cmd_delete_server_data,
     "forget_me": _cmd_forget_me,
     "appeal": _cmd_appeal,
@@ -858,6 +934,35 @@ async def handle_review_button(
         await deps.set_detection_action(ctx.guild_id, detection_id, "confirmed")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(detection_id))
         key = "button.confirmed_scam" if hashes is not None else "button.confirmed_no_hash"
+        # Confirm doubles as the global promotion vote — but only from servers
+        # the owner approved AND that opted in. Everyone else's confirm stays
+        # purely local; the vote can also be refused (rate limit/reputation)
+        # without affecting the local confirm, which already happened above.
+        if hashes is not None:
+            config = await deps.get_config(ctx.guild_id)
+            if bool(config.get("optin_global_db", False)) and await deps.is_trusted_guild(
+                ctx.guild_id
+            ):
+                vote = await deps.global_vote(
+                    hash_id=f"{hashes.phash:016x}",
+                    phash=hashes.phash,
+                    dhash=hashes.dhash,
+                    whash=hashes.whash,
+                    voter_user_id=ctx.user_id,
+                    voter_guild_id=ctx.guild_id,
+                )
+                if vote is not None:
+                    await deps.audit(
+                        ctx.guild_id,
+                        ctx.user_id,
+                        "global.vote",
+                        target=f"{hashes.phash:016x}",
+                    )
+                    key = (
+                        "button.confirmed_scam_promoted"
+                        if vote == "promoted"
+                        else "button.confirmed_scam_voted"
+                    )
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
@@ -891,6 +996,14 @@ async def handle_review_button(
             if hashes is not None
             else "button.marked_false_positive_no_hash"
         )
+        # A false positive anywhere kills the global entry: revoke immediately
+        # and dock the submitter's reputation. One bad community poisoning the
+        # shared set costs it credibility; a legitimate mistake self-corrects.
+        if hashes is not None and await deps.global_dispute(f"{hashes.phash:016x}"):
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "global.dispute", target=f"{hashes.phash:016x}"
+            )
+            key = "button.marked_false_positive_global_revoked"
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
@@ -945,30 +1058,10 @@ async def handle_review_button(
         return InteractionResponse("button.image_whitelisted", **_card_note(action, ctx.user_id))
 
     if action is ReviewAction.SUBMIT_GLOBAL:
-        stored = det.hashes
-        hash_id = f"{int(stored['phash']):016x}" if stored else None
-        local = await deps.local_hash(ctx.guild_id, hash_id) if hash_id is not None else None
-        if local is None:
-            # The global pipeline only accepts hashes the guild has actually
-            # blocklisted -- Confirm scam stores one; do that first.
-            return InteractionResponse("button.confirm_first")
-        try:
-            await deps.global_service().submit(
-                hash_id=local.hash_id,
-                phash=local.phash,
-                dhash=local.dhash,
-                whash=local.whash,
-                submitter_user_id=ctx.user_id,
-                submitter_guild_id=ctx.guild_id,
-            )
-        except SubmissionDenied as denied:
-            if denied.reason == "rate_limited":
-                raise InteractionRejected(CommandError.RATE_LIMITED) from denied
-            raise InteractionRejected(CommandError.BELOW_THRESHOLD) from denied
-        await deps.audit(
-            ctx.guild_id, ctx.user_id, "review.submit_global", target=str(detection_id)
-        )
-        return InteractionResponse("button.submitted_global", **_card_note(action, ctx.user_id))
+        # Legacy button on cards rendered before global sharing became
+        # automatic. Confirm scam now casts the global vote itself (on
+        # approved, opted-in servers), so this button only explains itself.
+        return InteractionResponse("button.submit_global_removed")
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 

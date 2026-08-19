@@ -31,13 +31,13 @@ def interaction(command_name: str, options: list[CommandOption]) -> SimpleNamesp
 def test_to_context_preserves_direct_command_options() -> None:
     ctx = to_context(
         interaction(
-            "submit_global",
-            [CommandOption(name="hash_id", type=3, value="hash-123")],
+            "setup",
+            [CommandOption(name="channel", type=7, value="123")],
         )
     )
 
     assert ctx.subcommand is None
-    assert ctx.options == {"hash_id": "hash-123"}
+    assert ctx.options == {"channel": "123"}
 
 
 def test_to_context_flattens_subcommand_options() -> None:

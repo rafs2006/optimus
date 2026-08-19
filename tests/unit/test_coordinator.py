@@ -377,3 +377,38 @@ async def test_safe_mode_blocks_auto_act() -> None:
     result = await coord.handle_verdict(_event())
     assert result.action is Action.REPORT_ONLY
     assert "ban_member" not in rest.calls
+
+
+async def test_global_match_verdict_only_queues_for_review() -> None:
+    """A verdict matched from the *global* index must never auto-act, even at
+    max confidence on a delete_ban guild -- it posts a review card flagged as
+    a global match and touches nothing."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+    ev = _event(confidence=1.0)
+    object.__setattr__(ev, "matched_source", "global")
+    result = await coord.handle_verdict(ev)
+    assert result.action is Action.REPORT_ONLY
+    assert rest.calls == []  # no delete, no ban
+    assert len(reports) == 1
+    assert reports[0].global_match is True
+
+
+async def test_guild_match_report_is_not_flagged_global() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+    ev = _event()
+    object.__setattr__(ev, "matched_source", "guild")
+    await coord.handle_verdict(ev)
+    assert len(reports) == 1
+    assert reports[0].global_match is False

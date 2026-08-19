@@ -39,6 +39,10 @@ class MatchOutcome:
     verdict: Verdict
     confidence: float
     matched_hash_id: str | None = None
+    #: Which index produced the match: ``"guild"`` (this server's own
+    #: blocklist) or ``"global"`` (the shared promoted set). Global matches
+    #: are policy-gated to review-only downstream — they never auto-act.
+    matched_source: str | None = None
     campaign_id: str | None = None
     distances: dict[str, int] = field(default_factory=dict)
     whitelisted: bool = False
@@ -98,6 +102,7 @@ def match(
         verdict=result.verdict,
         confidence=result.confidence,
         matched_hash_id=known.hash_id if result.verdict is not Verdict.CLEAN else None,
+        matched_source=known.source if result.verdict is not Verdict.CLEAN else None,
         campaign_id=known.campaign_id if result.verdict is not Verdict.CLEAN else None,
         distances=result.distances,
     )

@@ -403,3 +403,101 @@ async def test_worker_swarm_escalates_ambiguous_to_scam() -> None:
     assert result is not None
     assert result.verdict.verdict is Verdict.SCAM
     assert result.swarm_alert is not None
+
+
+# --- global trust lane: matched_source + per-guild opt-in gating -------------
+
+
+def test_matched_source_distinguishes_guild_from_global() -> None:
+    guild_hit = match(CANDIDATE, guild_index=_guild_index(), global_index=EMPTY, whitelist=[])
+    assert guild_hit.matched_source == "guild"
+
+    global_known = KnownHash(
+        hash_id="g-1",
+        phash=KNOWN.phash,
+        dhash=KNOWN.dhash,
+        whash=KNOWN.whash,
+        ahash=KNOWN.ahash,
+        source="global",
+        campaign_id=None,
+    )
+    global_hit = match(
+        CANDIDATE, guild_index=EMPTY, global_index=HashIndex([global_known]), whitelist=[]
+    )
+    assert global_hit.verdict is Verdict.SCAM
+    assert global_hit.matched_source == "global"
+
+
+def test_clean_outcome_carries_no_matched_source() -> None:
+    far = {"phash": 0, "dhash": 0, "whash": 0, "ahash": 0}
+    outcome = match(far, guild_index=_guild_index(), global_index=EMPTY, whitelist=[])
+    assert outcome.matched_source is None
+    assert outcome.matched_hash_id is None
+
+
+def _global_worker(optin: bool | None) -> DetectionWorker:
+    """A worker whose *global* index knows the _scam_png; guild index empty."""
+    from optimus.hashing import perceptual
+    from optimus.hashing.decoder import decode
+
+    decoded = decode(_scam_png())
+    assert decoded is not None
+    hashes = perceptual.compute_all(decoded.frames[0])
+    known = KnownHash(
+        hash_id="g-opt",
+        phash=hashes["phash"],
+        dhash=hashes["dhash"],
+        whash=hashes["whash"],
+        ahash=hashes["ahash"],
+        source="global",
+        campaign_id=None,
+    )
+
+    async def gi(_gid: int) -> HashIndex:
+        return EMPTY
+
+    async def gx() -> HashIndex:
+        return HashIndex([known])
+
+    async def wl(_gid: int) -> list[WhitelistEntry]:
+        return []
+
+    async def sens(_gid: int) -> Sensitivity:
+        return Sensitivity.BALANCED
+
+    guard = _OnceGuard()
+
+    async def optin_fn(_gid: int) -> bool:
+        return bool(optin)
+
+    return DetectionWorker(
+        guild_index=gi,
+        global_index=gx,
+        whitelist=wl,
+        sensitivity=sens,
+        idempotency_acquire=guard.acquire,
+        global_optin=None if optin is None else optin_fn,
+    )
+
+
+async def test_worker_skips_global_index_for_opted_out_guild() -> None:
+    worker = _global_worker(optin=False)
+    result = await worker.handle(_event(key="optout", data=_scam_png()))
+    assert result is not None
+    assert result.verdict.verdict is Verdict.CLEAN
+
+
+async def test_worker_matches_global_index_for_opted_in_guild() -> None:
+    worker = _global_worker(optin=True)
+    result = await worker.handle(_event(key="optin", data=_scam_png()))
+    assert result is not None
+    assert result.verdict.verdict is Verdict.SCAM
+    assert result.verdict.matched_source == "global"
+
+
+async def test_worker_without_optin_hook_keeps_legacy_always_on() -> None:
+    worker = _global_worker(optin=None)
+    result = await worker.handle(_event(key="legacy", data=_scam_png()))
+    assert result is not None
+    assert result.verdict.verdict is Verdict.SCAM
+    assert result.verdict.matched_source == "global"

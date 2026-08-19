@@ -281,3 +281,22 @@ async def test_deployment_boot_counter_grows_first_boot_stays(session: AsyncSess
     # The persistence canary: the first-boot timestamp never moves.
     assert second.first_boot_at is not None
     assert second.first_boot_at.replace(tzinfo=UTC) == datetime(2026, 8, 1, tzinfo=UTC)
+
+
+async def test_global_trusted_guild_repo_roundtrip(session: AsyncSession) -> None:
+    from optimus.db.repositories import GlobalTrustedGuildRepository
+
+    repo = GlobalTrustedGuildRepository(session)
+    assert await repo.contains(123) is False
+    assert await repo.list_all() == []
+
+    assert await repo.add(123, added_by=1) is True
+    assert await repo.add(123, added_by=2) is False  # idempotent
+    assert await repo.contains(123) is True
+    await repo.add(456, added_by=1)
+    assert {row.guild_id for row in await repo.list_all()} == {123, 456}
+
+    assert await repo.remove(123) is True
+    assert await repo.remove(123) is False  # already gone
+    assert await repo.contains(123) is False
+    assert [row.guild_id for row in await repo.list_all()] == [456]
