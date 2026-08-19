@@ -234,6 +234,11 @@ class Detection(Base):
     attachment_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     uploader_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     distances: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    #: The flagged image's perceptual-hash ensemble (``HashSet.model_dump()``),
+    #: kept so review-card buttons can blocklist/whitelist the image without
+    #: re-fetching bytes from a CDN URL that may have expired. ``None`` for
+    #: member reports (deliberately never hashed) and pre-0008 rows.
+    hashes: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     verdict: Mapped[str] = mapped_column(String(16), nullable=False)
     action_taken: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)

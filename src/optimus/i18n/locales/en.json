@@ -56,6 +56,11 @@
     "config_set_ok": "Updated **{field}** to `{value}`.",
     "config_unknown_field": "Unknown configuration field `{field}`.",
     "config_invalid_value": "Invalid value for **{field}**: {reason}",
+    "setup_created": "Created <#{channel_id}> and linked it as the review channel. It is private: visible to the moderator role you picked, server admins, and the bot. Detections now post there for approval.",
+    "setup_created_no_role": "Created <#{channel_id}> and linked it as the review channel. It is private: only server admins and the bot can see it — grant a moderator role access with /setup channel, or re-run /setup after deleting it with a mod_role. Detections now post there for approval.",
+    "setup_linked": "Linked <#{channel_id}> as the review channel. Detections now post there for approval. The bot does not change that channel's permissions — make sure only moderators can see it.",
+    "setup_already": "Reviews already go to <#{channel_id}>. To move them, run /setup with the channel option.",
+    "setup_failed": "Could not create the review channel. Give the bot the **Manage Channels** permission and try again, or run /setup with an existing channel.",
     "stats_header": "Statistics for the last {hours} hours:\n• Detections: {detections}\n• Database: boot #{boots}, storing data since {first_boot}",
     "stats_empty": "No statistics recorded yet for this server.",
     "stats_detections": "Detections",
@@ -72,7 +77,7 @@
     "appeal_opened": "Your appeal has been opened and sent to the server moderators."
   },
   "button": {
-    "confirmed_scam": "Detection #{detection_id} confirmed as scam.",
+    "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",
     "marked_false_positive": "Detection #{detection_id} marked as a false positive; the image was whitelisted and any action reversed.",
     "uploader_banned": "Uploader has been banned.",
     "uploader_unbanned": "Uploader has been unbanned.",
@@ -82,6 +87,15 @@
     "appeal_approved": "The appeal has been approved and the action reversed.",
     "appeal_denied": "The appeal has been denied.",
     "expired": "This interaction is no longer valid.",
-    "not_permitted": "You do not have permission to do that."
+    "not_permitted": "You do not have permission to do that.",
+    "confirmed_no_hash": "Detection #{detection_id} confirmed and the message deleted, but the image could not be re-fetched, so no hash was blocklisted.",
+    "marked_false_positive_no_hash": "Detection #{detection_id} marked as a false positive and any action reversed. The image could not be re-fetched, so nothing was whitelisted.",
+    "detection_missing": "Detection #{detection_id} was not found in this server.",
+    "action_failed": "Discord refused that action. Check that the bot has the Ban Members permission and that its role sits above the target user's roles.",
+    "no_image": "The original image is no longer available, so there is nothing to whitelist.",
+    "confirm_first": "This image's hash is not on this server's blocklist yet. Press Confirm scam first, then submit it to the global database."
+  },
+  "card": {
+    "handled": "✅ **{action}** — handled by <@{user_id}>"
   }
 }

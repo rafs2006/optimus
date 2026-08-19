@@ -31,6 +31,7 @@ from optimus.core.readiness import shards_check
 from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_start_kwargs
 from optimus.services.gateway.watchdog import GatewayWatchdog
 from optimus.services.interactions.service import InteractionService, respond_to_interaction
+from optimus.services.moderation.rest_adapter import HikariRestActions
 
 if TYPE_CHECKING:
     from optimus.app.simple import SimpleApp
@@ -98,7 +99,14 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         history=_RestHistoryReader(),
     )
     interactions = InteractionService(
-        app._scope, InMemoryRateLimiter(), settings, detection=app.detection
+        app._scope,
+        InMemoryRateLimiter(),
+        settings,
+        detection=app.detection,
+        # Review buttons enforce through REST: Confirm scam deletes the
+        # message, Ban/Unban act on the uploader, and member-report cards
+        # (filed without hashes by design) re-fetch the attachment to hash it.
+        rest=HikariRestActions(bot.rest),
     )
 
     # Readiness should track the gateway, not just the DB: a wedged gateway

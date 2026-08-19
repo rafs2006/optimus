@@ -64,6 +64,74 @@ class HikariRestActions:
     async def unban_member(self, guild_id: int, user_id: int, reason: str) -> None:
         await self._rest.unban_user(guild_id, user_id, reason=reason)
 
+    async def fetch_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None:
+        """Return a fresh CDN URL for one attachment, or ``None`` if it is gone.
+
+        Discord CDN URLs are signed and expire, so anything stored at detection
+        time may be stale; re-fetching the message mints a fresh URL. A deleted
+        message (or a detached attachment) yields ``None``, never an exception
+        -- callers treat "image gone" as a soft, reportable condition.
+        """
+        try:
+            message = await self._rest.fetch_message(channel_id, message_id)
+        except hikari.NotFoundError:
+            return None
+        for attachment in message.attachments:
+            if int(attachment.id) == attachment_id:
+                return str(attachment.url)
+        return None
+
+    async def create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int:
+        """Create the private mod-review text channel and return its id.
+
+        Visibility is locked down at creation time (never patched afterwards,
+        so there is no window where the channel is public): ``@everyone`` is
+        denied VIEW_CHANNEL, the bot itself and each ``mod_role_ids`` role are
+        allowed to view/read/send. Guild administrators bypass overwrites by
+        Discord's permission model, so they always see the channel even when
+        no mod role is passed.
+        """
+        me = await self._rest.fetch_my_user()
+        member_allow = (
+            hikari.Permissions.VIEW_CHANNEL
+            | hikari.Permissions.SEND_MESSAGES
+            | hikari.Permissions.READ_MESSAGE_HISTORY
+            | hikari.Permissions.EMBED_LINKS
+            | hikari.Permissions.ATTACH_FILES
+        )
+        overwrites: list[hikari.PermissionOverwrite] = [
+            # The @everyone role's id is always the guild id.
+            hikari.PermissionOverwrite(
+                id=hikari.Snowflake(guild_id),
+                type=hikari.PermissionOverwriteType.ROLE,
+                deny=hikari.Permissions.VIEW_CHANNEL,
+            ),
+            hikari.PermissionOverwrite(
+                id=me.id,
+                type=hikari.PermissionOverwriteType.MEMBER,
+                allow=member_allow,
+            ),
+        ]
+        overwrites.extend(
+            hikari.PermissionOverwrite(
+                id=hikari.Snowflake(role_id),
+                type=hikari.PermissionOverwriteType.ROLE,
+                allow=member_allow,
+            )
+            for role_id in mod_role_ids
+        )
+        channel = await self._rest.create_guild_text_channel(
+            guild_id,
+            name,
+            permission_overwrites=overwrites,
+            topic="Optimus scam-image review queue -- detections land here for moderator sign-off.",
+        )
+        return int(channel.id)
+
     async def send_dm(self, user_id: int, content: str) -> None:
         channel = await self._rest.create_dm_channel(user_id)
         await self._rest.create_message(channel.id, content)

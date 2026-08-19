@@ -56,6 +56,11 @@
     "config_set_ok": "Polje **{field}** je ažurirano na `{value}`.",
     "config_unknown_field": "Nepoznato polje konfiguracije `{field}`.",
     "config_invalid_value": "Nevažeća vrednost za **{field}**: {reason}",
+    "setup_created": "Napravljen je <#{channel_id}> i povezan kao kanal za pregled. Privatan je: vide ga izabrana moderatorska uloga, administratori servera i bot. Otkrivanja se sada objavljuju tamo na odobrenje.",
+    "setup_created_no_role": "Napravljen je <#{channel_id}> i povezan kao kanal za pregled. Privatan je: vide ga samo administratori servera i bot — dodelite moderatorskoj ulozi pristup, ili ponovo pokrenite /setup sa mod_role opcijom nakon brisanja kanala. Otkrivanja se sada objavljuju tamo na odobrenje.",
+    "setup_linked": "Kanal <#{channel_id}> je povezan kao kanal za pregled. Otkrivanja se sada objavljuju tamo na odobrenje. Bot ne menja dozvole tog kanala — proverite da ga vide samo moderatori.",
+    "setup_already": "Pregledi već idu u <#{channel_id}>. Da ih premestite, pokrenite /setup sa opcijom channel.",
+    "setup_failed": "Kanal za pregled nije mogao da se napravi. Dajte botu dozvolu **Manage Channels** i pokušajte ponovo, ili pokrenite /setup sa postojećim kanalom.",
     "stats_header": "Statistika za poslednjih {hours} sati:\n• Otkrivanja: {detections}\n• Baza: pokretanje #{boots}, čuva podatke od {first_boot}",
     "stats_empty": "Još uvek nema zabeležene statistike za ovaj server.",
     "stats_detections": "Otkrivanja",
@@ -72,7 +77,7 @@
     "appeal_opened": "Vaša žalba je otvorena i poslata moderatorima servera."
   },
   "button": {
-    "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara.",
+    "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",
     "marked_false_positive": "Otkrivanje #{detection_id} je označeno kao lažni pozitiv; slika je stavljena na belu listu i sve mere su poništene.",
     "uploader_banned": "Pošiljalac je banovan.",
     "uploader_unbanned": "Pošiljaocu je uklonjen ban.",
@@ -82,6 +87,15 @@
     "appeal_approved": "Žalba je odobrena i mera je poništena.",
     "appeal_denied": "Žalba je odbijena.",
     "expired": "Ova interakcija više nije važeća.",
-    "not_permitted": "Nemate dozvolu za to."
+    "not_permitted": "Nemate dozvolu za to.",
+    "confirmed_no_hash": "Otkrivanje #{detection_id} je potvrđeno i poruka je obrisana, ali slika nije mogla ponovo da se preuzme, pa nijedan heš nije dodat na crnu listu.",
+    "marked_false_positive_no_hash": "Otkrivanje #{detection_id} je označeno kao lažni pozitiv i sve mere su poništene. Slika nije mogla ponovo da se preuzme, pa ništa nije stavljeno na belu listu.",
+    "detection_missing": "Otkrivanje #{detection_id} nije pronađeno na ovom serveru.",
+    "action_failed": "Discord je odbio tu radnju. Proverite da li bot ima dozvolu Ban Members i da li je njegova uloga iznad uloga ciljanog korisnika.",
+    "no_image": "Originalna slika više nije dostupna, pa nema šta da se stavi na belu listu.",
+    "confirm_first": "Heš ove slike još nije na crnoj listi ovog servera. Prvo pritisnite Potvrdi prevaru, pa ga zatim pošaljite u globalnu bazu."
+  },
+  "card": {
+    "handled": "✅ **{action}** — obradio/la <@{user_id}>"
   }
 }

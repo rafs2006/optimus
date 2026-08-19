@@ -40,7 +40,7 @@ from optimus.services.interactions.logic import (
 from optimus.services.interactions.logic import (
     ImportHash as _ImportHash,
 )
-from optimus.services.moderation.review import ParsedCustomId, ReviewAction
+from optimus.services.moderation.review import BUTTON_LABELS, ParsedCustomId, ReviewAction
 
 _log = get_logger(__name__)
 
@@ -72,6 +72,69 @@ class InteractionResponse:
     params: dict[str, Any] = field(default_factory=dict)
     #: Optional opaque payload (e.g. an export file body) for the glue layer.
     attachment: str | None = None
+    #: When set, the glue layer appends this localized line to the message the
+    #: pressed button lives on (the review card), so every moderator watching
+    #: the shared review channel sees who already handled the report -- the
+    #: ephemeral reply above is visible only to the clicker.
+    card_note_key: str | None = None
+    card_note_params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionFacts:
+    """The stored facts a review button needs about one detection."""
+
+    detection_id: int
+    channel_id: int
+    message_id: int
+    attachment_id: int
+    uploader_id: int
+    #: ``HashSet.model_dump()`` captured at detection time; ``None`` for member
+    #: reports (never hashed by design) and rows predating migration 0008.
+    hashes: dict[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ImageHashes:
+    """A resolved hash ensemble for the image behind a detection.
+
+    Mirror hashes are present only when the image was re-fetched and re-hashed
+    (stored detection hashes keep the 4-hash ensemble of ``contracts.HashSet``).
+    """
+
+    phash: int
+    dhash: int
+    whash: int
+    ahash: int
+    mphash: int | None = None
+    mdhash: int | None = None
+    mwhash: int | None = None
+    mahash: int | None = None
+
+
+class ModerationRest(Protocol):
+    """The Discord REST surface the review buttons enforce through.
+
+    Structurally satisfied by
+    :class:`optimus.services.moderation.rest_adapter.HikariRestActions`;
+    declared here so this module stays hikari-free and tests can fake it.
+    """
+
+    async def delete_message(self, channel_id: int, message_id: int) -> None: ...
+
+    async def ban_member(
+        self, guild_id: int, user_id: int, reason: str, purge_seconds: int = 0
+    ) -> None: ...
+
+    async def unban_member(self, guild_id: int, user_id: int, reason: str) -> None: ...
+
+    async def fetch_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None: ...
+
+    async def create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int: ...
 
 
 class InteractionDeps(Protocol):
@@ -94,6 +157,31 @@ class InteractionDeps(Protocol):
     async def get_appeal(self, guild_id: int, appeal_id: int) -> dict[str, Any] | None: ...
     async def resolve_appeal(self, guild_id: int, appeal_id: int, *, approved: bool) -> None: ...
     async def reverse_detection_action(self, guild_id: int, detection_id: int) -> None: ...
+    async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None: ...
+    async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None: ...
+    async def set_detection_hashes(
+        self, guild_id: int, detection_id: int, hashes: dict[str, int]
+    ) -> None:
+        """Backfill hashes onto a detection that was filed without them."""
+        ...
+
+    async def rest_delete_message(self, channel_id: int, message_id: int) -> bool:
+        """Best-effort message delete; ``False`` when REST is unavailable/refused."""
+        ...
+
+    async def rest_ban(
+        self, guild_id: int, user_id: int, *, reason: str, purge_seconds: int
+    ) -> bool: ...
+    async def rest_unban(self, guild_id: int, user_id: int, *, reason: str) -> bool: ...
+    async def rest_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None: ...
+    async def rest_create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int | None:
+        """Create the private review channel; ``None`` when REST is unavailable/refused."""
+        ...
+
     async def disable_safe_mode(self, guild_id: int) -> None: ...
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None: ...
     async def hash_rate_ok(self, user_id: int) -> bool: ...
@@ -475,6 +563,50 @@ def _render_config_value(field: str, value: Any) -> str:
     return str(value)
 
 
+#: Name of the review channel ``/setup`` creates when none is linked yet.
+REVIEW_CHANNEL_NAME = "optimus-review"
+
+
+async def _cmd_setup(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    """Wire up the shared mod-review channel where detections await approval.
+
+    Three shapes, in priority order:
+
+    - ``channel`` option given: point reviews at that existing channel (also
+      how you re-point after a mistake) -- visibility stays whatever the mods
+      configured on it, the bot never edits someone else's channel perms.
+    - No option, nothing linked yet: create a fresh private ``#optimus-review``
+      (deny @everyone, allow the bot + the optional ``mod_role``; admins bypass
+      overwrites) and link it.
+    - No option, already linked: report the current channel instead of piling
+      up duplicate channels on every re-run.
+    """
+    assert ctx.guild_id is not None
+    channel_opt = ctx.options.get("channel")
+    if channel_opt is not None:
+        channel_id = int(channel_opt)
+        await deps.set_config_field(ctx.guild_id, "review_channel", channel_id)
+        await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(channel_id))
+        return InteractionResponse("command.setup_linked", {"channel_id": channel_id})
+    config = await deps.get_config(ctx.guild_id)
+    existing = config.get("review_channel")
+    if existing is not None:
+        return InteractionResponse("command.setup_already", {"channel_id": existing})
+    mod_role = ctx.options.get("mod_role")
+    # Network before the transaction's first write (SQLite write-lock discipline).
+    created = await deps.rest_create_review_channel(
+        ctx.guild_id,
+        name=REVIEW_CHANNEL_NAME,
+        mod_role_ids=[int(mod_role)] if mod_role is not None else [],
+    )
+    if created is None:
+        return InteractionResponse("command.setup_failed")
+    await deps.set_config_field(ctx.guild_id, "review_channel", created)
+    await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(created))
+    key = "command.setup_created" if mod_role is not None else "command.setup_created_no_role"
+    return InteractionResponse(key, {"channel_id": created})
+
+
 async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
     assert ctx.guild_id is not None
     summary = await deps.stats_summary(ctx.guild_id)
@@ -551,6 +683,7 @@ _CommandHandler = Callable[
 _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "scamhash": _cmd_scamhash,
     "config": _cmd_config,
+    "setup": _cmd_setup,
     "stats": _cmd_stats,
     "submit_global": _cmd_submit_global,
     "delete_server_data": _cmd_delete_server_data,
@@ -611,6 +744,80 @@ async def _import_hashes(
 # --- component (button) handlers -------------------------------------------------
 
 
+def _card_note(action: ReviewAction, user_id: int) -> dict[str, Any]:
+    """The ``card_note_*`` kwargs marking a card as handled by ``user_id``."""
+    return {
+        "card_note_key": "card.handled",
+        "card_note_params": {"action": BUTTON_LABELS[action], "user_id": user_id},
+    }
+
+
+async def _resolve_image_hashes(deps: InteractionDeps, det: DetectionFacts) -> ImageHashes | None:
+    """Resolve the hash ensemble for the image behind ``det``.
+
+    Prefers the hashes persisted at detection time; falls back to re-fetching
+    the attachment (member reports never hash up front). Both the REST lookup
+    and the fetch+decode happen *before* the caller's first DB write on
+    purpose: SQLite holds the write lock from the first INSERT/UPDATE to
+    commit, and network work inside that window starves concurrent writers
+    (see :meth:`InteractionDeps.compute_attachment_hashes`).
+    """
+    stored = det.hashes
+    if stored is not None:
+        try:
+            return ImageHashes(
+                phash=int(stored["phash"]),
+                dhash=int(stored["dhash"]),
+                whash=int(stored["whash"]),
+                ahash=int(stored["ahash"]),
+            )
+        except (KeyError, TypeError, ValueError):  # pragma: no cover - corrupt row
+            _log.warning("detection_hashes_corrupt", detection_id=det.detection_id)
+    url = await deps.rest_attachment_url(det.channel_id, det.message_id, det.attachment_id)
+    if url is None:
+        return None
+    try:
+        computed = await deps.compute_attachment_hashes(attachment_id=det.attachment_id, url=url)
+    except AttachmentHashError:
+        return None
+    return ImageHashes(
+        phash=computed.phash,
+        dhash=computed.dhash,
+        whash=computed.whash,
+        ahash=computed.ahash,
+        mphash=computed.mphash,
+        mdhash=computed.mdhash,
+        mwhash=computed.mwhash,
+        mahash=computed.mahash,
+    )
+
+
+def _hash_ensemble_dict(hashes: ImageHashes) -> dict[str, int]:
+    """The 4-hash ensemble as stored on ``Detection.hashes`` (HashSet shape)."""
+    return {
+        "phash": hashes.phash,
+        "dhash": hashes.dhash,
+        "whash": hashes.whash,
+        "ahash": hashes.ahash,
+    }
+
+
+def _image_hashes_to_guild_hash(hashes: ImageHashes, added_by: int) -> GuildHash:
+    return GuildHash(
+        hash_id=f"{hashes.phash:016x}",
+        phash=hashes.phash,
+        dhash=hashes.dhash,
+        whash=hashes.whash,
+        ahash=hashes.ahash,
+        mphash=hashes.mphash,
+        mdhash=hashes.mdhash,
+        mwhash=hashes.mwhash,
+        mahash=hashes.mahash,
+        source="review_confirm",
+        added_by=added_by,
+    )
+
+
 async def handle_review_button(
     ctx: InteractionContext, parsed: ParsedCustomId, deps: InteractionDeps
 ) -> InteractionResponse:
@@ -618,38 +825,150 @@ async def handle_review_button(
 
     Every report action is a state change requiring ``MANAGE_GUILD``; the check
     runs on *this* click's member permissions, never the message's original
-    author or any cached value.
+    author or any cached value. The detection lookup is guild-scoped, so a
+    forged ``custom_id`` carrying another guild's detection id resolves to
+    nothing here.
     """
     _require(ctx, Permission.MANAGE_GUILD)
     assert ctx.guild_id is not None
     action = parsed.action
     detection_id = parsed.detection_id
 
+    det = await deps.get_detection(ctx.guild_id, detection_id)
+    if det is None:
+        return InteractionResponse("button.detection_missing", {"detection_id": detection_id})
+
     if action is ReviewAction.CONFIRM_SCAM:
+        # All REST/network work runs before the first DB write -- see
+        # _resolve_image_hashes on why that ordering is load-bearing.
+        hashes = await _resolve_image_hashes(deps, det)
+        await deps.rest_delete_message(det.channel_id, det.message_id)
+        if hashes is not None:
+            await deps.add_guild_hash(
+                ctx.guild_id, _image_hashes_to_guild_hash(hashes, ctx.user_id)
+            )
+            if det.hashes is None:
+                # Member reports are filed without hashes; now that a moderator
+                # confirmed and we re-hashed the image, keep the result so the
+                # other buttons (whitelist, submit to global) still work after
+                # the original message -- just deleted above -- is gone.
+                await deps.set_detection_hashes(
+                    ctx.guild_id, detection_id, _hash_ensemble_dict(hashes)
+                )
+        await deps.set_detection_action(ctx.guild_id, detection_id, "confirmed")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(detection_id))
-        return InteractionResponse("button.confirmed_scam", {"detection_id": detection_id})
+        key = "button.confirmed_scam" if hashes is not None else "button.confirmed_no_hash"
+        return InteractionResponse(
+            key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
+        )
+
     if action is ReviewAction.FALSE_POSITIVE:
+        hashes = await _resolve_image_hashes(deps, det)
+        # If enforcement already banned the uploader, a false positive must
+        # actually free them -- best-effort, before the first DB write.
+        await deps.rest_unban(
+            ctx.guild_id,
+            det.uploader_id,
+            reason=f"Optimus: detection #{detection_id} marked false positive",
+        )
+        if hashes is not None:
+            await deps.add_whitelist(
+                ctx.guild_id,
+                GuildWhitelist(
+                    phash=hashes.phash,
+                    dhash=hashes.dhash,
+                    whash=hashes.whash,
+                    reason=f"false positive: detection #{detection_id}",
+                    added_by=ctx.user_id,
+                ),
+            )
         await deps.reverse_detection_action(ctx.guild_id, detection_id)
         await deps.audit(
             ctx.guild_id, ctx.user_id, "review.false_positive", target=str(detection_id)
         )
-        return InteractionResponse("button.marked_false_positive", {"detection_id": detection_id})
+        key = (
+            "button.marked_false_positive"
+            if hashes is not None
+            else "button.marked_false_positive_no_hash"
+        )
+        return InteractionResponse(
+            key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
+        )
+
     if action is ReviewAction.BAN_UPLOADER:
+        config = await deps.get_config(ctx.guild_id)
+        purge_hours = min(int(config.get("ban_purge_hours", 24)), 168)  # Discord caps at 7d
+        banned = await deps.rest_ban(
+            ctx.guild_id,
+            det.uploader_id,
+            reason=f"Optimus: scam image (detection #{detection_id})",
+            purge_seconds=purge_hours * 3600,
+        )
+        if not banned:
+            return InteractionResponse("button.action_failed")
+        await deps.set_detection_action(ctx.guild_id, detection_id, "banned")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.ban_uploader", target=str(detection_id))
-        return InteractionResponse("button.uploader_banned")
+        return InteractionResponse(
+            "button.uploader_banned",
+            card_note_key="card.handled",
+            card_note_params={"action": BUTTON_LABELS[action], "user_id": ctx.user_id},
+        )
+
     if action is ReviewAction.UNBAN:
+        unbanned = await deps.rest_unban(
+            ctx.guild_id,
+            det.uploader_id,
+            reason=f"Optimus: unbanned by moderator (detection #{detection_id})",
+        )
+        if not unbanned:
+            return InteractionResponse("button.action_failed")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.unban", target=str(detection_id))
-        return InteractionResponse("button.uploader_unbanned")
+        return InteractionResponse("button.uploader_unbanned", **_card_note(action, ctx.user_id))
+
     if action is ReviewAction.WHITELIST_IMAGE:
+        hashes = await _resolve_image_hashes(deps, det)
+        if hashes is None:
+            return InteractionResponse("button.no_image")
+        await deps.add_whitelist(
+            ctx.guild_id,
+            GuildWhitelist(
+                phash=hashes.phash,
+                dhash=hashes.dhash,
+                whash=hashes.whash,
+                reason=f"review: detection #{detection_id}",
+                added_by=ctx.user_id,
+            ),
+        )
         await deps.audit(
             ctx.guild_id, ctx.user_id, "review.whitelist_image", target=str(detection_id)
         )
-        return InteractionResponse("button.image_whitelisted")
+        return InteractionResponse("button.image_whitelisted", **_card_note(action, ctx.user_id))
+
     if action is ReviewAction.SUBMIT_GLOBAL:
+        stored = det.hashes
+        hash_id = f"{int(stored['phash']):016x}" if stored else None
+        local = await deps.local_hash(ctx.guild_id, hash_id) if hash_id is not None else None
+        if local is None:
+            # The global pipeline only accepts hashes the guild has actually
+            # blocklisted -- Confirm scam stores one; do that first.
+            return InteractionResponse("button.confirm_first")
+        try:
+            await deps.global_service().submit(
+                hash_id=local.hash_id,
+                phash=local.phash,
+                dhash=local.dhash,
+                whash=local.whash,
+                submitter_user_id=ctx.user_id,
+                submitter_guild_id=ctx.guild_id,
+            )
+        except SubmissionDenied as denied:
+            if denied.reason == "rate_limited":
+                raise InteractionRejected(CommandError.RATE_LIMITED) from denied
+            raise InteractionRejected(CommandError.BELOW_THRESHOLD) from denied
         await deps.audit(
             ctx.guild_id, ctx.user_id, "review.submit_global", target=str(detection_id)
         )
-        return InteractionResponse("button.submitted_global")
+        return InteractionResponse("button.submitted_global", **_card_note(action, ctx.user_id))
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
@@ -682,6 +1001,14 @@ async def handle_component(
             appeal = await deps.get_appeal(ctx.guild_id, ref_id)
             if appeal is not None:
                 detection_id = int(appeal["detection_id"])
+                # An approved appeal must actually lift the enforcement, not
+                # just mark the row: unban is best-effort (a no-op failure if
+                # the user was never banned).
+                await deps.rest_unban(
+                    ctx.guild_id,
+                    int(appeal["user_id"]),
+                    reason=f"Optimus: appeal approved (detection #{detection_id})",
+                )
                 await deps.reverse_detection_action(ctx.guild_id, detection_id)
             await deps.audit(ctx.guild_id, ctx.user_id, "appeal.approve", target=str(ref_id))
             return InteractionResponse("button.appeal_approved")

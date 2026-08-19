@@ -71,6 +71,11 @@ instead of a traceback.
 Optimus only acts on images you've shown it. In your server, use the slash
 commands (registered automatically on first run):
 
+- **`/setup`** — one command to create the private **#optimus-review** channel
+  (pass `mod_role:` to grant your moderator role access) where every detection
+  posts a review card with Confirm / False positive / Ban buttons. The
+  **[Moderator Guide](docs/moderator-guide.md)** covers the full review
+  workflow, every button, and every setting — share it with your mod team.
 - **`/scamhash add`** — attach a scam image to block it. From now on Optimus
   catches re-posts of that image and variants of it.
 - **`/scamhash review`** — point at a message that was already posted (link or
@@ -124,6 +129,8 @@ card — this lane never deletes, bans, or stores a hash on its own. Disable wit
 **You don't need any of this to run the bot.** These cover the internals and
 running at scale:
 
+- [docs/moderator-guide.md](docs/moderator-guide.md) — hand this to your mod
+  team: setup, the review workflow, every button, command, and setting.
 - [docs/](docs/README.md) — full documentation index.
 - [docs/architecture.md](docs/architecture.md) — system design and the
   six-service distributed topology (`OPTIMUS_MODE=distributed`) for very large

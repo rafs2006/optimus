@@ -15,6 +15,7 @@ from optimus.services.interactions.attachment_hash import (
 from optimus.services.interactions.handlers import (
     _CONFIG_VIEW_ORDER,
     _HASH_LIST_PREVIEW_LIMIT,
+    DetectionFacts,
     InteractionContext,
     handle_command,
     handle_component,
@@ -62,6 +63,29 @@ class FakeDeps:
         #: Extra get_config fields (e.g. action_policy/safe_mode) so reviewmsg
         #: outcome-reporting tests can drive each policy branch.
         self.config: dict[str, Any] = {"locale": "en", **flags.get("config", {})}
+        # -- review-button surface -------------------------------------------
+        #: Explicit rows; when absent, get_detection fabricates one per id
+        #: (with stored hashes) unless ``detection_missing`` is set.
+        self.detections: dict[int, DetectionFacts] = dict(flags.get("detections", {}))
+        self._detection_missing = flags.get("detection_missing", False)
+        #: hashes for fabricated detections; pass ``stored_hashes=None`` to
+        #: model a member report filed without hashes.
+        self._stored_hashes = flags.get(
+            "stored_hashes", {"phash": 0xABC, "dhash": 2, "whash": 3, "ahash": 4}
+        )
+        self._attachment_url = flags.get("attachment_url", "https://cdn/att.png")
+        self._rest_ban_ok = flags.get("rest_ban_ok", True)
+        self._rest_unban_ok = flags.get("rest_unban_ok", True)
+        #: id the fake provisioner returns; ``None`` models a REST refusal
+        #: (bot missing Manage Channels).
+        self._created_channel_id = flags.get("created_channel_id", 555)
+        self.created_channels: list[dict[str, Any]] = []
+        self.deleted_messages: list[tuple[int, int]] = []
+        self.bans: list[dict[str, Any]] = []
+        self.unbans: list[tuple[int, int]] = []
+        self.detection_actions: list[tuple[int, str]] = []
+        self.backfilled_hashes: list[tuple[int, dict[str, int]]] = []
+        self.whitelisted: list[GuildWhitelist] = []
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
         self.hashes[gh.hash_id] = gh
@@ -74,6 +98,7 @@ class FakeDeps:
         return list(self.hashes.values())
 
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist:
+        self.whitelisted.append(entry)
         return entry
 
     async def get_config(self, guild_id: int) -> dict[str, Any]:
@@ -176,6 +201,63 @@ class FakeDeps:
         )
         self.hashes[hash_id] = gh
         return gh
+
+    async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None:
+        if self._detection_missing:
+            return None
+        if detection_id in self.detections:
+            return self.detections[detection_id]
+        return DetectionFacts(
+            detection_id=detection_id,
+            channel_id=111,
+            message_id=222,
+            attachment_id=1,
+            uploader_id=333,
+            hashes=self._stored_hashes,
+        )
+
+    async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None:
+        self.detection_actions.append((detection_id, action))
+
+    async def set_detection_hashes(
+        self, guild_id: int, detection_id: int, hashes: dict[str, int]
+    ) -> None:
+        self.backfilled_hashes.append((detection_id, hashes))
+
+    async def rest_delete_message(self, channel_id: int, message_id: int) -> bool:
+        self.deleted_messages.append((channel_id, message_id))
+        return True
+
+    async def rest_ban(
+        self, guild_id: int, user_id: int, *, reason: str, purge_seconds: int
+    ) -> bool:
+        if not self._rest_ban_ok:
+            return False
+        self.bans.append(
+            {"guild_id": guild_id, "user_id": user_id, "reason": reason, "purge": purge_seconds}
+        )
+        return True
+
+    async def rest_unban(self, guild_id: int, user_id: int, *, reason: str) -> bool:
+        if not self._rest_unban_ok:
+            return False
+        self.unbans.append((guild_id, user_id))
+        return True
+
+    async def rest_attachment_url(
+        self, channel_id: int, message_id: int, attachment_id: int
+    ) -> str | None:
+        return self._attachment_url
+
+    async def rest_create_review_channel(
+        self, guild_id: int, *, name: str, mod_role_ids: list[int]
+    ) -> int | None:
+        if self._created_channel_id is None:
+            return None
+        self.created_channels.append(
+            {"guild_id": guild_id, "name": name, "mod_role_ids": mod_role_ids}
+        )
+        return self._created_channel_id
 
     async def submit_confirmed_scam(
         self,
@@ -394,24 +476,196 @@ async def test_review_button_denied_without_manage_guild() -> None:
 
 
 @pytest.mark.asyncio
-async def test_false_positive_reverses_and_audits() -> None:
+async def test_review_button_unknown_detection_reports_missing() -> None:
+    """A forged/cross-guild detection id resolves to nothing and does nothing."""
+    deps = FakeDeps(detection_missing=True)
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.detection_missing"
+    assert not deps.hashes
+    assert not deps.deleted_messages
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_false_positive_whitelists_unbans_reverses_and_audits() -> None:
     deps = FakeDeps()
     ctx = _ctx("", perms=MANAGE)
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
     resp = await handle_review_button(ctx, parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive"
+    assert resp.card_note_key == "card.handled"
     assert deps.reversed == [5]
+    # The i18n reply says "the image was whitelisted" -- it must actually be.
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+    # And an already-banned uploader must actually be freed (best-effort).
+    assert deps.unbans == [(1, 333)]
     assert deps.audits[0][2] == "review.false_positive"
 
 
 @pytest.mark.asyncio
-async def test_confirm_scam_audits() -> None:
+async def test_false_positive_without_image_still_reverses() -> None:
+    deps = FakeDeps(stored_hashes=None, attachment_url=None)
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.marked_false_positive_no_hash"
+    assert deps.reversed == [5]
+    assert not deps.whitelisted
+
+
+@pytest.mark.asyncio
+async def test_confirm_scam_blocklists_stored_hashes_and_deletes() -> None:
     deps = FakeDeps()
     ctx = _ctx("", perms=MANAGE)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
     resp = await handle_review_button(ctx, parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
+    assert resp.card_note_key == "card.handled"
+    # Stored detection hashes -> blocklisted under phash-derived id, no re-fetch.
+    stored = deps.hashes[f"{0xABC:016x}"]
+    assert stored.source == "review_confirm"
+    assert stored.added_by == 99
+    assert deps.deleted_messages == [(111, 222)]
+    assert deps.detection_actions == [(9, "confirmed")]
+    # Hashes were already stored on the row -> no backfill write.
+    assert not deps.backfilled_hashes
     assert deps.audits[0] == (1, 99, "review.confirm_scam", "9")
+
+
+@pytest.mark.asyncio
+async def test_confirm_scam_on_member_report_refetches_and_backfills() -> None:
+    """Member reports carry no hashes; Confirm re-fetches, hashes, backfills."""
+    deps = FakeDeps(stored_hashes=None)
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_scam"
+    # FakeDeps.compute_attachment_hashes derives phash from attachment id 1.
+    assert f"{1:016x}" in deps.hashes
+    # Backfilled so Whitelist/Submit-to-global still work post-delete.
+    assert deps.backfilled_hashes == [(9, {"phash": 1, "dhash": 1, "whash": 1, "ahash": 0})]
+    assert deps.detection_actions == [(9, "confirmed")]
+
+
+@pytest.mark.asyncio
+async def test_confirm_scam_with_image_gone_still_confirms() -> None:
+    deps = FakeDeps(stored_hashes=None, attachment_url=None)
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirmed_no_hash"
+    assert not deps.hashes
+    assert deps.deleted_messages == [(111, 222)]
+    assert deps.detection_actions == [(9, "confirmed")]
+
+
+@pytest.mark.asyncio
+async def test_ban_uploader_bans_with_configured_purge() -> None:
+    deps = FakeDeps(config={"ban_purge_hours": 48})
+    parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.uploader_banned"
+    assert deps.bans == [
+        {
+            "guild_id": 1,
+            "user_id": 333,
+            "reason": "Optimus: scam image (detection #5)",
+            "purge": 48 * 3600,
+        }
+    ]
+    assert deps.detection_actions == [(5, "banned")]
+    assert deps.audits[0][2] == "review.ban_uploader"
+
+
+@pytest.mark.asyncio
+async def test_ban_uploader_purge_capped_at_discord_limit() -> None:
+    deps = FakeDeps(config={"ban_purge_hours": 9999})
+    parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
+    await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert deps.bans[0]["purge"] == 168 * 3600  # 7 days
+
+
+@pytest.mark.asyncio
+async def test_ban_uploader_rest_refusal_reports_failure() -> None:
+    """Role hierarchy / missing perm -> tell the mod, change no state."""
+    deps = FakeDeps(rest_ban_ok=False)
+    parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.action_failed"
+    assert not deps.detection_actions
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_unban_unbans_and_audits() -> None:
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.UNBAN, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.uploader_unbanned"
+    assert deps.unbans == [(1, 333)]
+    assert deps.audits[0][2] == "review.unban"
+
+
+@pytest.mark.asyncio
+async def test_unban_rest_refusal_reports_failure() -> None:
+    deps = FakeDeps(rest_unban_ok=False)
+    parsed = ParsedCustomId(action=ReviewAction.UNBAN, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.action_failed"
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_whitelist_image_adds_whitelist_entry() -> None:
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.WHITELIST_IMAGE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.image_whitelisted"
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+    assert deps.whitelisted[0].added_by == 99
+    assert deps.audits[0][2] == "review.whitelist_image"
+
+
+@pytest.mark.asyncio
+async def test_whitelist_image_gone_reports_no_image() -> None:
+    deps = FakeDeps(stored_hashes=None, attachment_url=None)
+    parsed = ParsedCustomId(action=ReviewAction.WHITELIST_IMAGE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.no_image"
+    assert not deps.whitelisted
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_submit_global_button_requires_confirmed_local_hash() -> None:
+    """Without a blocklisted local hash the button points at Confirm scam."""
+    deps = FakeDeps()  # detection has hashes, but nothing in the local blocklist
+    parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.confirm_first"
+    assert not deps._global_service.submitted
+
+
+@pytest.mark.asyncio
+async def test_submit_global_button_submits_confirmed_hash() -> None:
+    deps = FakeDeps()
+    # Simulate a prior Confirm scam press having blocklisted the image.
+    confirm = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    await handle_review_button(_ctx("", perms=MANAGE), confirm, deps)
+    parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.submitted_global"
+    assert deps._global_service.submitted == [f"{0xABC:016x}"]
+    assert deps.audits[-1][2] == "review.submit_global"
+
+
+@pytest.mark.asyncio
+async def test_submit_global_button_rate_limited_rejected() -> None:
+    deps = FakeDeps(submit_error="rate_limited")
+    confirm = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+    await handle_review_button(_ctx("", perms=MANAGE), confirm, deps)
+    parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert exc.value.reason is CommandError.RATE_LIMITED
 
 
 # --- appeal lifecycle ----------------------------------------------------------
@@ -480,6 +734,9 @@ async def test_appeal_approve_reverses_action() -> None:
     assert resp.i18n_key == "button.appeal_approved"
     assert deps.resolved == [(appeal_id, True)]
     assert deps.reversed == [333]
+    # Approval must actually lift the enforcement: best-effort unban of the
+    # appellant (open_appeal above filed it for user 99).
+    assert deps.unbans == [(1, 99)]
 
 
 @pytest.mark.asyncio
@@ -738,6 +995,76 @@ async def test_config_set_field_name_matches_config_view_field_name() -> None:
     assert "review_channel_id" not in view_resp.params["summary"]
 
 
+# --- /setup: provision or link the shared review channel -----------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_creates_private_channel_and_links_it() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup", mod_role=777), deps)
+    assert resp.i18n_key == "command.setup_created"
+    assert resp.params == {"channel_id": 555}
+    assert deps.created_channels == [
+        {"guild_id": 1, "name": "optimus-review", "mod_role_ids": [777]}
+    ]
+    assert ("review_channel", 555) in deps.config_set
+    assert deps.audits[0][2] == "setup.review_channel"
+
+
+@pytest.mark.asyncio
+async def test_setup_without_role_creates_admin_only_channel() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup"), deps)
+    # Different reply key: it must warn that only admins + the bot can see it.
+    assert resp.i18n_key == "command.setup_created_no_role"
+    assert deps.created_channels[0]["mod_role_ids"] == []
+    assert ("review_channel", 555) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_links_existing_channel_without_creating() -> None:
+    deps = FakeDeps()
+    resp = await handle_command(_ctx("setup", channel=888), deps)
+    assert resp.i18n_key == "command.setup_linked"
+    assert resp.params == {"channel_id": 888}
+    assert not deps.created_channels
+    assert ("review_channel", 888) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_with_channel_option_repoints_over_existing() -> None:
+    deps = FakeDeps(config={"review_channel": 444})
+    resp = await handle_command(_ctx("setup", channel=888), deps)
+    assert resp.i18n_key == "command.setup_linked"
+    assert ("review_channel", 888) in deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_rerun_reports_existing_channel_instead_of_duplicating() -> None:
+    deps = FakeDeps(config={"review_channel": 444})
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == "command.setup_already"
+    assert resp.params == {"channel_id": 444}
+    assert not deps.created_channels
+    assert not deps.config_set
+
+
+@pytest.mark.asyncio
+async def test_setup_rest_refusal_reports_failure_without_writes() -> None:
+    deps = FakeDeps(created_channel_id=None)
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == "command.setup_failed"
+    assert not deps.config_set
+    assert not deps.audits
+
+
+@pytest.mark.asyncio
+async def test_setup_requires_manage_guild() -> None:
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("setup", perms=NONE), FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
+
+
 @pytest.mark.asyncio
 async def test_stats_non_empty() -> None:
     resp = await handle_command(_ctx("stats"), FakeDeps())
@@ -809,27 +1136,6 @@ async def test_submit_global_rate_limited_rejected() -> None:
     with pytest.raises(InteractionRejected) as exc:
         await handle_command(_ctx("submit_global", hash_id="abc"), deps)
     assert exc.value.reason is CommandError.RATE_LIMITED
-
-
-# --- remaining review button actions -------------------------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("action", "key"),
-    [
-        (ReviewAction.BAN_UPLOADER, "button.uploader_banned"),
-        (ReviewAction.UNBAN, "button.uploader_unbanned"),
-        (ReviewAction.WHITELIST_IMAGE, "button.image_whitelisted"),
-        (ReviewAction.SUBMIT_GLOBAL, "button.submitted_global"),
-    ],
-)
-async def test_review_button_actions_audit(action: ReviewAction, key: str) -> None:
-    deps = FakeDeps()
-    parsed = ParsedCustomId(action=action, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
-    assert resp.i18n_key == key
-    assert deps.audits[0][1] == 99
 
 
 # --- /scamhash reviewmsg and the "Review as scam" context-menu entry ----------

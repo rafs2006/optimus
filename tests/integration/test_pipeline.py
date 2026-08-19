@@ -353,6 +353,13 @@ async def test_known_scam_image_flows_to_ban_action_and_review(
     assert detection is not None
     assert detection.verdict == "scam"
     assert detection.action_taken == "delete_ban"
+    # The hash ensemble rides along on the row so the review-card buttons
+    # (Confirm scam / Whitelist / Submit to global) can act without re-fetching
+    # an image Discord may have deleted by then.
+    assert detection.hashes is not None
+    assert set(detection.hashes) == {"phash", "dhash", "whash", "ahash"}
+    assert verdict.hashes is not None
+    assert detection.hashes == verdict.hashes.model_dump()
     audits = await ModActionRepository(db_session, GUILD_ID).list_recent()
     assert any(a.action == "delete_ban" and a.target == str(SCAM_UPLOADER) for a in audits)
     assert len(bus._moderation.review_posts) == 1  # type: ignore[attr-defined]

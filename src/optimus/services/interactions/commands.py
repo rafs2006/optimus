@@ -166,6 +166,23 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="setup",
+        description="Create the private mod-review channel where detections await approval.",
+        required_permission=Permission.MANAGE_GUILD,
+        options=(
+            Option(
+                "mod_role",
+                "Moderator role that should see the review channel (admins always can).",
+                OPT_ROLE,
+            ),
+            Option(
+                "channel",
+                "Use this existing channel for reviews instead of creating a new one.",
+                OPT_CHANNEL,
+            ),
+        ),
+    ),
+    Command(
         name="stats",
         description="Show detection activity and database status for this server.",
         required_permission=Permission.MANAGE_GUILD,
