@@ -346,8 +346,36 @@ async def run_simple() -> None:  # pragma: no cover - runtime entrypoint
     # every punitive action raise TypeError/AttributeError at runtime.
     from optimus.services.moderation.rest_adapter import HikariRestActions
 
-    app = await SimpleApp.build(settings, rest=HikariRestActions(rest), bot_user_id=bot_user_id)
+    rest_actions = HikariRestActions(rest)
+    app = await SimpleApp.build(settings, rest=rest_actions, bot_user_id=bot_user_id)
     await app.dispatcher.start()
+
+    # Optional read-only web dashboard, mounted on the health server so it
+    # shares the one port simple-mode deployments already expose. Must be
+    # wired before health.start() freezes the aiohttp router.
+    from optimus.dashboard.service import build_dashboard
+
+    client_id = settings.discord_client_id
+    if settings.dashboard_enabled and not client_id:
+        # OAuth needs the *application* id, which for old bots can differ from
+        # the bot user id; fetch it rather than guessing.
+        application = await rest.fetch_application()
+        client_id = str(application.id)
+    dashboard = build_dashboard(
+        settings,
+        client_id=client_id,
+        scope=app._scope,
+        fetch_owner_ids=rest_actions.fetch_owner_ids,
+    )
+    if dashboard is not None:
+
+        async def _close_dashboard(_app: object) -> None:
+            await dashboard.close()
+
+        app.health.add_routes(dashboard.routes())
+        app.health.add_cleanup(_close_dashboard)
+        _log.info("dashboard_mounted", url=f"{settings.dashboard_base_url.rstrip('/')}/dash")
+
     await app.health.start()
     app.start_pipeline()
 

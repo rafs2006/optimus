@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, CollectorRegistry, generate_latest
@@ -47,6 +47,18 @@ class HealthServer:
             ]
         )
         self._runner: web.AppRunner | None = None
+
+    def add_routes(self, routes: Iterable[web.RouteDef]) -> None:
+        """Mount extra routes (e.g. the dashboard) onto this server's app.
+
+        Must be called before :meth:`start` — aiohttp freezes the router once
+        the runner is set up.
+        """
+        self._app.add_routes(list(routes))
+
+    def add_cleanup(self, callback: Callable[[web.Application], Awaitable[None]]) -> None:
+        """Register an async cleanup hook run when the server shuts down."""
+        self._app.on_cleanup.append(callback)
 
     def add_readiness_check(self, check: ReadinessCheck, *, name: str = "check") -> None:
         """Register an async readiness check returning ``True`` when ready.

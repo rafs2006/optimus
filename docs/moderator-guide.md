@@ -177,6 +177,11 @@ community can ever cause action on your server**:
 - **Privacy:** no message text is stored; only perceptual hashes, ids needed
   for enforcement, and (opt-in) evidence. `/forget_me` and
   `/delete_server_data` are honored fully.
+- **Web dashboard (optional):** if whoever hosts the bot has enabled it, you
+  can browse scan activity, every detection (including clean scans), and the
+  audit log in a browser with your Discord login — anyone with **Manage
+  Server** in this server gets access automatically. It is read-only; actions
+  still happen here in Discord. See [dashboard.md](dashboard.md).
 
 Found a bug or want a feature? Open an issue on
 [GitHub](https://github.com/rafs2006/optimus/issues).
