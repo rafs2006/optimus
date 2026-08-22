@@ -302,6 +302,11 @@ class ModerationCoordinator:
                     matched_hash_id=event.matched_hash_id,
                     global_match=event.matched_source == "global",
                     reported_by=event.reported_by,
+                    # Show the image only while it still exists. A member report
+                    # deletes nothing, and a delete that was refused for want of
+                    # permission leaves it up too -- both are precisely the cards
+                    # a moderator has to eyeball before pressing Confirm.
+                    image_url=None if result.message_deleted else event.source_url,
                     ocr_summary=_ocr_summary(event.ocr),
                     problem=problem,
                     partial=result.partial,

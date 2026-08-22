@@ -288,6 +288,7 @@ class DetectionWorker:
             matched_hash_id=outcome.matched_hash_id,
             matched_source=outcome.matched_source,
             ocr=ocr,
+            source_url=event.source_url,
             distances=outcome.distances,
         )
 

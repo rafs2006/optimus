@@ -46,7 +46,12 @@ class _FakeRest:
         self.dms.append(user_id)
 
 
-def _event(*, verdict: Verdict = Verdict.SCAM, confidence: float = 0.95) -> VerdictEvent:
+def _event(
+    *,
+    verdict: Verdict = Verdict.SCAM,
+    confidence: float = 0.95,
+    source_url: str | None = None,
+) -> VerdictEvent:
     return VerdictEvent(
         correlation_id="c",
         occurred_at=datetime.now(UTC),
@@ -58,6 +63,7 @@ def _event(*, verdict: Verdict = Verdict.SCAM, confidence: float = 0.95) -> Verd
         idempotency_key="idem-1",
         verdict=verdict,
         confidence=confidence,
+        source_url=source_url,
     )
 
 
@@ -636,3 +642,62 @@ async def test_campaign_sweep_still_runs_for_a_partially_applied_action() -> Non
     await coord.handle_verdict(_event())
 
     assert swept == [42]
+
+
+# --- Showing the image on the card, but only while it exists -------------------
+
+
+async def test_the_card_shows_the_image_when_nothing_was_deleted() -> None:
+    """A member report deletes nothing, so the reported image is still live."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+
+    await coord.handle_verdict(
+        _event(verdict=Verdict.AMBIGUOUS, confidence=0.6, source_url="https://cdn/x.png")
+    )
+
+    assert "delete_message" not in rest.calls
+    assert len(reports) == 1
+    assert reports[0].image_url == "https://cdn/x.png"
+
+
+async def test_the_card_drops_the_image_once_the_message_is_deleted() -> None:
+    """The CDN url 404s after the delete; a broken image is worse than none."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+
+    result = await coord.handle_verdict(_event(source_url="https://cdn/x.png"))
+
+    assert result.success and "delete_message" in rest.calls
+    assert reports[0].image_url is None
+
+
+async def test_a_refused_delete_still_shows_the_image() -> None:
+    """The reported incident: the message survives, so the mod can still see it."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+
+    async def _refuse(channel_id: int, message_id: int) -> None:
+        raise RuntimeError("missing access")
+
+    rest.delete_message = _refuse  # type: ignore[method-assign]
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+
+    result = await coord.handle_verdict(_event(source_url="https://cdn/x.png"))
+
+    assert result.message_deleted is False
+    assert reports[0].image_url == "https://cdn/x.png"

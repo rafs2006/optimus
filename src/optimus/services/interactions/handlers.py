@@ -312,6 +312,7 @@ class InteractionDeps(Protocol):
         channel_id: int,
         message_id: int,
         attachment_id: int,
+        attachment_url: str,
         uploader_id: int,
         reporter_id: int,
     ) -> None:
@@ -426,11 +427,16 @@ async def _cmd_report_message(
     if not attachments:
         return InteractionResponse("command.report_no_images")
     message_id = int(ctx.options["message_id"])
+    attachment_id, attachment_url = attachments[0]
     await deps.submit_user_report(
         ctx.guild_id,
         channel_id=int(ctx.options["channel_id"]),
         message_id=message_id,
-        attachment_id=attachments[0][0],
+        attachment_id=attachment_id,
+        # Carried so the review card can show the reported image. Nothing is
+        # deleted by a member report, so the URL is still live when the
+        # moderator opens the card.
+        attachment_url=attachment_url,
         uploader_id=int(ctx.options["author_id"]),
         reporter_id=ctx.user_id,
     )

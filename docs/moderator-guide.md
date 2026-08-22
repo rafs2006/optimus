@@ -42,7 +42,13 @@ card does, and every command and setting.
 
 Every detection — an automatic hash/risk match, a member report, or a
 moderator's `/scamhash review` — posts a **review card** into the review
-channel with the evidence and five buttons:
+channel with the evidence and five buttons.
+
+The card's **Message** field is a jump link straight to the offending message,
+and when the message still exists the image itself is shown on the card — so a
+member report can be judged without leaving the review channel. Once the message
+has been deleted the image is omitted rather than shown broken; recovering it
+after the fact requires `optin_evidence_storage`.
 
 | Button | What it actually does |
 | --- | --- |

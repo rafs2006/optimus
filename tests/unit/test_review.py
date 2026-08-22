@@ -224,3 +224,60 @@ def test_report_omits_both_markers_on_a_clean_enforcement() -> None:
     names = [name for name, _ in report_fields(data)]
     assert "Needs attention" not in names
     assert "Partially applied" not in names
+
+
+# --- The card has to be verifiable: a jump link and the image itself ----------
+
+
+def _card(**overrides: object) -> ReportData:
+    base: dict[str, object] = {
+        "detection_id": 9,
+        "guild_id": 1402357722430570498,
+        "channel_id": 1402887429324673035,
+        "message_id": 1517941473855799567,
+        "uploader_id": 1409938900482396400,
+        "verdict": "ambiguous",
+        "confidence": 1.0,
+        "action_taken": "report_only",
+    }
+    base.update(overrides)
+    return ReportData(**base)  # type: ignore[arg-type]
+
+
+def test_the_message_field_is_a_jump_link_that_still_shows_the_id() -> None:
+    """Verifying a report used to mean hunting for the message by hand."""
+    data = _card()
+    value = dict(report_fields(data))["Message"]
+
+    assert value == (
+        "[1517941473855799567](https://discord.com/channels/"
+        "1402357722430570498/1402887429324673035/1517941473855799567)"
+    )
+    assert str(data.message_id) in value  # still copy-pasteable into /scamhash
+
+
+def test_the_image_is_rendered_on_the_card_when_it_still_exists() -> None:
+    import hikari
+
+    embed = build_embed(_card(image_url="https://cdn.example/scam.png?ex=1"))
+
+    assert isinstance(embed, hikari.Embed)
+    assert embed.image is not None
+    assert embed.image.url == "https://cdn.example/scam.png?ex=1"
+
+
+def test_no_image_is_set_when_there_is_nothing_to_show() -> None:
+    """An empty image slot beats a broken one on a deleted attachment."""
+    import hikari
+
+    embed = build_embed(_card())
+
+    assert isinstance(embed, hikari.Embed)
+    assert embed.image is None
+
+
+def test_the_image_does_not_displace_any_field() -> None:
+    with_image = build_embed(_card(image_url="https://cdn.example/scam.png"))
+    without = build_embed(_card())
+
+    assert len(with_image.fields) == len(without.fields)  # type: ignore[attr-defined]

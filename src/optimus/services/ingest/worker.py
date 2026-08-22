@@ -113,6 +113,7 @@ class IngestWorker:
             size_bytes=len(fetched.data),
             sha256=digest,
             data_b64=base64.b64encode(fetched.data).decode("ascii"),
+            source_url=event.url,
         )
 
 

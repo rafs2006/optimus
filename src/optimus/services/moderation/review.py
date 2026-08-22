@@ -73,6 +73,12 @@ class ReportData:
     global_match: bool = False
     swarm_guilds: int | None = None
     evidence_url: str | None = None
+    #: The still-live image, rendered inline on the card so a moderator can judge
+    #: what they are approving without leaving the review channel. Set only when
+    #: the message was *not* deleted -- a deleted attachment's CDN URL 404s, and
+    #: a broken image on the card is worse than none. Stored evidence
+    #: (``evidence_url``) is the path for images that are already gone.
+    image_url: str | None = None
     #: Set when a member filed this via "Report scam to mods" -- shown on the
     #: card so moderators know it is a human report, not an automated match.
     reported_by: int | None = None
@@ -89,6 +95,22 @@ class ReportData:
     locale: str = "en"
 
 
+def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
+    """The canonical Discord deep link to one message."""
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+def message_reference(data: ReportData) -> str:
+    """The message field's value: a clickable jump link that still shows the id.
+
+    The raw id is kept visible because moderators paste it into
+    ``/scamhash review``; the link is what makes the card actionable, since
+    verifying a report previously meant hunting for the message by hand.
+    """
+    url = jump_url(data.guild_id, data.channel_id, data.message_id)
+    return f"[{data.message_id}]({url})"
+
+
 def report_title(data: ReportData) -> str:
     """A short, localized title for the report."""
     return translate(
@@ -102,7 +124,7 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
     fields: list[tuple[str, str]] = [
         (translate("report.field_uploader", loc), f"<@{data.uploader_id}>"),
         (translate("report.field_channel", loc), f"<#{data.channel_id}>"),
-        (translate("report.field_message", loc), str(data.message_id)),
+        (translate("report.field_message", loc), message_reference(data)),
         (translate("report.field_confidence", loc), f"{data.confidence:.2f}"),
         (translate("report.field_action", loc), data.action_taken),
     ]
@@ -163,6 +185,8 @@ def build_embed(data: ReportData) -> object:
     embed = hikari.Embed(title=report_title(data))
     for name, value in report_fields(data):
         embed.add_field(name=name, value=value, inline=True)
+    if data.image_url:
+        embed.set_image(data.image_url)
     return embed
 
 

@@ -118,3 +118,15 @@ async def test_rate_limit_is_per_guild() -> None:
     assert await worker.handle(_event(guild_id=1)) is not None
     # A different guild has its own bucket.
     assert await worker.handle(_event(guild_id=2)) is not None
+
+
+async def test_the_origin_url_is_carried_forward_for_the_review_card() -> None:
+    """The card cannot show the image it is asking about without this."""
+
+    async def fetch(url: str) -> FetchedImage:
+        return FetchedImage(data=DATA, content_type="image/png", final_url=url)
+
+    result = await _worker(fetch).handle(_event(url="https://cdn.test/scam.png?ex=abc"))
+
+    assert result is not None
+    assert result.source_url == "https://cdn.test/scam.png?ex=abc"

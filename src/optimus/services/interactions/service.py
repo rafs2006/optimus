@@ -600,6 +600,7 @@ class DbDeps:
         channel_id: int,
         message_id: int,
         attachment_id: int,
+        attachment_url: str,
         uploader_id: int,
         reporter_id: int,
     ) -> None:
@@ -632,6 +633,7 @@ class DbDeps:
             confidence=1.0,
             matched_hash_id=None,
             reported_by=reporter_id,
+            source_url=attachment_url,
         )
         await self._detection.persist_confirmed_match(self._session, verdict)
         self.pending_verdicts.append(verdict)

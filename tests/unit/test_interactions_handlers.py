@@ -348,6 +348,7 @@ class FakeDeps:
         channel_id: int,
         message_id: int,
         attachment_id: int,
+        attachment_url: str,
         uploader_id: int,
         reporter_id: int,
     ) -> None:
@@ -357,6 +358,7 @@ class FakeDeps:
                 "channel_id": channel_id,
                 "message_id": message_id,
                 "attachment_id": attachment_id,
+                "attachment_url": attachment_url,
                 "uploader_id": uploader_id,
                 "reporter_id": reporter_id,
             }
@@ -1535,6 +1537,8 @@ async def test_report_message_files_review_and_audits() -> None:
             "channel_id": 111,
             "message_id": 222,
             "attachment_id": 1,
+            # Carried so the review card can render the reported image.
+            "attachment_url": "https://x/1.png",
             "uploader_id": 333,
             "reporter_id": 99,
         }
