@@ -277,7 +277,7 @@ here and scale the one axis that turns red:
 | `OPTIMUS_MOD_DISPATCH_CONCURRENCY` | 8 | drain the priority heap faster under raid |
 | `OPTIMUS_RATELIMIT_BACKEND` | **redis** | required once you run >1 replica so limits aren't multiplied |
 | `OPTIMUS_DETECTION_RETENTION_DAYS` | **set it** (e.g. 90) | growth is otherwise unbounded; ~62 MB/day at peak |
-| Monitoring profile | **on** | watch detection in-flight, queue depth, and the global-index lookup latency |
+| Metrics scrape | **wire one up** | watch detection in-flight, queue depth, and the global-index lookup latency ([scaling.md](scaling.md#7-metrics-and-alerting)) |
 
 ## Known limits
 

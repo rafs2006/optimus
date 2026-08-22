@@ -27,8 +27,7 @@ REST-budget and Postgres-growth numbers and a tuned deployment recipe, see
 | Detection backlog | In-flight queue deepens, latency rises | `detection_max_inflight` tuning | [In-flight tuning](#4-in-flight-concurrency) |
 | Unbounded data growth | DB grows forever | Retention purge | [Retention](#5-retention) |
 | DB connection exhaustion | Pool timeouts at high replica count | Pool sizing | [Connection pooling](#6-connection-pooling) |
-| Need visibility | Flying blind under load | Monitoring profile | [Monitoring](#7-monitoring) |
-| Need to be paged | Problems found too late | Alerting | [Alerting](#8-alerting) |
+| Need visibility | Flying blind under load | Scrape `/metrics`, alert on it | [Metrics and alerting](#7-metrics-and-alerting) |
 
 ## 1. Gateway sharding
 
@@ -131,58 +130,60 @@ you scale replicas up, or raise Postgres `max_connections` (and front it with a
 pooler such as PgBouncer) to match `total_replicas * per_replica_cap`. Postgres
 operational guidance is in [operations.md](operations.md).
 
-## 7. Monitoring
+## 7. Metrics and alerting
 
-An **optional** Prometheus + Grafana stack ships in
-[`docker-compose.yml`](../docker-compose.yml) behind the `monitoring` compose
-profile. A plain `docker compose up` does **not** start it. Bring it up with:
+Every service exposes `/metrics` (Prometheus text format), `/healthz`, and
+`/readyz` on `OPTIMUS_HEALTH_PORT` (default 8080). **No collector ships with
+this repo** — bring your own Prometheus, Grafana Agent, Datadog agent, or
+anything else that speaks OpenMetrics, and point it at those endpoints. Scraping
+every 15s is plenty; the endpoint is cheap to serve.
 
-```bash
-docker compose --profile monitoring up -d prometheus grafana
-```
+`/metrics` is unauthenticated by design — it assumes a scraper on a private
+network — and it shares the health port. If that port is reachable from the
+public internet, restrict the scrape path with your platform's network controls.
 
-- **Prometheus** (`:9090`) scrapes all six services on the compose network at
-  `/metrics` (port 8080) every 15s and evaluates the alert rules.
-- **Grafana** (`:3000`, default login `admin`/`admin` — change it) is provisioned
-  with the Prometheus datasource and the **Optimus Overview** dashboard, no
-  manual import. Config lives in [`monitoring/`](../monitoring/).
+If all you need is a quick read on whether the bot is keeping up, `/stats` in
+Discord reports the same pipeline counters to moderators, no scraper required.
+See [moderator-guide.md](moderator-guide.md).
 
-The dashboard covers pipeline throughput (msgs/s), detection in-flight vs max,
-p95 dispatch latency, per-priority queue depth, circuit breaker states, ratelimit
-fallbacks, reject/drop counters, and retention purges — i.e. every lever above
-has a panel to confirm the change worked.
+### Worth graphing
 
-Every service exposes `/metrics`, `/healthz`, and `/readyz` on
-`OPTIMUS_HEALTH_PORT` (default 8080) regardless of the monitoring profile, so you
-can point an existing Prometheus at them instead.
+Every lever above has a metric that confirms the change worked:
 
-## 8. Alerting
+| Question | Metric |
+| -------- | ------ |
+| Is the pipeline moving? | rate of `optimus_ingest_images_fetched_total` and the detection verdict counters |
+| Is detection saturated? | detection in-flight gauge against `detection_max_inflight` |
+| Are actions reaching Discord? | dispatch latency histogram, moderation circuit-breaker state gauge |
+| Is moderation backing up? | `optimus_moderation_priority_queue_depth` |
+| Are we losing work? | `optimus_gateway_images_dropped_total`, `optimus_ingest_images_rejected_total`, `optimus_ingest_rate_limited_total` |
+| Is retention running? | the retention-purge counter ([operations.md](operations.md)) |
 
-The Prometheus rules in [`monitoring/alerts.yml`](../monitoring/alerts.yml) cover
-the conditions that warrant operator attention, with conservative `for:` windows
-to avoid flapping on deploys and bursts:
+Metrics carry no `guild_id` label — cardinality would grow with every server the
+bot joins — so all of these are deployment-wide, never per-server.
 
-| Alert | Fires when |
-| ----- | ---------- |
-| `OptimusServiceDown` | `up == 0` for a service for >2m |
-| `OptimusConsumerStalled` | service up but acking nothing while messages in-flight for >10m (readiness-failing proxy) |
-| `OptimusModerationCircuitOpen` | circuit breaker OPEN >5m (actions not reaching Discord) |
-| `OptimusModerationQueueDepthHigh` | per-priority queue depth >100 sustained 10m |
-| `OptimusRatelimitRedisFallback` | Redis ratelimit fallback active over 5m |
-| `OptimusGatewayDropsIncreasing` / `…Ingest…` / `…Detection…` | reject/drop counters rising >1/s over 5m |
-| `OptimusBusMessagesDropped` | bus discarding undecodable/poison messages |
+### Worth paging on
 
-Thresholds are starting points — tune per deployment. Each rule carries an inline
-comment explaining the intent so you can adjust with context.
+Starting points, not tuned thresholds. Use conservative `for:` windows so
+deploys and traffic bursts do not flap the pager:
+
+| Condition | Suggested rule |
+| --------- | -------------- |
+| A service is gone | `up == 0` for a service for >2m |
+| A consumer stalled | service up but acking nothing while messages are in-flight, >10m |
+| Actions not reaching Discord | moderation circuit breaker OPEN >5m |
+| Moderation backing up | per-priority queue depth >100 sustained 10m |
+| Rate limiting degraded | Redis ratelimit fallback active >5m |
+| Losing work | reject/drop counters rising >1/s over 5m |
 
 ## Recommended scale-up order
 
 1. **Shard the gateway** if guild count requires it (§1).
-2. **Turn on monitoring** (§7) so the next steps are measurable.
+2. **Start scraping `/metrics`** (§7) so the next steps are measurable.
 3. **Scale detection replicas** to your target image rate (§2), confirming with
-   the in-flight and throughput panels.
+   the in-flight and throughput metrics.
 4. **Switch the ratelimit backend to Redis** once you run >1 replica of anything
    rate-limited (§3).
 5. **Size pools and Postgres** for `replicas * per-replica-cap` (§6).
 6. **Enable retention** to bound data growth (§5).
-7. **Wire alerts** to your pager (§8).
+7. **Wire alerts** to your pager (§7).
