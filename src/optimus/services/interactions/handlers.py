@@ -186,6 +186,12 @@ class InteractionDeps(Protocol):
 
     async def disable_safe_mode(self, guild_id: int) -> None: ...
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None: ...
+    async def enforcement_blocked(
+        self, guild_id: int, channel_id: int, *, action: str, locale: str
+    ) -> str | None:
+        """Why enforcement in this channel would be refused, or ``None``."""
+        ...
+
     async def hash_rate_ok(self, user_id: int) -> bool: ...
     async def report_rate_ok(self, user_id: int) -> bool: ...
     async def appeal_cooldown_ok(self, user_id: int) -> bool: ...
@@ -541,7 +547,18 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
         return InteractionResponse("command.reviewmsg_result_safe_mode", params)
     if policy in ("none", "report_only"):
         return InteractionResponse("command.reviewmsg_result_report_only", params)
+    # Enforcement runs asynchronously, so "submitted" is all this reply can
+    # honestly promise -- unless the bot's own permissions already rule the
+    # action out, which is knowable now and is exactly the case that produced
+    # a cheerful "actioned" reply followed by nothing happening. Saying it here
+    # puts the fix in front of the moderator while they are still looking.
+    blocked = await deps.enforcement_blocked(
+        ctx.guild_id, channel_id, action=policy, locale=ctx.locale
+    )
     review_channel = config.get("review_channel")
+    if blocked is not None:
+        params["problem"] = blocked
+        return InteractionResponse("command.reviewmsg_result_blocked", params)
     if review_channel is None:
         return InteractionResponse("command.reviewmsg_result_submitted_no_channel", params)
     params["review_channel"] = review_channel

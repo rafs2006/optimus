@@ -68,6 +68,9 @@ class FakeDeps:
         #: attachment_id -> exception to raise, or a hash_id string to return.
         self._attachment_outcomes: dict[int, Any] = flags.get("attachment_outcomes", {})
         self.confirmed_scams: list[dict[str, Any]] = []
+        #: Reason enforcement_blocked returns; None means "nothing in the way".
+        self._enforcement_blocked: str | None = flags.get("enforcement_blocked")
+        self.blocked_checks: list[tuple[int, int, str]] = []
         #: Extra get_config fields (e.g. action_policy/safe_mode) so reviewmsg
         #: outcome-reporting tests can drive each policy branch.
         self.config: dict[str, Any] = {"locale": "en", **flags.get("config", {})}
@@ -152,6 +155,12 @@ class FakeDeps:
 
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None:
         return self.hashes.get(hash_id)
+
+    async def enforcement_blocked(
+        self, guild_id: int, channel_id: int, *, action: str, locale: str
+    ) -> str | None:
+        self.blocked_checks.append((guild_id, channel_id, action))
+        return self._enforcement_blocked
 
     async def hash_rate_ok(self, user_id: int) -> bool:
         return self._hash_rate_ok
@@ -1634,3 +1643,66 @@ async def test_confirm_scam_button_runs_the_moderation_pipeline() -> None:
     assert submitted["uploader_id"] == 333
     assert submitted["channel_id"] == 111
     assert submitted["message_id"] == 222
+
+
+@pytest.mark.asyncio
+async def test_reviewmsg_reply_warns_when_permissions_already_rule_the_action_out() -> None:
+    """The reply must not promise enforcement the bot cannot perform.
+
+    This is the reported incident's user-visible half: a moderator submitted a
+    scam, read a confident acknowledgement, and nothing happened. The gap is
+    knowable at reply time, so it is stated instead of promised.
+    """
+    deps = FakeDeps(
+        config={"action_policy": "delete_ban", "review_channel": 444},
+        enforcement_blocked="Could not remove the message in <#111>: missing View Channel.",
+    )
+    resp = await handle_command(_review_ctx(attachments=[(1, "https://x/1.png")]), deps)
+
+    assert resp.i18n_key == "command.reviewmsg_result_blocked"
+    message = render(resp, "en")
+    assert "View Channel" in message
+    # The check is scoped to the channel the reported message lives in.
+    assert deps.blocked_checks == [(1, 111, "delete_ban")]
+    # The hashes and verdict are still recorded: the campaign is learned even
+    # when this guild cannot act on it, so other servers stay protected.
+    assert len(deps.confirmed_scams) == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewmsg_permission_check_is_skipped_for_non_acting_policies() -> None:
+    """Nothing will be enforced under report_only, so there is nothing to check.
+
+    Probing anyway would put a permission warning on a server that deliberately
+    only reports.
+    """
+    deps = FakeDeps(
+        config={"action_policy": "report_only"},
+        enforcement_blocked="should never be consulted",
+    )
+    resp = await handle_command(_review_ctx(attachments=[(1, "https://x/1.png")]), deps)
+
+    assert resp.i18n_key == "command.reviewmsg_result_report_only"
+    assert deps.blocked_checks == []
+
+
+@pytest.mark.asyncio
+async def test_reviewmsg_permission_check_is_skipped_in_safe_mode() -> None:
+    deps = FakeDeps(
+        config={"action_policy": "delete_ban", "safe_mode": True},
+        enforcement_blocked="should never be consulted",
+    )
+    resp = await handle_command(_review_ctx(attachments=[(1, "https://x/1.png")]), deps)
+
+    assert resp.i18n_key == "command.reviewmsg_result_safe_mode"
+    assert deps.blocked_checks == []
+
+
+@pytest.mark.asyncio
+async def test_reviewmsg_reply_stays_optimistic_when_nothing_is_in_the_way() -> None:
+    """The check must not add noise to the ordinary, working case."""
+    deps = FakeDeps(config={"action_policy": "delete_ban", "review_channel": 444})
+    resp = await handle_command(_review_ctx(attachments=[(1, "https://x/1.png")]), deps)
+
+    assert resp.i18n_key == "command.reviewmsg_result_submitted"
+    assert deps.blocked_checks == [(1, 111, "delete_ban")]

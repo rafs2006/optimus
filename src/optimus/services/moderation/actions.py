@@ -9,6 +9,13 @@ protections over the raw Discord REST calls:
 * an **idempotency key** recorded per ``(guild, message, action)`` so a
   redelivered verdict never double-bans.
 
+Actions are applied as **independent steps**. Deletion and punishment used to
+run as one retried unit, so a refused delete (no ``Manage Messages`` in that
+channel) aborted the method before the ban was ever attempted -- a scammer kept
+posting because the bot could not clean up one channel. Each step now succeeds
+or fails on its own, and every outcome is reported, so enforcement degrades
+gracefully instead of collapsing.
+
 The Discord surface is abstracted behind :class:`RestActions` so the executor is
 testable without a live gateway. DM warnings are rate-limited per user via a
 :class:`~optimus.services.moderation.cooldown.Cooldown`.
@@ -16,32 +23,37 @@ testable without a live gateway. DM warnings are rate-limited per user via a
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Protocol
 
 from prometheus_client import Counter, Gauge
 
 from optimus.contracts.events import Action
-from optimus.core.backoff import BackoffPolicy, retry_async
-from optimus.core.circuit import CircuitBreaker, CircuitOpenError, CircuitState
+from optimus.core.backoff import BackoffPolicy
+from optimus.core.circuit import CircuitBreaker, CircuitState
 from optimus.core.logging import get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
 from optimus.i18n import translate
+from optimus.services.moderation import permissions as perms
 from optimus.services.moderation.cooldown import Cooldown
+from optimus.services.moderation.failures import Failure, FailureKind, classify
+from optimus.services.moderation.permissions import PermissionProbe
 
 _log = get_logger(__name__)
 
-
-def _is_missing(exc: BaseException) -> bool:
-    """Whether ``exc`` is Discord's "already gone" (HTTP 404).
-
-    Duck-typed rather than importing hikari: this module is deliberately
-    testable with plain fakes, and a test double raising a simple exception
-    with ``status = 404`` must behave like the real ``hikari.NotFoundError``.
-    """
-    if type(exc).__name__ == "NotFoundError":
-        return True
-    return getattr(exc, "status", None) == 404
+#: Failure kinds where waiting and retrying can plausibly change the answer.
+#: Permission refusals are excluded on purpose: they cannot resolve inside a
+#: backoff window, so retrying them only burns rate limit and delays the report.
+_RETRYABLE = frozenset(
+    {
+        FailureKind.RATE_LIMITED,
+        FailureKind.TRANSIENT,
+        FailureKind.UNKNOWN,
+    }
+)
 
 
 # 0/1/2 encode closed/half_open/open so a dashboard can alert on "> 0".
@@ -116,13 +128,78 @@ class ActionRequest:
     ban_purge_seconds: int = 0
 
 
+class Step(StrEnum):
+    """An independently-applied part of an action."""
+
+    DELETE = "delete"
+    TIMEOUT = "timeout"
+    KICK = "kick"
+    BAN = "ban"
+    DM = "dm"
+
+
+#: The punitive step each action carries, if any.
+_PUNITIVE_STEP: dict[Action, Step] = {
+    Action.DELETE_TIMEOUT: Step.TIMEOUT,
+    Action.DELETE_KICK: Step.KICK,
+    Action.DELETE_BAN: Step.BAN,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class StepOutcome:
+    """What happened to one step of an action."""
+
+    step: Step
+    success: bool
+    #: Classified cause when the step did not succeed.
+    failure: Failure | None = None
+    #: True when a preflight proved the call could not succeed, so no request
+    #: was sent. Avoids a guaranteed 403 per scam image during a raid.
+    skipped: bool = False
+    #: Permission names the bot lacks, in Discord's own wording.
+    missing: tuple[str, ...] = ()
+
+    @property
+    def recoverable(self) -> bool:
+        """Whether this step could succeed later, e.g. after a permission fix."""
+        return self.failure is not None and self.failure.recoverable
+
+
 @dataclass(frozen=True, slots=True)
 class ActionResult:
-    """The outcome of attempting an action."""
+    """The outcome of attempting an action, including every step's result."""
 
     action: Action
     success: bool
     detail: str | None = None
+    #: Per-step outcomes, in execution order. Empty for short-circuit results
+    #: (duplicate, rate limited) where no step ran.
+    steps: tuple[StepOutcome, ...] = field(default_factory=tuple)
+
+    @property
+    def failed_steps(self) -> tuple[StepOutcome, ...]:
+        """Steps that did not succeed, excluding the best-effort DM."""
+        return tuple(s for s in self.steps if not s.success and s.step is not Step.DM)
+
+    @property
+    def succeeded_steps(self) -> tuple[StepOutcome, ...]:
+        """Steps that did succeed, excluding the best-effort DM."""
+        return tuple(s for s in self.steps if s.success and s.step is not Step.DM)
+
+    @property
+    def partial(self) -> bool:
+        """Whether the offender was punished but some step still failed.
+
+        This is the case worth surfacing loudly: enforcement happened, so the
+        report must not claim total success, but the scam message may survive.
+        """
+        return bool(self.succeeded_steps) and bool(self.failed_steps)
+
+    @property
+    def recoverable_steps(self) -> tuple[StepOutcome, ...]:
+        """Failed steps that a later permission fix could still complete."""
+        return tuple(s for s in self.failed_steps if s.recoverable)
 
 
 class ActionExecutor:
@@ -139,8 +216,10 @@ class ActionExecutor:
         dm_cooldown: Cooldown,
         breaker: CircuitBreaker | None = None,
         backoff: BackoffPolicy | None = None,
+        probe: PermissionProbe | None = None,
     ) -> None:
         self._rest = rest
+        self._probe = probe
         self._rl = rate_limiter
         self._bot_user_id = bot_user_id
         self._rate = rate
@@ -156,12 +235,23 @@ class ActionExecutor:
         # process (the standard single-service-per-process deployment).
         CIRCUIT_STATE.set(_CIRCUIT_STATE_CODE[self._breaker.state])
 
+    def attach_probe(self, probe: PermissionProbe) -> None:
+        """Install the permission probe after construction.
+
+        The gateway cache the probe reads only exists once the gateway client is
+        created, which happens after the executor is wired. Late attachment is
+        therefore the honest option; until it happens the executor simply has no
+        probe and attempts every action, which is the previous behaviour.
+        """
+        self._probe = probe
+
     async def execute(self, req: ActionRequest) -> ActionResult:
-        """Apply ``req`` exactly once, returning the outcome.
+        """Apply ``req`` exactly once, returning the outcome of every step.
 
         Returns a ``success=False`` result (rather than raising) on rate-limit
-        exhaustion, open circuit, idempotency replay, or REST failure so the
-        caller can record an audit row in every case.
+        exhaustion, idempotency replay, or REST failure so the caller can record
+        an audit row in every case. Steps are independent: a refused delete no
+        longer prevents the ban, and the result carries both outcomes.
         """
         if req.action in (Action.NONE, Action.REPORT_ONLY):
             return ActionResult(req.action, success=True, detail="no_enforcement")
@@ -172,13 +262,12 @@ class ActionExecutor:
         if not await self._rl.acquire(f"modact:{req.guild_id}", self._rate):
             return ActionResult(req.action, success=False, detail="rate_limited")
 
-        try:
-            await self._breaker.call(lambda: self._run(req))
-        except CircuitOpenError:
-            return ActionResult(req.action, success=False, detail="circuit_open")
-        except Exception as exc:
-            # An enforcement failure must be loud: the caller converts this into
-            # an audit row and a report, but the traceback exists only here.
+        steps = await self._apply(req)
+        failed = tuple(s for s in steps if not s.success and s.step is not Step.DM)
+        detail = failed[0].failure.detail if failed and failed[0].failure else None
+        if failed:
+            # An enforcement failure must be loud, and it must name a cause an
+            # admin can act on rather than just an exception class.
             _log.warning(
                 "moderation_action_failed",
                 action=req.action.value,
@@ -186,62 +275,153 @@ class ActionExecutor:
                 channel_id=req.channel_id,
                 message_id=req.message_id,
                 uploader_id=req.uploader_id,
-                error=type(exc).__name__,
-                exc_info=True,
+                failed_steps=[s.step.value for s in failed],
+                causes=[s.failure.detail for s in failed if s.failure],
+                missing=[name for s in failed for name in s.missing],
             )
-            return ActionResult(req.action, success=False, detail=f"error:{type(exc).__name__}")
-        return ActionResult(req.action, success=True)
+        return ActionResult(req.action, success=not failed, detail=detail, steps=steps)
 
-    async def _run(self, req: ActionRequest) -> None:
-        await retry_async(lambda: self._apply(req), self._backoff)
+    async def _apply(self, req: ActionRequest) -> tuple[StepOutcome, ...]:
+        """Run every step of ``req`` independently, collecting outcomes.
 
-    async def _apply(self, req: ActionRequest) -> None:
-        # The message is always removed first; punitive steps follow.
-        #
-        # The delete is treated as idempotent because this whole method is
-        # retried as a unit: if the delete succeeds and the *ban* then fails,
-        # the retry re-deletes an already-gone message, which 404s and reports
-        # that 404 as the failure -- masking the real cause (e.g. a missing Ban
-        # Members permission) behind a misleading "message not found". An
-        # already-deleted message means this step's goal is met, so treat it as
-        # done and let the punitive step below surface its own error.
-        try:
-            await self._rest.delete_message(req.channel_id, req.message_id)
-        except Exception as exc:
-            if not _is_missing(exc):
-                raise
-            _log.debug(
-                "moderation_delete_already_gone",
+        The delete runs first (it is the visible harm) but its result never
+        gates the punitive step: when the bot cannot clean a channel, the
+        offender is still removed, which is what stops the campaign.
+        """
+        outcomes: list[StepOutcome] = [await self._delete(req)]
+        punitive = _PUNITIVE_STEP.get(req.action)
+        if punitive is not None:
+            outcomes.append(await self._punish(req, punitive))
+        # Only warn the user if something actually happened to them. Telling
+        # someone their message was removed when nothing was enforced is both
+        # false and a wasted request during an outage or permission gap.
+        if any(o.success for o in outcomes):
+            dm = await self._maybe_dm(req)
+            if dm is not None:
+                outcomes.append(dm)
+        return tuple(outcomes)
+
+    async def _delete(self, req: ActionRequest) -> StepOutcome:
+        preflight = (
+            await perms.preflight_delete(self._probe, req.guild_id, req.channel_id)
+            if self._probe is not None
+            else perms.PreflightResult(ok=True)
+        )
+        if not preflight.ok:
+            # Skipping is not giving up: the outcome records a recoverable
+            # permission gap, so the report names the fix and a later
+            # permission grant can complete the cleanup.
+            _log.info(
+                "moderation_delete_skipped",
                 guild_id=req.guild_id,
                 channel_id=req.channel_id,
-                message_id=req.message_id,
+                missing=list(preflight.missing),
             )
-        if req.action is Action.DELETE:
-            await self._maybe_dm(req)
-            return
-        if req.action is Action.DELETE_TIMEOUT:
-            await self._rest.timeout_member(req.guild_id, req.uploader_id, req.timeout_seconds)
-        elif req.action is Action.DELETE_KICK:
-            await self._rest.kick_member(req.guild_id, req.uploader_id, req.reason)
-        elif req.action is Action.DELETE_BAN:
-            await self._rest.ban_member(
-                req.guild_id, req.uploader_id, req.reason, purge_seconds=req.ban_purge_seconds
+            return StepOutcome(
+                Step.DELETE,
+                success=False,
+                failure=preflight.failure,
+                skipped=True,
+                missing=preflight.missing,
             )
-        await self._maybe_dm(req)
+        return await self._attempt(
+            Step.DELETE,
+            req,
+            lambda: self._rest.delete_message(req.channel_id, req.message_id),
+        )
 
-    async def _maybe_dm(self, req: ActionRequest) -> None:
+    async def _punish(self, req: ActionRequest, step: Step) -> StepOutcome:
+        preflight = (
+            await perms.preflight_punitive(self._probe, req.guild_id, req.action)
+            if self._probe is not None
+            else perms.PreflightResult(ok=True)
+        )
+        if not preflight.ok:
+            _log.info(
+                "moderation_punitive_skipped",
+                guild_id=req.guild_id,
+                action=req.action.value,
+                missing=list(preflight.missing),
+            )
+            return StepOutcome(
+                step,
+                success=False,
+                failure=preflight.failure,
+                skipped=True,
+                missing=preflight.missing,
+            )
+        return await self._attempt(step, req, lambda: self._punitive_call(req, step))
+
+    def _punitive_call(self, req: ActionRequest, step: Step) -> Awaitable[None]:
+        if step is Step.TIMEOUT:
+            return self._rest.timeout_member(req.guild_id, req.uploader_id, req.timeout_seconds)
+        if step is Step.KICK:
+            return self._rest.kick_member(req.guild_id, req.uploader_id, req.reason)
+        return self._rest.ban_member(
+            req.guild_id, req.uploader_id, req.reason, purge_seconds=req.ban_purge_seconds
+        )
+
+    async def _attempt(
+        self,
+        step: Step,
+        req: ActionRequest,
+        call: Callable[[], Awaitable[None]],
+    ) -> StepOutcome:
+        """Run one REST call, retrying only what a retry could actually fix.
+
+        Retrying a permission refusal is pure waste -- the answer cannot change
+        within a backoff window -- so only rate limits and Discord-side faults
+        are retried. Everything else returns its classified cause immediately.
+        """
+        root: Failure | None = None
+        last: Failure | None = None
+        for attempt in range(self._backoff.max_attempts):
+            try:
+                await self._breaker.call(call)
+            except Exception as exc:
+                last = classify(exc)
+                if root is None and last.kind is not FailureKind.CIRCUIT_OPEN:
+                    # Keep the first real cause: once a retry trips the breaker,
+                    # "circuit_open" would otherwise bury the actual reason the
+                    # call failed, which is what an admin needs to see.
+                    root = last
+                if last.satisfied:
+                    # The goal already holds (message gone, user already
+                    # banned): success, not failure.
+                    _log.debug(
+                        "moderation_step_already_satisfied",
+                        step=step.value,
+                        guild_id=req.guild_id,
+                        cause=last.detail,
+                    )
+                    return StepOutcome(step, success=True, failure=last)
+                if last.kind not in _RETRYABLE:
+                    return StepOutcome(step, success=False, failure=root or last)
+                if attempt + 1 >= self._backoff.max_attempts:
+                    break
+                await asyncio.sleep(self._backoff.delay(attempt))
+                continue
+            return StepOutcome(step, success=True)
+        return StepOutcome(step, success=False, failure=root or last)
+
+    async def _maybe_dm(self, req: ActionRequest) -> StepOutcome | None:
+        """Best-effort warning DM. Never affects whether enforcement succeeded."""
         if req.uploader_id == self._bot_user_id:
-            return
+            return None
         if not await self._dm_cooldown.acquire(str(req.uploader_id)):
-            return
+            return None
         content = render_dm(req.locale, guild=req.guild_name or str(req.guild_id))
         try:
             await self._rest.send_dm(req.uploader_id, content)
         except Exception as exc:
             # Closed DMs are routine; log without a stack trace at debug level so
             # a systematic delivery failure is still observable per guild.
+            failure = classify(exc)
             _log.debug(
                 "moderation_dm_failed",
                 guild_id=req.guild_id,
                 error=type(exc).__name__,
+                cause=failure.detail,
             )
+            return StepOutcome(Step.DM, success=False, failure=failure)
+        return StepOutcome(Step.DM, success=True)

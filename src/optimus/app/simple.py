@@ -405,7 +405,7 @@ async def run_simple() -> None:  # pragma: no cover - runtime entrypoint
 
     async def _serve() -> None:
         try:
-            await run_discord_edges(app, settings, rest=rest)
+            await run_discord_edges(app, settings, rest=rest, bot_user_id=bot_user_id)
         finally:
             await app.aclose()
             await app.health.stop()

@@ -181,3 +181,46 @@ def test_report_fields_flag_global_matches() -> None:
         action_taken="delete_ban",
     )
     assert "Source" not in dict(report_fields(data_local))
+
+
+def test_report_names_the_problem_when_enforcement_was_refused() -> None:
+    """A moderator must learn the fix from the card, not from the logs.
+
+    The reported incident produced clean-looking cards while the message stayed
+    up; the problem field is what makes a permission gap visible where the
+    person who can fix it is already looking.
+    """
+    data = ReportData(
+        detection_id=9,
+        guild_id=1,
+        channel_id=1402887429324673035,
+        message_id=3,
+        uploader_id=42,
+        verdict="scam",
+        confidence=0.91,
+        action_taken="delete_ban",
+        partial=True,
+        problem="Could not remove the message in <#1402887429324673035>: missing View Channel.",
+    )
+    fields = dict(report_fields(data))
+    assert "Needs attention" in fields
+    assert "View Channel" in fields["Needs attention"]
+    # The partial marker is separate so the card reads correctly at a glance:
+    # the user was banned, the message was not removed.
+    assert "Partially applied" in fields
+
+
+def test_report_omits_both_markers_on_a_clean_enforcement() -> None:
+    data = ReportData(
+        detection_id=9,
+        guild_id=1,
+        channel_id=2,
+        message_id=3,
+        uploader_id=42,
+        verdict="scam",
+        confidence=0.91,
+        action_taken="delete_ban",
+    )
+    names = [name for name, _ in report_fields(data)]
+    assert "Needs attention" not in names
+    assert "Partially applied" not in names

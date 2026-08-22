@@ -29,6 +29,7 @@ from optimus.core.logging import get_logger
 from optimus.core.ratelimit import InMemoryRateLimiter
 from optimus.core.readiness import shards_check
 from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_start_kwargs
+from optimus.services.gateway.permission_probe import CachePermissionProbe
 from optimus.services.gateway.watchdog import GatewayWatchdog
 from optimus.services.interactions.service import InteractionService, respond_to_interaction
 from optimus.services.moderation.rest_adapter import HikariRestActions
@@ -40,7 +41,7 @@ _log = get_logger(__name__)
 
 
 async def run_discord_edges(  # pragma: no cover - requires a live gateway
-    app: SimpleApp, settings: Settings, *, rest: object
+    app: SimpleApp, settings: Settings, *, rest: object, bot_user_id: int
 ) -> None:
     """Connect one gateway bot wired to both the gateway and interactions edges.
 
@@ -51,6 +52,13 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
 
     config_cache = GuildConfigCache(app.store, app._scope)
     bot = hikari.GatewayBot(token=settings.discord_token, intents=GATEWAY_INTENTS)
+
+    # Let enforcement check its own permissions from the gateway cache before
+    # calling Discord. In a channel the bot cannot see, this turns one failed
+    # request per scam image into zero requests and a report card that says
+    # which permission is missing where.
+    probe = CachePermissionProbe(bot.cache, bot.rest, bot_user_id=bot_user_id)
+    app.moderation.attach_permission_probe(probe)
 
     async def _fetch_message(channel_id: int, message_id: int) -> hikari.Message:
         return await bot.rest.fetch_message(channel_id, message_id)
@@ -107,6 +115,9 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         # message, Ban/Unban act on the uploader, and member-report cards
         # (filed without hashes by design) re-fetch the attachment to hash it.
         rest=HikariRestActions(bot.rest),
+        # Same probe as enforcement, so the reply a moderator sees and the
+        # action the bot later attempts agree about what is possible.
+        probe=probe,
     )
 
     # Readiness should track the gateway, not just the DB: a wedged gateway

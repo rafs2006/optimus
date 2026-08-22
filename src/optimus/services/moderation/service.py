@@ -57,6 +57,7 @@ from optimus.services.moderation.actions import ActionExecutor, ActionResult
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
+from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.priority import PriorityDispatcher
 from optimus.services.moderation.review import ReportData
 from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
@@ -81,6 +82,10 @@ class ModerationService:
         self._bus = bus
         self._coordinator = coordinator
         self._scope = session_scope_factory
+
+    def attach_permission_probe(self, probe: PermissionProbe) -> None:
+        """Forward a permission probe to the coordinator's action executor."""
+        self._coordinator.attach_permission_probe(probe)
 
     async def on_verdict(self, event: VerdictEvent) -> None:
         """Decide + apply moderation for one verdict and emit the result."""

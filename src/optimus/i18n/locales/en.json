@@ -24,7 +24,10 @@
     "field_evidence": "Evidence",
     "appeal_title": "Appeal for detection #{detection_id}",
     "appeal_user": "User",
-    "appeal_status": "Status"
+    "appeal_status": "Status",
+    "field_problem": "Needs attention",
+    "field_partial": "Partially applied",
+    "field_partial_value": "The offender was punished, but not everything could be cleaned up. See **Needs attention**."
   },
   "command": {
     "no_permission": "You do not have permission to use this command.",
@@ -82,7 +85,8 @@
     "global_invalid_server": "`{value}` is not a valid server ID (numbers only).",
     "help": "**How Optimus works**\nEvery posted image is hashed and compared against this server's blocklist (and, if opted in, the shared global scam list). Matches either act automatically or land as a review card in your review channel, depending on `action_policy`. Global matches ALWAYS come as review cards — the shared list never bans or deletes on its own.\n\n**Commands**\n• `/setup` — create or link the private review channel (start here)\n• `/scamhash add|remove|list|review|import|export` — manage this server's blocklist; `review` marks a posted message as scam by link/ID\n• `/config view|set` — every setting, each explained inline\n• `/stats` — detection activity and database health\n• `/appeal`, `/forget_me` — member self-service (appeals, GDPR opt-out)\n• `/delete_server_data` — admin-only full wipe (GDPR)\n\n**Review card buttons**\nConfirm scam · False positive · Ban uploader · Unban · Whitelist image — one press each, logged to the audit trail. On servers approved for global contribution, *Confirm scam* also casts this server's vote toward the shared scam list, and *False positive* revokes a bad global entry for everyone.\n\nFull guide: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
     "appeal_none": "You have no recent detection to appeal in this server.",
-    "appeal_opened": "Your appeal has been opened and sent to the server moderators."
+    "appeal_opened": "Your appeal has been opened and sent to the server moderators.",
+    "reviewmsg_result_blocked": "Added {added} hash(es) ({failed} failed). Recorded the scam and requested {action} against <@{author_id}>'s message, but the bot cannot carry it out yet: {problem}"
   },
   "button": {
     "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",
@@ -120,5 +124,30 @@
   },
   "card": {
     "handled": "✅ **{action}** — handled by <@{user_id}>"
+  },
+  "failure": {
+    "step_delete": "Could not remove the message",
+    "step_timeout": "Could not time out the user",
+    "step_kick": "Could not kick the user",
+    "step_ban": "Could not ban the user",
+    "step_dm": "Could not warn the user by DM",
+    "missing_access": "the bot cannot see {channel}. Grant it **View Channel** there, or on the category the channel inherits from.",
+    "missing_access_named": "the bot cannot see {channel}. Grant it **{missing}** there, or on the category the channel inherits from.",
+    "missing_permission": "Discord refused the request. Check the bot's channel and role permissions for this action, and that its role sits above the target user's roles.",
+    "missing_permission_named": "the bot is missing **{missing}**. Grant it in the channel or on the bot's role, and make sure that role sits above the target user's roles.",
+    "mfa_required": "this server requires two-factor authentication for moderation. Enable 2FA on the account that owns the bot application.",
+    "unknown_channel": "the channel no longer exists. Update the bot's configuration.",
+    "member_gone": "the user already left the server, so this step no longer applies.",
+    "unsupported_target": "Discord does not allow this action on that kind of channel.",
+    "system_message": "Discord system messages cannot be deleted.",
+    "ban_limit": "this server reached Discord's limit on banning users who are not members. Try again later.",
+    "dm_blocked": "the user has DMs closed. No action is needed.",
+    "rate_limited": "Discord is rate limiting the bot. It will be retried automatically.",
+    "circuit_open": "Discord was refusing requests, so the bot paused to avoid making it worse. It resumes automatically.",
+    "duplicate": "this action already ran for that message.",
+    "transient": "Discord returned a server error. It will be retried automatically.",
+    "already_gone": "the message was already deleted.",
+    "already_banned": "the user was already banned.",
+    "unknown": "Discord returned an unexpected error. If it keeps happening, report it with the detection id above."
   }
 }

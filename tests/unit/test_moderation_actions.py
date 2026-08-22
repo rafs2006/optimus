@@ -12,6 +12,7 @@ from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit
 from optimus.services.moderation.actions import (
     ActionExecutor,
     ActionRequest,
+    Step,
     render_dm,
 )
 from optimus.services.moderation.cooldown import Cooldown
@@ -247,11 +248,24 @@ async def _always_acquire(_key: str) -> bool:
     return True
 
 
+class _AllFailRest(_FakeRest):
+    """Fails every enforcement call, so nothing resets the breaker.
+
+    Needed because steps are independent now: a fake that only fails the delete
+    would still let the ban succeed, and that success closes the breaker again.
+    """
+
+    async def ban_member(
+        self, guild_id: int, user_id: int, reason: str, purge_seconds: int = 0
+    ) -> None:
+        raise RuntimeError("transient")
+
+
 async def test_default_breaker_records_transition_metric() -> None:
     from optimus.services.moderation.actions import CIRCUIT_TRANSITIONS
 
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    rest = _FakeRest(fail_times=99)
+    rest = _AllFailRest(fail_times=99)
     # A default-constructed executor wires the metric/log observer onto its breaker.
     ex = ActionExecutor(
         rest,
@@ -305,12 +319,13 @@ class _BanFailsRest(_FakeRest):
 
 
 async def test_ban_failure_is_reported_not_masked_by_redelete() -> None:
-    """The real ban error must survive the retry, not be replaced by a 404.
+    """The real ban error must be reported, never replaced by a 404.
 
     Previously the retry re-ran the whole apply step, so attempt 2 re-deleted
     an already-deleted message and the resulting "Unknown Message" became the
     recorded failure -- hiding the actual missing-permission cause and making
-    the incident look like a message-not-found problem.
+    the incident look like a message-not-found problem. Steps are independent
+    now, so the delete runs exactly once and the ban reports its own cause.
     """
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     rest = _BanFailsRest()
@@ -318,11 +333,11 @@ async def test_ban_failure_is_reported_not_masked_by_redelete() -> None:
     result = await _executor(rest, redis=redis).execute(_req(Action.DELETE_BAN))
 
     assert result.success is False
-    # The recorded cause is the ban's 403, not the re-delete's 404.
-    assert result.detail == "error:_ForbiddenError"
+    # The cause is classified into something an admin can act on.
+    assert result.detail == "missing_permission"
     assert "NotFound" not in result.detail
-    # The delete was genuinely retried; it just no longer hijacks the error.
-    assert rest.delete_attempts > 1
+    # A permission refusal is never retried: the answer cannot change.
+    assert rest.delete_attempts == 1
 
 
 async def test_delete_of_already_removed_message_still_reaches_ban() -> None:
@@ -339,3 +354,173 @@ async def test_delete_of_already_removed_message_still_reaches_ban() -> None:
 
     assert result.success
     assert [c[0] for c in rest.calls] == ["ban_member"]
+
+
+# -- permission preflight ----------------------------------------------------
+#
+# The bot cannot see the failing channel. Previously that produced one rejected
+# API call per scam image; the probe answers from cached state instead, and the
+# outcome must still carry a reason a moderator can act on.
+
+
+class _StubProbe:
+    """Answers from fixed values and counts how often it was consulted."""
+
+    def __init__(self, *, channel: int | None, guild: int | None) -> None:
+        self._channel = channel
+        self._guild = guild
+        self.channel_calls = 0
+        self.guild_calls = 0
+
+    async def channel_permissions(self, guild_id: int, channel_id: int) -> int | None:
+        self.channel_calls += 1
+        return self._channel
+
+    async def guild_permissions(self, guild_id: int) -> int | None:
+        self.guild_calls += 1
+        return self._guild
+
+
+def _probe(*, channel: int | None = None, guild: int | None = None) -> _StubProbe:
+    from optimus.services.moderation import permissions as perms
+
+    return _StubProbe(
+        channel=perms.DELETE_REQUIRES if channel is None else channel,
+        guild=perms.BAN_MEMBERS if guild is None else guild,
+    )
+
+
+async def test_blind_channel_skips_the_delete_request_entirely() -> None:
+    """No View Channel means no request -- this is the wasted-resource fix.
+
+    Every scam image in an inaccessible channel used to cost a rejected delete
+    (plus retries). The answer is computable locally, so the call is never made.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(_probe(channel=0))
+
+    result = await ex.execute(_req(Action.DELETE, key="blind"))
+
+    assert result.success is False
+    assert result.detail == "missing_access"
+    assert rest.calls == []  # not one request against a channel we cannot see
+
+
+async def test_blind_channel_still_bans_the_uploader() -> None:
+    """Losing the cleanup must not lose the enforcement.
+
+    Removing the account is what actually stops a campaign, so a delete the bot
+    is not allowed to perform cannot be allowed to cancel the ban.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(_probe(channel=0))
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="blindban"))
+
+    assert [c[0] for c in rest.calls] == ["ban_member"]
+    assert result.partial is True
+    assert [s.step for s in result.succeeded_steps] == [Step.BAN]
+    assert [s.step for s in result.failed_steps] == [Step.DELETE]
+
+
+async def test_skipped_step_is_recoverable_and_names_the_permission() -> None:
+    """The outcome has to survive as an actionable reason, not a silent skip."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    ex = _executor(_FakeRest(), redis=redis)
+    ex.attach_probe(_probe(channel=0))
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="reason"))
+
+    delete = next(s for s in result.steps if s.step is Step.DELETE)
+    assert delete.skipped is True
+    assert delete.recoverable is True
+    assert "View Channel" in delete.missing
+
+
+async def test_missing_ban_permission_is_caught_before_the_request() -> None:
+    """A guild-level gap is knowable too, and needs no rejected ban call."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(_probe(guild=0))
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="noban"))
+
+    assert [c[0] for c in rest.calls] == ["delete_message"]
+    assert result.partial is True
+    ban = next(s for s in result.steps if s.step is Step.BAN)
+    assert "Ban Members" in ban.missing
+
+
+async def test_no_dm_when_every_step_was_refused() -> None:
+    """Telling a user they were punished when nothing happened is a false claim.
+
+    It also spends a request during exactly the outage or permission gap that
+    prevented the enforcement.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(_probe(channel=0, guild=0))
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="nodm"))
+
+    assert rest.calls == []
+    assert rest.dms == []
+    assert result.success is False
+    assert result.partial is False
+
+
+async def test_a_permitted_action_is_not_slowed_down_by_the_probe() -> None:
+    """The happy path must be unchanged: one lookup per scope, then act."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    probe = _probe()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(probe)
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="allowed"))
+
+    assert result.success is True
+    assert [c[0] for c in rest.calls] == ["delete_message", "ban_member"]
+    assert (probe.channel_calls, probe.guild_calls) == (1, 1)
+
+
+async def test_unknown_permissions_still_attempt_the_action() -> None:
+    """A cold cache must never become the reason a scam stays up."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    ex = _executor(rest, redis=redis)
+    ex.attach_probe(_StubProbe(channel=None, guild=None))
+
+    result = await ex.execute(_req(Action.DELETE_BAN, key="unknown"))
+
+    assert result.success is True
+    assert [c[0] for c in rest.calls] == ["delete_message", "ban_member"]
+
+
+async def test_partial_is_false_when_everything_worked() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    result = await _executor(_FakeRest(), redis=redis).execute(_req(Action.DELETE_BAN, key="ok"))
+    assert result.success is True
+    assert result.partial is False
+
+
+async def test_dm_failure_does_not_count_as_a_failed_step() -> None:
+    """The DM is a courtesy; it must not make a clean enforcement look broken."""
+
+    class _DmFailingRest(_FakeRest):
+        async def send_dm(self, user_id: int, content: str) -> None:
+            raise _ForbiddenError("Cannot send messages to this user")
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    result = await _executor(_DmFailingRest(), redis=redis).execute(
+        _req(Action.DELETE_BAN, key="dmstep")
+    )
+    assert result.success is True
+    assert result.partial is False
+    assert result.failed_steps == ()

@@ -79,6 +79,13 @@ class ReportData:
     #: Pre-rendered OCR/QR risk-scan evidence (risk level, signals, lookalike
     #: domains, QR payloads) when that lane drove the verdict.
     ocr_summary: str | None = None
+    #: Why enforcement could not be completed, phrased as an instruction (e.g.
+    #: "grant View Channel in #general"). Rendered prominently so a permission
+    #: gap is never mistaken for a bot bug.
+    problem: str | None = None
+    #: True when the offender was punished but some step still failed, so the
+    #: card must not read as a clean success.
+    partial: bool = False
     locale: str = "en"
 
 
@@ -109,6 +116,12 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
         fields.append((translate("report.field_reported_by", loc), f"<@{data.reported_by}>"))
     if data.ocr_summary:
         fields.append((translate("report.field_ocr", loc), data.ocr_summary))
+    if data.partial:
+        fields.append(
+            (translate("report.field_partial", loc), translate("report.field_partial_value", loc))
+        )
+    if data.problem:
+        fields.append((translate("report.field_problem", loc), data.problem))
     if data.swarm_guilds:
         fields.append(
             (

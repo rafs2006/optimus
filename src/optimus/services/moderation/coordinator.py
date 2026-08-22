@@ -17,6 +17,9 @@ from optimus.contracts.events import Action, OcrFindings, VerdictEvent
 from optimus.core.logging import get_logger
 from optimus.services.moderation.actions import ActionExecutor, ActionRequest, ActionResult
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
+from optimus.services.moderation.explain import explain_result
+from optimus.services.moderation.failures import classify
+from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.policy import Decision, PolicyInput, decide
 from optimus.services.moderation.priority import (
     PriorityDispatcher,
@@ -123,6 +126,10 @@ class ModerationCoordinator:
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
         self._dispatcher = dispatcher
+
+    def attach_permission_probe(self, probe: PermissionProbe) -> None:
+        """Give the executor a permission probe once the gateway cache exists."""
+        self._executor.attach_probe(probe)
 
     async def handle_verdict(self, event: VerdictEvent) -> ActionResult:
         """Process one verdict end-to-end and return the action outcome."""
@@ -266,6 +273,10 @@ class ModerationCoordinator:
         action_taken = (
             action.value if result.success else f"{action.value} (failed: {result.detail})"
         )
+        # Whatever could not be applied is spelled out as an instruction on the
+        # card. Without this, a channel the bot cannot see produced a report
+        # that looked like a silent, inexplicable failure.
+        problem = explain_result(result, cfg.locale, channel_id=event.channel_id)
         if swept is not None and swept.touched:
             # Make the cross-channel cleanup visible to moderators: without it
             # the card reports one deletion while the sweep quietly removed a
@@ -292,18 +303,28 @@ class ModerationCoordinator:
                     global_match=event.matched_source == "global",
                     reported_by=event.reported_by,
                     ocr_summary=_ocr_summary(event.ocr),
+                    problem=problem,
+                    partial=result.partial,
                     locale=cfg.locale,
                 ),
             )
-        except Exception:
+        except Exception as exc:
             # Posting the report is best-effort status: a failure here (missing
             # send permission in the review channel, deleted channel) must not
             # fail the verdict handler — the action already ran and was audited,
             # and a bus redelivery would only re-run it into a "duplicate".
+            #
+            # The cause is classified because this log line is the *only* signal
+            # left when the review channel itself is unreachable: "missing
+            # access to the review channel" is actionable, a bare traceback is
+            # not.
+            failure = classify(exc)
             _log.error(
                 "review_report_failed",
                 guild_id=event.guild_id,
                 channel_id=cfg.review_channel_id,
                 detection_id=detection_id,
+                cause=failure.detail,
+                permission_related=failure.permission_related,
                 exc_info=True,
             )
