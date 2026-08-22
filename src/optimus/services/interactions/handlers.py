@@ -411,7 +411,14 @@ def _render_hash_entry(row: GuildHash) -> str:
 async def _cmd_report_message(
     ctx: InteractionContext, deps: InteractionDeps
 ) -> InteractionResponse:
-    """Entry point for the member-facing "Report scam to mods" context menu.
+    """Entry point for both member-facing report surfaces.
+
+    Serves the "Report scam to mods" right-click context menu and the
+    ``/report message:<link-or-id>`` slash command -- the two differ only in
+    how the target message reaches ``ctx.options`` (Discord's resolved data
+    for the menu, an explicit REST fetch for the slash command), and both
+    arrive here with the same pre-resolved ``channel_id`` / ``message_id`` /
+    ``author_id`` / ``attachments`` shape.
 
     Open to every member (no permission gate), so it is deliberately inert:
     it files the message into the mod-review queue and nothing else. No hash
@@ -790,6 +797,7 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "appeal": _cmd_appeal,
     "review_message": _cmd_review_message,
     "report_message": _cmd_report_message,
+    "report": _cmd_report_message,
 }
 
 

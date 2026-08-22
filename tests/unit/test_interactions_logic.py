@@ -344,6 +344,35 @@ def test_parse_message_reference_rejects_invalid(bad: str) -> None:
     assert exc.value.reason is CommandError.MESSAGE_NOT_FOUND
 
 
+def test_report_slash_command_is_open_to_all_members() -> None:
+    """``/report`` must stay ungated: it is the member-facing surface.
+
+    A permission gate here would put ``default_member_permissions`` on the
+    builder and grey the command out for exactly the people it exists for.
+    """
+    from optimus.services.interactions.commands import COMMANDS, OPT_STRING
+
+    cmd = next(c for c in COMMANDS if c.name == "report")
+    assert cmd.required_permission is None
+    assert required_permission("report") is None
+    # Guild-only: a report is filed against a guild message, into a guild's
+    # review channel -- there is nothing to report in a DM with the bot.
+    assert cmd.guild_only is True
+    # One required string option, parsed by parse_message_reference.
+    assert [(o.name, o.type, o.required) for o in cmd.options] == [("message", OPT_STRING, True)]
+    assert cmd.subcommands == ()
+
+
+def test_report_slash_command_builder_has_no_permission_gate() -> None:
+    import hikari
+
+    from optimus.services.interactions.commands import build_command_builders
+
+    builder = next(b for b in build_command_builders() if b.name == "report")
+    # No default_member_permissions -> visible to every member.
+    assert builder.default_member_permissions in (hikari.UNDEFINED, None)
+
+
 def test_report_message_command_is_open_to_all_members() -> None:
     from optimus.services.interactions.commands import (
         MESSAGE_COMMAND_DISPATCH,

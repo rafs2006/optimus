@@ -80,6 +80,11 @@ Notes on cards:
 - **Report scam to mods** — right-click any message → Apps → *Report scam to
   mods*. Available to everyone, rate-limited, files a review card with the
   reporter attributed. It never blocks, deletes, or bans by itself.
+- **/report `<message>`** — the same thing as a typed command, for members
+  whose client hides the right-click *Apps* menu (mobile especially). Takes a
+  message link, or a bare message ID when the message is in the current
+  channel. Identical limits: same per-user rate limit, and reporting the same
+  message twice does not create a second card.
 - **/appeal** — a punished member's way to contest their most recent
   detection. Appears as an Approve/Deny card in the review channel.
 - **/forget_me** — GDPR: erases the requesting user's data and opts them out
@@ -113,6 +118,7 @@ Everyone:
 
 | Command | What it does |
 | --- | --- |
+| `/report <message>` | Send a message's image to the mod-review queue by link/ID. Same as right-click → Apps → *Report scam to mods*. |
 | `/appeal` | Contest your most recent detection. |
 | `/forget_me` | Erase your data and opt out of processing. |
 | `/help` | Explains the commands and the review workflow. |

@@ -246,6 +246,19 @@ COMMANDS: tuple[Command, ...] = (
         description="Appeal your most recent detection in this server.",
         required_permission=None,
     ),
+    Command(
+        name="report",
+        description="Report a message with a scam image to this server's moderators.",
+        required_permission=None,
+        options=(
+            Option(
+                "message",
+                "Link to the message (or its ID, if it is in this channel).",
+                OPT_STRING,
+                required=True,
+            ),
+        ),
+    ),
 )
 
 

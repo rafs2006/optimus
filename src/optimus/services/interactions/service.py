@@ -904,18 +904,24 @@ def _resolve_add_options(ctx: InteractionContext, interaction: Any) -> Interacti
     )
 
 
-async def _resolve_review_options(
+async def _resolve_message_target_options(
     ctx: InteractionContext, interaction: Any, *, rest: Any
 ) -> InteractionContext:
-    """Resolve ``/scamhash review message:<link-or-id>`` via REST.
+    """Resolve a ``message:<link-or-id>`` option into a target message via REST.
 
-    Unlike the context-menu entry point, a slash command only carries the
-    moderator-typed string -- the target message must be fetched explicitly.
-    A bare id relies on the invoking channel; a full link carries its own
-    channel id. Raises :class:`InteractionRejected` (``MESSAGE_NOT_FOUND`` /
+    Shared by ``/scamhash review`` (moderators) and ``/report`` (any member).
+    Unlike the context-menu entry points, a slash command only carries the
+    typed string -- the target message must be fetched explicitly. A bare id
+    relies on the invoking channel; a full link carries its own channel id.
+    Raises :class:`InteractionRejected` (``MESSAGE_NOT_FOUND`` /
     ``FETCH_FAILED``) rather than letting a hikari REST error escape, so the
     normal rejection-to-ephemeral-message path in :func:`run_interaction`
     handles it.
+
+    The fetch is what stops ``/report`` being a blind write primitive: a
+    member can only file a report for a message the bot itself can still see
+    in a channel it can read, and the uploader/attachments come from that
+    fetched message rather than anything the reporter typed.
     """
     from optimus.services.interactions.logic import parse_message_reference
 
@@ -1009,8 +1015,12 @@ async def run_interaction(  # pragma: no cover - hikari glue
             if isinstance(interaction, hikari.CommandInteraction):
                 ctx = to_context(interaction)
                 locale = ctx.locale
-                if ctx.command == "scamhash" and ctx.subcommand == "review":
-                    ctx = await _resolve_review_options(ctx, interaction, rest=interaction.app.rest)
+                if (ctx.command == "scamhash" and ctx.subcommand == "review") or (
+                    ctx.command == "report"
+                ):
+                    ctx = await _resolve_message_target_options(
+                        ctx, interaction, rest=interaction.app.rest
+                    )
                 elif ctx.command == "scamhash" and ctx.subcommand == "add":
                     ctx = _resolve_add_options(ctx, interaction)
                 response = await service.dispatch_command(ctx)
