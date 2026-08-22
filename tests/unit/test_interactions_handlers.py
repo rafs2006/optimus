@@ -27,6 +27,11 @@ from optimus.services.interactions.logic import (
     Permission,
 )
 from optimus.services.interactions.service import render
+from optimus.services.moderation.permissions import (
+    MANAGE_MESSAGES,
+    VIEW_CHANNEL,
+    build_access_report,
+)
 from optimus.services.moderation.review import ParsedCustomId, ReviewAction
 
 ADMIN = int(Permission.ADMINISTRATOR)
@@ -71,6 +76,8 @@ class FakeDeps:
         #: Reason enforcement_blocked returns; None means "nothing in the way".
         self._enforcement_blocked: str | None = flags.get("enforcement_blocked")
         self.blocked_checks: list[tuple[int, int, str]] = []
+        #: What /config permissions sees; ``None`` models "cannot check".
+        self._access_report = flags.get("access_report")
         #: Extra get_config fields (e.g. action_policy/safe_mode) so reviewmsg
         #: outcome-reporting tests can drive each policy branch.
         self.config: dict[str, Any] = {"locale": "en", **flags.get("config", {})}
@@ -161,6 +168,9 @@ class FakeDeps:
     ) -> str | None:
         self.blocked_checks.append((guild_id, channel_id, action))
         return self._enforcement_blocked
+
+    async def access_report(self, guild_id: int) -> Any:
+        return self._access_report
 
     async def hash_rate_ok(self, user_id: int) -> bool:
         return self._hash_rate_ok
@@ -499,6 +509,8 @@ async def test_config_set_review_channel_renders_as_mention() -> None:
     )
     assert resp.i18n_key == "command.config_set_ok"
     assert deps.config_set == [("review_channel", 1402357722430570498)]
+    # Bare, not in a code span: Discord only substitutes the channel's name for
+    # a mention outside backticks, so backticks would show the raw id instead.
     assert resp.params["value"] == "<#1402357722430570498>"
 
 
@@ -510,7 +522,7 @@ async def test_config_set_review_channel_clear_renders_as_none() -> None:
     )
     assert resp.i18n_key == "command.config_set_ok"
     assert deps.config_set == [("review_channel", None)]
-    assert resp.params["value"] == "none"
+    assert resp.params["value"] == "`none`"
 
 
 # --- review button auth --------------------------------------------------------
@@ -1014,6 +1026,43 @@ async def test_config_view_renders_review_channel_as_mention() -> None:
     deps.get_config = _fake_get_config_with_channel  # type: ignore[method-assign]
     resp = await handle_command(_ctx("config", subcommand="view"), deps)
     assert "<#1402357722430570498>" in resp.params["summary"]
+    # A mention inside a code span renders as the literal id, which is the raw
+    # number a moderator would then have to look up by hand.
+    assert "`<#1402357722430570498>`" not in resp.params["summary"]
+
+
+@pytest.mark.asyncio
+async def test_config_set_field_values_stay_quoted() -> None:
+    """Non-channel values keep their backticks: they are literal input text."""
+    deps = FakeDeps()
+    resp = await handle_command(
+        _ctx("config", subcommand="set", field="retention_days", value="14"), deps
+    )
+    assert resp.params["value"] == "`14`"
+
+
+@pytest.mark.asyncio
+async def test_config_permissions_reports_blocked_channels() -> None:
+    deps = FakeDeps(
+        access_report=build_access_report([(10, VIEW_CHANNEL | MANAGE_MESSAGES), (11, 0)])
+    )
+    resp = await handle_command(_ctx("config", subcommand="permissions"), deps)
+    assert resp.i18n_key == "command.permissions_report"
+    assert "<#11>" in resp.params["report"]
+
+
+@pytest.mark.asyncio
+async def test_config_permissions_says_so_when_it_cannot_check() -> None:
+    """An unanswerable check must not read as a clean bill of health."""
+    resp = await handle_command(_ctx("config", subcommand="permissions"), FakeDeps())
+    assert resp.i18n_key == "command.permissions_unknown"
+
+
+@pytest.mark.asyncio
+async def test_config_permissions_requires_manage_guild() -> None:
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("config", subcommand="permissions", perms=NONE), FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
 
 
 async def _fake_get_config_with_channel(guild_id: int) -> dict[str, Any]:
@@ -1099,7 +1148,8 @@ async def test_config_set_field_name_matches_config_view_field_name() -> None:
     assert set_resp.i18n_key == "command.config_set_ok"
 
     view_resp = await handle_command(_ctx("config", subcommand="view"), deps)
-    assert "**review_channel**: `<#1402357722430570498>`" in view_resp.params["summary"]
+    # Unquoted on purpose: backticks would leave Discord showing the raw id.
+    assert "**review_channel**: <#1402357722430570498>" in view_resp.params["summary"]
     assert "review_channel_id" not in view_resp.params["summary"]
 
 

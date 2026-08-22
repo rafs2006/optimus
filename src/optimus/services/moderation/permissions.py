@@ -88,6 +88,19 @@ class PermissionProbe(Protocol):
         ...
 
 
+class ChannelInventory(Protocol):
+    """Resolves the bot's permissions across every channel of a guild at once.
+
+    Separate from :class:`PermissionProbe` so the per-action preflight path
+    keeps its two-method surface: only the ``/config permissions`` audit needs
+    a whole-guild view.
+    """
+
+    async def channel_access(self, guild_id: int) -> list[tuple[int, int]] | None:
+        """``(channel_id, permission bits)`` per channel, or ``None`` if unknown."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class PreflightResult:
     """Whether a call can succeed, and what is missing when it cannot."""
@@ -192,6 +205,83 @@ def effective_permissions(
     base &= ~member_deny
     base |= member_allow
     return base
+
+
+@dataclass(frozen=True, slots=True)
+class AccessReport:
+    """What enforcement can and cannot do across a whole guild, right now.
+
+    Built from cached permissions for every textable channel, so ``/config
+    permissions`` can answer "where are we blind?" without a request per
+    channel -- and, unlike a record of past failures, it also names channels no
+    scam has landed in yet.
+    """
+
+    #: Channels checked (excludes ones ignored by config).
+    checked: int
+    #: Channels skipped because ``/config`` ignores them.
+    ignored: int
+    #: ``(channel_id, missing permission names)`` for each blocked channel,
+    #: grouped by the caller for display.
+    blocked: tuple[tuple[int, tuple[str, ...]], ...]
+    #: Guild-wide permissions the punitive step needs but the bot lacks.
+    guild_missing: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        """Whether nothing at all is blocked."""
+        return not self.blocked and not self.guild_missing
+
+    def grouped(self) -> tuple[tuple[tuple[str, ...], tuple[int, ...]], ...]:
+        """Blocked channels bucketed by identical missing-permission sets.
+
+        Ten channels missing the same permission render as one line, not ten.
+        """
+        buckets: dict[tuple[str, ...], list[int]] = {}
+        for channel_id, missing in self.blocked:
+            buckets.setdefault(missing, []).append(channel_id)
+        return tuple(
+            (missing, tuple(channel_ids))
+            for missing, channel_ids in sorted(buckets.items(), key=lambda kv: -len(kv[1]))
+        )
+
+
+def build_access_report(
+    channel_access: Sequence[tuple[int, int]],
+    *,
+    ignored_channels: frozenset[int] = frozenset(),
+    guild_permissions: int | None = None,
+    punitive: int = 0,
+    required: int = DELETE_REQUIRES,
+) -> AccessReport:
+    """Summarize per-channel access into a report for display.
+
+    ``required`` is what enforcement needs in a channel (deleting a scam image);
+    ``punitive`` is the guild-wide bit its ban/kick/timeout step needs, checked
+    once rather than per channel.
+    """
+    blocked: list[tuple[int, tuple[str, ...]]] = []
+    checked = 0
+    ignored = 0
+    for channel_id, granted in channel_access:
+        if channel_id in ignored_channels:
+            ignored += 1
+            continue
+        checked += 1
+        result = check(required, granted)
+        if not result.ok:
+            blocked.append((channel_id, result.missing))
+    guild_missing: tuple[str, ...] = ()
+    if punitive and guild_permissions is not None:
+        guild_result = check(punitive, guild_permissions)
+        if not guild_result.ok:
+            guild_missing = guild_result.missing
+    return AccessReport(
+        checked=checked,
+        ignored=ignored,
+        blocked=tuple(blocked),
+        guild_missing=guild_missing,
+    )
 
 
 def punitive_requirement(action: Action) -> int:

@@ -41,7 +41,7 @@ from optimus.services.gateway.extract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Sequence
 
     #: REST fallback for partial updates: ``(channel_id, message_id) -> Message``.
     FetchMessage = Callable[[int, int], Awaitable[hikari.Message]]
@@ -335,45 +335,21 @@ class GatewayService:
 
         Mods usually install the bot *because* a scam wave is already underway,
         so the messages that motivated the install are in recent history, not
-        the future. Reuses the exact live-scan path (per-guild filters, image
-        extraction, publish) with ``only_unseen=True`` so a message that also
-        arrives live is not published twice. Bounded by channel and per-channel
-        message caps; a channel the bot cannot read (missing permission) is
-        skipped rather than failing the whole backfill.
+        the future. Bounded by channel and per-channel message caps; a channel
+        the bot cannot read (missing permission) is skipped rather than failing
+        the whole backfill.
         """
         assert self._history is not None  # guarded by the caller
-        after = datetime.now(UTC) - timedelta(days=self._settings.gateway_join_scan_days)
         try:
             channel_ids = await self._history.list_text_channel_ids(guild_id)
         except Exception as exc:
             _log.warning("join_backfill_channels_failed", guild_id=guild_id, error=str(exc))
             return
-        channels_read = 0
-        messages_scanned = 0
-        for channel_id in channel_ids[: self._settings.gateway_join_scan_max_channels]:
-            try:
-                messages = await self._history.fetch_recent_messages(
-                    channel_id,
-                    after=after,
-                    limit=self._settings.gateway_join_scan_messages_per_channel,
-                )
-            except Exception as exc:
-                # Typical: no READ_MESSAGE_HISTORY / VIEW_CHANNEL in this channel.
-                _log.info(
-                    "join_backfill_channel_skipped",
-                    guild_id=guild_id,
-                    channel_id=channel_id,
-                    error=str(exc),
-                )
-                continue
-            channels_read += 1
-            for message in messages:
-                await self._scan(
-                    message_to_incoming(message, guild_id=guild_id),
-                    trigger="join_backfill",
-                    only_unseen=True,
-                )
-                messages_scanned += 1
+        channels_read, messages_scanned = await self.rescan_channels(
+            guild_id,
+            channel_ids[: self._settings.gateway_join_scan_max_channels],
+            trigger="join_backfill",
+        )
         _log.info(
             "join_backfill_done",
             guild_id=guild_id,
@@ -381,6 +357,64 @@ class GatewayService:
             messages=messages_scanned,
             days=self._settings.gateway_join_scan_days,
         )
+
+    async def rescan_channels(
+        self, guild_id: int, channel_ids: Sequence[int], *, trigger: str
+    ) -> tuple[int, int]:
+        """Rescan recent history in each channel; returns (channels, messages).
+
+        Shared by the join backfill and by the access-regained rescan, so both
+        paths go through the identical live-scan filters. A channel that cannot
+        be read is skipped without failing the others.
+        """
+        if self._history is None or self._settings.gateway_join_scan_days <= 0:
+            return (0, 0)
+        after = datetime.now(UTC) - timedelta(days=self._settings.gateway_join_scan_days)
+        channels_read = 0
+        messages_scanned = 0
+        for channel_id in channel_ids:
+            scanned = await self.rescan_channel(guild_id, channel_id, after=after, trigger=trigger)
+            if scanned is None:
+                continue
+            channels_read += 1
+            messages_scanned += scanned
+        return (channels_read, messages_scanned)
+
+    async def rescan_channel(
+        self, guild_id: int, channel_id: int, *, after: datetime, trigger: str
+    ) -> int | None:
+        """Rescan one channel's recent history; ``None`` when it cannot be read.
+
+        Reuses the exact live-scan path (per-guild filters, image extraction,
+        publish) with ``only_unseen=True`` so a message that also arrives live
+        is not published twice -- which is what makes it safe to rescan a
+        channel the bot has just regained access to.
+        """
+        if self._history is None:
+            return None
+        try:
+            messages = await self._history.fetch_recent_messages(
+                channel_id,
+                after=after,
+                limit=self._settings.gateway_join_scan_messages_per_channel,
+            )
+        except Exception as exc:
+            # Typical: no READ_MESSAGE_HISTORY / VIEW_CHANNEL in this channel.
+            _log.info(
+                "rescan_channel_skipped",
+                guild_id=guild_id,
+                channel_id=channel_id,
+                trigger=trigger,
+                error=str(exc),
+            )
+            return None
+        for message in messages:
+            await self._scan(
+                message_to_incoming(message, guild_id=guild_id),
+                trigger=trigger,
+                only_unseen=True,
+            )
+        return len(messages)
 
     @staticmethod
     def _should_scan(config: GuildConfig, msg: IncomingMessage) -> bool:
