@@ -1,6 +1,6 @@
 # Optimus
 
-[![CI](https://github.com/la314sazuli/optimus/actions/workflows/ci.yml/badge.svg)](https://github.com/la314sazuli/optimus/actions/workflows/ci.yml)
+[![CI](https://github.com/rafs2006/optimus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rafs2006/optimus/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Optimus is a Discord bot that automatically detects and removes scam, phishing,
