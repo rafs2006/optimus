@@ -240,7 +240,7 @@ async def test_failed_enforcement_is_reported_with_detail() -> None:
     assert not result.success
     assert audits == [("delete_ban", False)]
     assert len(reports) == 1
-    assert reports[0].action_taken == "delete_ban (failed: error:RuntimeError)"
+    assert reports[0].action_taken == "delete_ban (failed: unknown:RuntimeError)"
 
 
 async def test_report_poster_failure_does_not_fail_the_verdict() -> None:
@@ -540,3 +540,99 @@ async def test_no_sweep_for_report_only_verdicts() -> None:
     await coord.handle_verdict(_event())
 
     assert swept == []
+
+
+# -- permission-aware reporting ----------------------------------------------
+
+
+class _StubProbe:
+    """Fixed permission answers, standing in for the gateway cache."""
+
+    def __init__(self, *, channel: int | None, guild: int | None) -> None:
+        self._channel = channel
+        self._guild = guild
+
+    async def channel_permissions(self, guild_id: int, channel_id: int) -> int | None:
+        return self._channel
+
+    async def guild_permissions(self, guild_id: int) -> int | None:
+        return self._guild
+
+
+async def test_report_names_the_permission_gap_that_blocked_the_cleanup() -> None:
+    """The incident, end to end: the ban lands, the message stays, the card says so.
+
+    Previously the review channel showed "delete_ban" with no hint that the
+    message was still visible, so nobody knew a channel overwrite was the fix.
+    """
+    from optimus.services.moderation import permissions as perms
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    coord = _build(
+        rest=rest, redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=audits
+    )
+    coord.attach_permission_probe(_StubProbe(channel=0, guild=perms.BAN_MEMBERS))
+
+    result = await coord.handle_verdict(_event())
+
+    # The uploader is still removed -- that is what stops the campaign.
+    assert rest.calls == ["ban_member"]
+    assert result.partial is True
+    assert len(reports) == 1
+    assert reports[0].partial is True
+    assert reports[0].problem is not None
+    assert "View Channel" in reports[0].problem
+    assert "<#2>" in reports[0].problem
+
+
+async def test_report_carries_no_problem_when_enforcement_was_clean() -> None:
+    from optimus.services.moderation import permissions as perms
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    reports: list[ReportData] = []
+    coord = _build(
+        rest=_FakeRest(), redis=redis, cfg=_cfg(), target=_target(), reports=reports, audits=[]
+    )
+    coord.attach_permission_probe(
+        _StubProbe(channel=perms.DELETE_REQUIRES, guild=perms.BAN_MEMBERS)
+    )
+
+    result = await coord.handle_verdict(_event())
+
+    assert result.success is True
+    assert reports[0].problem is None
+    assert reports[0].partial is False
+
+
+async def test_campaign_sweep_still_runs_for_a_partially_applied_action() -> None:
+    """A blocked delete must not cancel the purge of the uploader's other posts.
+
+    The sweep is gated on the decision, not on the delete succeeding: other
+    channels may well be accessible even when this one is not.
+    """
+    from optimus.services.moderation import permissions as perms
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    swept: list[int] = []
+
+    async def _sweep(event: VerdictEvent) -> None:
+        swept.append(event.uploader_id)
+        return None
+
+    coord = _build(
+        rest=_FakeRest(),
+        redis=redis,
+        cfg=_cfg(),
+        target=_target(),
+        reports=[],
+        audits=[],
+        sweep=_sweep,
+    )
+    coord.attach_permission_probe(_StubProbe(channel=0, guild=perms.BAN_MEMBERS))
+
+    await coord.handle_verdict(_event())
+
+    assert swept == [42]

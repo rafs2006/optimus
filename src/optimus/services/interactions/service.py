@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy.exc import OperationalError
 
-from optimus.contracts.events import Verdict, VerdictEvent
+from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy, retry_async
 from optimus.core.config import Settings
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
@@ -66,6 +66,12 @@ from optimus.services.interactions.logic import (
     CommandError,
     InteractionRejected,
     decode_component_id,
+)
+from optimus.services.moderation.explain import explain_preflight
+from optimus.services.moderation.permissions import (
+    PermissionProbe,
+    preflight_delete,
+    preflight_punitive,
 )
 from optimus.services.moderation.review import decode_custom_id
 
@@ -146,6 +152,7 @@ class DbDeps:
         fetch: FetchFn | None = None,
         detection: DetectionService | None = None,
         rest: ModerationRest | None = None,
+        probe: PermissionProbe | None = None,
     ) -> None:
         self._session = session
         self._rl = rate_limiter
@@ -154,6 +161,7 @@ class DbDeps:
         self._fetch = fetch or _default_fetch(settings)
         self._detection = detection
         self._rest = rest
+        self._probe = probe
         #: Confirmed-scam verdicts persisted in this request's transaction but
         #: not yet published to the moderation bus. :meth:`InteractionService._run`
         #: publishes these only after the transaction commits -- publishing
@@ -400,6 +408,29 @@ class DbDeps:
     async def local_hash(self, guild_id: int, hash_id: str) -> GuildHash | None:
         return await GuildHashRepository(self._session, guild_id).get(hash_id)
 
+    async def enforcement_blocked(
+        self, guild_id: int, channel_id: int, *, action: str, locale: str
+    ) -> str | None:
+        """Why the configured action would be refused here, or ``None``.
+
+        Checks the delete step in ``channel_id`` and the punitive step at guild
+        level, reporting the first blocker found. Without a probe (or with an
+        unresolvable one) this returns ``None`` and the reply is unchanged from
+        before: silence is reserved for "unknown", never used for "blocked".
+        """
+        if self._probe is None:
+            return None
+        try:
+            policy = Action(action)
+        except ValueError:
+            return None
+        delete = await preflight_delete(self._probe, guild_id, channel_id)
+        reason = explain_preflight(delete, locale, channel_id=channel_id)
+        if reason is not None:
+            return reason
+        punitive = await preflight_punitive(self._probe, guild_id, policy)
+        return explain_preflight(punitive, locale)
+
     async def hash_rate_ok(self, user_id: int) -> bool:
         return await self._rl.acquire(f"scamhash:{user_id}", HASH_RATE)
 
@@ -618,6 +649,7 @@ class InteractionService:
         fetch: FetchFn | None = None,
         detection: DetectionService | None = None,
         rest: ModerationRest | None = None,
+        probe: PermissionProbe | None = None,
     ) -> None:
         self._scope = scope
         self._rl = rate_limiter
@@ -625,6 +657,7 @@ class InteractionService:
         self._fetch = fetch
         self._detection = detection
         self._rest = rest
+        self._probe = probe
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
         """Run a slash command within a fresh transactional session scope."""
@@ -688,6 +721,7 @@ class InteractionService:
                         fetch=self._fetch,
                         detection=self._detection,
                         rest=self._rest,
+                        probe=self._probe,
                     )
                     response: InteractionResponse = await call(deps)
             except OperationalError as exc:

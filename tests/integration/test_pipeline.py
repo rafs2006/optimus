@@ -561,7 +561,10 @@ async def test_open_circuit_breaker_fails_action_gracefully(
     first = bus.events(SUBJECT_ACTION_RESULT)[0]
     assert isinstance(first, ActionResultEvent)
     assert first.success is False
-    assert first.detail is not None and first.detail.startswith("error:")
+    # The recorded cause is the delete's own unclassifiable error, not the
+    # "circuit_open" that a later retry attempt hit -- the root cause is what
+    # an admin needs to see.
+    assert first.detail == "unknown:RuntimeError"
 
     from optimus.core.circuit import CircuitState
 

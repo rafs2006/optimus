@@ -24,7 +24,10 @@
     "field_evidence": "Dokaz",
     "appeal_title": "Žalba za otkrivanje #{detection_id}",
     "appeal_user": "Korisnik",
-    "appeal_status": "Status"
+    "appeal_status": "Status",
+    "field_problem": "Zahteva pažnju",
+    "field_partial": "Delimično primenjeno",
+    "field_partial_value": "Prekršilac je kažnjen, ali nije sve moglo da se očisti. Vidite **Zahteva pažnju**."
   },
   "command": {
     "no_permission": "Nemate dozvolu da koristite ovu komandu.",
@@ -82,7 +85,8 @@
     "global_invalid_server": "`{value}` nije važeći ID servera (samo brojevi).",
     "help": "**Kako Optimus radi**\nSvaka objavljena slika se hešira i poredi sa crnom listom ovog servera (i, ako je uključeno, sa deljenom globalnom listom prevara). Poklapanja ili deluju automatski ili stižu kao kartica za pregled u vaš kanal za pregled, u zavisnosti od `action_policy`. Globalna poklapanja UVEK stižu kao kartice za pregled — deljena lista nikada sama ne banuje niti briše.\n\n**Komande**\n• `/setup` — kreira ili poveže privatni kanal za pregled (počnite ovde)\n• `/scamhash add|remove|list|review|import|export` — upravljanje crnom listom servera; `review` označava objavljenu poruku kao prevaru po linku/ID-u\n• `/config view|set` — sva podešavanja, svako objašnjeno\n• `/stats` — aktivnost detekcije i stanje baze\n• `/appeal`, `/forget_me` — samousluga za članove (žalbe, GDPR odjava)\n• `/delete_server_data` — potpuno brisanje, samo za administratore (GDPR)\n\n**Dugmad na kartici za pregled**\nPotvrdi prevaru · Lažna uzbuna · Banuj pošiljaoca · Odbanuj · Bela lista — jedan pritisak, sve se beleži u revizorski dnevnik. Na serverima odobrenim za globalni doprinos, *Potvrdi prevaru* takođe šalje glas ovog servera za deljenu listu prevara, a *Lažna uzbuna* povlači loš globalni unos za sve.\n\nCeo vodič: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
     "appeal_none": "Nemate nedavno otkrivanje na koje možete uložiti žalbu na ovom serveru.",
-    "appeal_opened": "Vaša žalba je otvorena i poslata moderatorima servera."
+    "appeal_opened": "Vaša žalba je otvorena i poslata moderatorima servera.",
+    "reviewmsg_result_blocked": "Dodato {added} heš vrednosti ({failed} neuspešno). Prevara je zabeležena i zatražena je akcija {action} za poruku korisnika <@{author_id}>, ali bot još ne može da je izvrši: {problem}"
   },
   "button": {
     "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",
@@ -120,5 +124,30 @@
   },
   "card": {
     "handled": "✅ **{action}** — obradio/la <@{user_id}>"
+  },
+  "failure": {
+    "step_delete": "Nije moguće ukloniti poruku",
+    "step_timeout": "Nije moguće privremeno isključiti korisnika",
+    "step_kick": "Nije moguće izbaciti korisnika",
+    "step_ban": "Nije moguće banovati korisnika",
+    "step_dm": "Nije moguće poslati upozorenje korisniku u DM",
+    "missing_access": "bot ne vidi {channel}. Dodelite mu dozvolu **View Channel** tamo ili na kategoriji od koje kanal nasleđuje dozvole.",
+    "missing_access_named": "bot ne vidi {channel}. Dodelite mu **{missing}** tamo ili na kategoriji od koje kanal nasleđuje dozvole.",
+    "missing_permission": "Discord je odbio zahtev. Proverite dozvole bota na kanalu i na njegovoj roli, i da li je ta rola iznad rola ciljanog korisnika.",
+    "missing_permission_named": "botu nedostaje **{missing}**. Dodelite tu dozvolu na kanalu ili na roli bota i proverite da je rola iznad rola ciljanog korisnika.",
+    "mfa_required": "ovaj server zahteva dvofaktorsku autentifikaciju za moderaciju. Uključite 2FA na računu koji poseduje aplikaciju bota.",
+    "unknown_channel": "kanal više ne postoji. Ažurirajte konfiguraciju bota.",
+    "member_gone": "korisnik je već napustio server, pa ovaj korak više nije primenjiv.",
+    "unsupported_target": "Discord ne dozvoljava ovu akciju na tom tipu kanala.",
+    "system_message": "Discord sistemske poruke ne mogu da se brišu.",
+    "ban_limit": "server je dostigao Discord ograničenje za banovanje korisnika koji nisu članovi. Pokušajte kasnije.",
+    "dm_blocked": "korisnik ima zatvorene DM-ove. Nije potrebna nikakva akcija.",
+    "rate_limited": "Discord ograničava broj zahteva bota. Pokušaj se automatski ponavlja.",
+    "circuit_open": "Discord je odbijao zahteve, pa je bot napravio pauzu da ne pogorša stanje. Nastavlja automatski.",
+    "duplicate": "ova akcija je već izvršena za tu poruku.",
+    "transient": "Discord je vratio grešku servera. Pokušaj se automatski ponavlja.",
+    "already_gone": "poruka je već bila obrisana.",
+    "already_banned": "korisnik je već bio banovan.",
+    "unknown": "Discord je vratio neočekivanu grešku. Ako se ponavlja, prijavite je uz id detekcije naveden iznad."
   }
 }
