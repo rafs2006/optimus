@@ -1608,3 +1608,29 @@ async def test_config_view_explanations_follow_guild_locale() -> None:
     deps = FakeDeps(config={"locale": "sr"})
     resp = await handle_command(_ctx("config", subcommand="view"), deps)
     assert "Podrazumevano" in resp.params["summary"]  # Serbian "Default"
+
+
+@pytest.mark.asyncio
+async def test_confirm_scam_button_runs_the_moderation_pipeline() -> None:
+    """Confirm must enforce the guild's action policy, not just delete one message.
+
+    The reported incident: a moderator confirmed a scam and the bot removed
+    that single message without banning the uploader, so Discord's ban-time
+    cross-channel purge never ran and copies in every other channel survived.
+    Routing the confirmation through the verdict pipeline is what makes the
+    configured delete+ban policy (and the campaign sweep behind it) apply.
+    """
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
+
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+
+    assert resp.i18n_key == "button.confirmed_scam"
+    assert len(deps.confirmed_scams) == 1
+    submitted = deps.confirmed_scams[0]
+    assert submitted["matched_hash_id"] == f"{0xABC:016x}"
+    # The uploader and message are carried through, so enforcement targets the
+    # scammer and the right post (see the fabricated DetectionFacts defaults).
+    assert submitted["uploader_id"] == 333
+    assert submitted["channel_id"] == 111
+    assert submitted["message_id"] == 222

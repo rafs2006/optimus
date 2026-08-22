@@ -346,6 +346,34 @@ class DetectionRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def list_by_uploader_since(
+        self, uploader_id: int, since: datetime, *, limit: int = 500
+    ) -> Sequence[Detection]:
+        """Every detection for one uploader in this guild since ``since``.
+
+        This is what makes a cross-channel purge possible. The bot scans and
+        records a row for *every* image it sees -- including ones it verdicted
+        clean -- so once a moderator confirms one post as a scam, these rows
+        are a complete map of where else that account posted images, with the
+        channel/message ids needed to delete them and the hashes needed to
+        blocklist the variants.
+
+        Ordered oldest-first so a purge walks a spam run in posting order, and
+        capped so a long-lived account with a big history cannot turn one
+        confirmation into an unbounded REST storm.
+        """
+        stmt = (
+            select(Detection)
+            .where(
+                Detection.guild_id == self._guild_id,
+                Detection.uploader_id == uploader_id,
+                Detection.created_at >= since,
+            )
+            .order_by(Detection.created_at.asc())
+            .limit(limit)
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
     async def belongs_to(self, detection_id: int, user_id: int) -> bool:
         """Whether ``detection_id`` exists in this guild and ``user_id`` uploaded it."""
         stmt = select(func.count()).where(

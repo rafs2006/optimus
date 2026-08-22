@@ -41,11 +41,13 @@ from optimus.bus.inprocess import InProcessBus
 from optimus.contracts.events import (
     SUBJECT_GUILD_JOINED,
     SUBJECT_IMAGE_FETCHED,
+    SUBJECT_INDEX_INVALIDATE,
     SUBJECT_MESSAGE_IMAGE,
     SUBJECT_SWARM_ALERT,
     SUBJECT_VERDICT,
     GuildJoinedEvent,
     ImageFetchedEvent,
+    IndexInvalidateEvent,
     MessageImageEvent,
     SwarmAlertEvent,
     VerdictEvent,
@@ -139,6 +141,7 @@ class SimpleApp:
             redis=store,
             bot_user_id=bot_user_id,
             rate_limiter=InMemoryRateLimiter(),
+            bus=bus,
         )
         moderation = ModerationService(settings, bus, coordinator, scope)
 
@@ -224,6 +227,18 @@ class SimpleApp:
                 durable="moderation-join",
                 model=GuildJoinedEvent,
                 handler=self.moderation.on_guild_joined,
+                stop_event=self._stop,
+            ),
+            # Without this consumer the scheduler's periodic index rebuild --
+            # and any invalidation broadcast by a hash write -- is published
+            # into the void, leaving the detection worker matching against a
+            # hash index frozen at process start. Only the distributed
+            # detection service used to subscribe here.
+            run(
+                SUBJECT_INDEX_INVALIDATE,
+                durable="detection-invalidate",
+                model=IndexInvalidateEvent,
+                handler=self.detection.on_invalidate,
                 stop_event=self._stop,
             ),
         ]

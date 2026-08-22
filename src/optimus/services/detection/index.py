@@ -212,6 +212,19 @@ class IndexManager:
         else:
             self._store_guild(guild_id, await self._build_guild(guild_id))
 
+    async def invalidate_all(self) -> None:
+        """Rebuild the global index and every resident guild index.
+
+        The periodic self-heal. Guild indexes are normally refreshed by the
+        write that changed them, but a missed invalidation used to persist
+        until the process restarted -- an unbounded window in which the worker
+        matched against a stale blocklist. Rebuilding only the guilds already
+        resident keeps the cost proportional to actual traffic.
+        """
+        self._global = await self._build_global()
+        for guild_id in list(self._guilds):
+            self._store_guild(guild_id, await self._build_guild(guild_id))
+
     async def _build_guild(self, guild_id: int) -> HashIndex:
         async with self._scope() as session:
             repo = GuildHashRepository(session, guild_id)

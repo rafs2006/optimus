@@ -25,11 +25,13 @@ from optimus.bus.nats import EventBus
 from optimus.contracts.events import (
     SUBJECT_ACTION_RESULT,
     SUBJECT_GUILD_JOINED,
+    SUBJECT_INDEX_INVALIDATE,
     SUBJECT_SWARM_ALERT,
     SUBJECT_VERDICT,
     Action,
     ActionResultEvent,
     GuildJoinedEvent,
+    IndexInvalidateEvent,
     SwarmAlertEvent,
     VerdictEvent,
 )
@@ -57,6 +59,7 @@ from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
 from optimus.services.moderation.priority import PriorityDispatcher
 from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
 
 _log = get_logger(__name__)
 
@@ -128,6 +131,7 @@ def build_coordinator(
     redis: object,
     bot_user_id: int,
     rate_limiter: RateLimiter | None = None,
+    bus: Bus | None = None,
 ) -> tuple[ModerationCoordinator, PriorityDispatcher[ActionResult]]:
     """Wire a :class:`ModerationCoordinator` from settings and shared clients.
 
@@ -222,6 +226,42 @@ def build_coordinator(
             )
             return detection.id
 
+    async def _sweep_delete(channel_id: int, message_id: int) -> None:
+        # Resolved per call rather than bound at construction: the REST client
+        # is only duck-typed here, and a deployment (or test) supplying a
+        # narrower object must not break coordinator construction. A missing
+        # method degrades to "sweep deletes nothing", never a startup crash.
+        await rest.delete_message(channel_id, message_id)  # type: ignore[attr-defined]
+
+    sweeper = CampaignSweeper(
+        scope,
+        delete_message=_sweep_delete,
+        window_hours=settings.mod_sweep_window_hours,
+        max_messages=settings.mod_sweep_max_messages,
+    )
+
+    async def sweep(event: VerdictEvent) -> SweepOutcome:
+        outcome = await sweeper.sweep(
+            event.guild_id,
+            uploader_id=event.uploader_id,
+            skip_message_id=event.message_id,
+            added_by=SYSTEM_ACTOR,
+        )
+        if outcome.harvested and bus is not None:
+            # The harvest is worthless until the detection worker reloads its
+            # index -- otherwise the variants just blocklisted stay invisible
+            # to the matcher and the next post sails through again.
+            with contextlib.suppress(Exception):
+                await bus.publish(
+                    SUBJECT_INDEX_INVALIDATE,
+                    IndexInvalidateEvent(
+                        correlation_id=event.correlation_id,
+                        occurred_at=datetime.now(UTC),
+                        guild_id=event.guild_id,
+                    ),
+                )
+        return outcome
+
     coordinator = ModerationCoordinator(
         config=config,
         target=target,
@@ -229,6 +269,7 @@ def build_coordinator(
         report=report,
         audit=audit,
         dispatcher=dispatcher,
+        sweep=sweep,
     )
     return coordinator, dispatcher
 
@@ -256,6 +297,22 @@ async def _resolve_target(  # pragma: no cover - requires live REST
         roles = await rest.fetch_roles(guild_id)  # type: ignore[attr-defined]
         me = await rest.fetch_member(guild_id, bot_user_id)  # type: ignore[attr-defined]
     except hikari.NotFoundError:
+        # Genuinely absent: the uploader left or was already banned. The caller
+        # downgrades to delete-only, which is correct.
+        _log.info("target_resolve_not_found", guild_id=guild_id, user_id=user_id)
+        return None
+    except Exception:
+        # Anything else (a 403 from missing permissions, a transient 5xx) used
+        # to propagate out of the coordinator and abandon the verdict entirely:
+        # no delete, no ban, no report, just a stack trace. Failing closed to
+        # "privileges unverifiable" downgrades to delete-only instead, so the
+        # scam still comes down while the cause stays visible in the logs.
+        _log.warning(
+            "target_resolve_failed",
+            guild_id=guild_id,
+            user_id=user_id,
+            exc_info=True,
+        )
         return None
     by_id = {int(r.id): r for r in roles}
     is_admin = any(
@@ -322,7 +379,12 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
     from optimus.services.moderation.rest_adapter import HikariRestActions
 
     coordinator, dispatcher = build_coordinator(
-        settings, scope, rest=HikariRestActions(rest), redis=redis, bot_user_id=bot_user_id
+        settings,
+        scope,
+        rest=HikariRestActions(rest),
+        redis=redis,
+        bot_user_id=bot_user_id,
+        bus=bus,
     )
     await dispatcher.start()
     service = ModerationService(settings, bus, coordinator, scope)

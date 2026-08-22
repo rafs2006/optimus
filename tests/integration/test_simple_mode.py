@@ -255,3 +255,46 @@ async def test_build_runs_migrations_and_is_ready(tmp_path) -> None:  # type: ig
             assert await GuildRepository(session).get(123) is None
     finally:
         await application.aclose()
+
+
+async def test_index_invalidation_is_consumed_in_simple_mode(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Simple mode (production) must actually subscribe to index invalidations.
+
+    Only the distributed detection service used to register this consumer, so in
+    simple mode every invalidation -- from the scheduler's periodic rebuild and
+    from each confirmed-scam hash write -- was published to a subject nobody was
+    listening on. The live matcher then kept using the hash index it had built
+    at process start, which is why a newly blocklisted scam image sailed through
+    until the bot was restarted.
+    """
+    from optimus.contracts.events import SUBJECT_INDEX_INVALIDATE, IndexInvalidateEvent
+
+    settings = _settings(tmp_path)
+    application = await SimpleApp.build(settings, bot_user_id=0)
+    try:
+        seen: list[int | None] = []
+        original = application.detection.on_invalidate
+
+        async def spy(event: IndexInvalidateEvent) -> None:
+            seen.append(event.guild_id)
+            await original(event)
+
+        application.detection.on_invalidate = spy  # type: ignore[method-assign]
+        application.start_pipeline()
+
+        await application.bus.publish(
+            SUBJECT_INDEX_INVALIDATE,
+            IndexInvalidateEvent(
+                correlation_id="c-inv",
+                occurred_at=datetime.now(UTC),
+                guild_id=4242,
+            ),
+        )
+        for _ in range(200):
+            if seen:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await application.aclose()
+
+    assert seen == [4242]

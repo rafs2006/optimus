@@ -31,6 +31,19 @@ from optimus.services.moderation.cooldown import Cooldown
 
 _log = get_logger(__name__)
 
+
+def _is_missing(exc: BaseException) -> bool:
+    """Whether ``exc`` is Discord's "already gone" (HTTP 404).
+
+    Duck-typed rather than importing hikari: this module is deliberately
+    testable with plain fakes, and a test double raising a simple exception
+    with ``status = 404`` must behave like the real ``hikari.NotFoundError``.
+    """
+    if type(exc).__name__ == "NotFoundError":
+        return True
+    return getattr(exc, "status", None) == 404
+
+
 # 0/1/2 encode closed/half_open/open so a dashboard can alert on "> 0".
 _CIRCUIT_STATE_CODE = {
     CircuitState.CLOSED: 0,
@@ -184,7 +197,25 @@ class ActionExecutor:
 
     async def _apply(self, req: ActionRequest) -> None:
         # The message is always removed first; punitive steps follow.
-        await self._rest.delete_message(req.channel_id, req.message_id)
+        #
+        # The delete is treated as idempotent because this whole method is
+        # retried as a unit: if the delete succeeds and the *ban* then fails,
+        # the retry re-deletes an already-gone message, which 404s and reports
+        # that 404 as the failure -- masking the real cause (e.g. a missing Ban
+        # Members permission) behind a misleading "message not found". An
+        # already-deleted message means this step's goal is met, so treat it as
+        # done and let the punitive step below surface its own error.
+        try:
+            await self._rest.delete_message(req.channel_id, req.message_id)
+        except Exception as exc:
+            if not _is_missing(exc):
+                raise
+            _log.debug(
+                "moderation_delete_already_gone",
+                guild_id=req.guild_id,
+                channel_id=req.channel_id,
+                message_id=req.message_id,
+            )
         if req.action is Action.DELETE:
             await self._maybe_dm(req)
             return
