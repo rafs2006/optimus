@@ -89,10 +89,12 @@ commands (registered automatically on first run):
   the moderator review channel. **`/config view`** shows the current settings.
 - **`/stats`** — see detection activity for your server.
 
-Members can right-click any image message → Apps → **_Report scam to mods_** to
-flag it for the moderator queue (nothing is deleted or blocked until a mod
-confirms), run **`/appeal`** on a detection, and **`/forget_me`** to erase their
-data. That's the whole product — register scam images, pick an action, done.
+Members can right-click any image message → Apps → **_Report scam to mods_** (or
+run **`/report <link-or-id>`**, which does the same thing and works where the
+right-click menu is hidden) to flag it for the moderator queue (nothing is
+deleted or blocked until a mod confirms), run **`/appeal`** on a detection, and
+**`/forget_me`** to erase their data. That's the whole product — register scam
+images, pick an action, done.
 
 ### What gets scanned
 

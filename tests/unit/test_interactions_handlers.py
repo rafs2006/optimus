@@ -1592,6 +1592,57 @@ async def test_report_message_guild_only() -> None:
     assert exc.value.reason is CommandError.GUILD_ONLY
 
 
+# --- /report slash command (same handler, typed target) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_report_slash_command_files_the_same_review() -> None:
+    """``/report`` reaches the identical handler as the context menu.
+
+    The glue layer resolves ``message:<link-or-id>`` into the same
+    channel/message/author/attachments option shape, so the two surfaces are
+    indistinguishable from here down -- no second code path to keep in sync.
+    """
+    deps = FakeDeps()
+    ctx = _review_ctx(command="report", subcommand=None, perms=NONE)
+    resp = await handle_command(ctx, deps)
+    assert resp.i18n_key == "command.report_ok"
+    assert deps.user_reports == [
+        {
+            "guild_id": 1,
+            "channel_id": 111,
+            "message_id": 222,
+            "attachment_id": 1,
+            "attachment_url": "https://x/1.png",
+            "uploader_id": 333,
+            "reporter_id": 99,
+        }
+    ]
+    assert deps.audits == [(1, 99, "report.message", "222")]
+    # Still inert: no hash stored, no confirmed verdict submitted.
+    assert deps.hashes == {}
+    assert deps.confirmed_scams == []
+
+
+@pytest.mark.asyncio
+async def test_report_slash_command_is_rate_limited_like_the_menu() -> None:
+    """The typed surface must not be a way around the per-user report limit."""
+    deps = FakeDeps(report_rate_ok=False)
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_review_ctx(command="report", subcommand=None, perms=NONE), deps)
+    assert exc.value.reason is CommandError.RATE_LIMITED
+    assert deps.user_reports == []
+
+
+@pytest.mark.asyncio
+async def test_report_slash_command_without_images_short_circuits() -> None:
+    deps = FakeDeps()
+    ctx = _review_ctx(command="report", subcommand=None, perms=NONE, attachments=[])
+    resp = await handle_command(ctx, deps)
+    assert resp.i18n_key == "command.report_no_images"
+    assert deps.user_reports == []
+
+
 @pytest.mark.asyncio
 async def test_config_view_explains_every_field() -> None:
     """Each rendered field carries its `-#` subtext explanation so mods learn
