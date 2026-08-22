@@ -933,6 +933,23 @@ async def handle_review_button(
                 )
         await deps.set_detection_action(ctx.guild_id, detection_id, "confirmed")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(detection_id))
+        if hashes is not None:
+            # Route the confirmation through the same verdict pipeline a live
+            # detection uses. Without this, Confirm deleted the single message
+            # above and stopped: no ban, and therefore none of the enforcement
+            # that follows one -- Discord's cross-channel ban purge, the
+            # campaign sweep, the audited action row. A moderator pressing
+            # "confirm scam" clearly intends the guild's configured
+            # action_policy (e.g. delete + ban) to apply, exactly as it would
+            # have if the hash had matched on upload.
+            await deps.submit_confirmed_scam(
+                ctx.guild_id,
+                channel_id=det.channel_id,
+                message_id=det.message_id,
+                attachment_id=det.attachment_id,
+                uploader_id=det.uploader_id,
+                matched_hash_id=f"{hashes.phash:016x}",
+            )
         key = "button.confirmed_scam" if hashes is not None else "button.confirmed_no_hash"
         # Confirm doubles as the global promotion vote — but only from servers
         # the owner approved AND that opted in. Everyone else's confirm stays

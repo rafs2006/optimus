@@ -70,6 +70,7 @@ def _build(
     reports: list[ReportData],
     audits: list[tuple[str, bool]],
     dispatcher: PriorityDispatcher | None = None,
+    sweep: object | None = None,
 ) -> ModerationCoordinator:
     from optimus.services.moderation.service import _ActionIdempotency
 
@@ -105,6 +106,7 @@ def _build(
         report=post,
         audit=audit,
         dispatcher=dispatcher,
+        sweep=sweep,  # type: ignore[arg-type]
     )
 
 
@@ -412,3 +414,129 @@ async def test_guild_match_report_is_not_flagged_global() -> None:
     await coord.handle_verdict(ev)
     assert len(reports) == 1
     assert reports[0].global_match is False
+
+
+async def test_sweep_runs_when_enforcement_succeeds() -> None:
+    """A confirmed scam triggers the cross-channel campaign purge."""
+    from optimus.services.moderation.sweep import SweepOutcome
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    swept: list[int] = []
+
+    async def sweep(event: VerdictEvent) -> SweepOutcome:
+        swept.append(event.uploader_id)
+        return SweepOutcome(deleted=4, channels=4, harvested=("aa",))
+
+    coord = _build(
+        rest=rest,
+        redis=redis,
+        cfg=_cfg(),
+        target=_target(),
+        reports=reports,
+        audits=audits,
+        sweep=sweep,
+    )
+
+    result = await coord.handle_verdict(_event())
+
+    assert result.success
+    assert swept == [42]
+    # The cleanup is surfaced to moderators, not silent.
+    assert "purged 4 more in 4 channels" in reports[0].action_taken
+    assert "+1 hashes blocklisted" in reports[0].action_taken
+
+
+async def test_sweep_still_runs_when_the_ban_fails() -> None:
+    """The reported incident: no ban means no native purge, so sweep anyway.
+
+    If the sweep were gated on enforcement success, the exact failure that
+    caused the incident (ban refused, Discord's ban purge therefore skipped)
+    would also skip the cleanup -- leaving every other copy in place.
+    """
+    from optimus.services.moderation.sweep import SweepOutcome
+
+    class _NoBanRest(_FakeRest):
+        async def ban_member(
+            self, guild_id: int, user_id: int, reason: str, purge_seconds: int = 0
+        ) -> None:
+            raise RuntimeError("Missing Permissions")
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    swept: list[int] = []
+
+    async def sweep(event: VerdictEvent) -> SweepOutcome:
+        swept.append(event.uploader_id)
+        return SweepOutcome(deleted=3, channels=3)
+
+    coord = _build(
+        rest=_NoBanRest(),
+        redis=redis,
+        cfg=_cfg(),
+        target=_target(),
+        reports=reports,
+        audits=audits,
+        sweep=sweep,
+    )
+
+    result = await coord.handle_verdict(_event())
+
+    assert result.success is False
+    assert swept == [42]
+
+
+async def test_sweep_failure_does_not_fail_the_verdict() -> None:
+    """Cleanup is best-effort; the primary action already happened."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+
+    async def sweep(_event: VerdictEvent) -> object:
+        raise RuntimeError("db gone")
+
+    coord = _build(
+        rest=rest,
+        redis=redis,
+        cfg=_cfg(),
+        target=_target(),
+        reports=reports,
+        audits=audits,
+        sweep=sweep,
+    )
+
+    result = await coord.handle_verdict(_event())
+
+    assert result.success
+    assert rest.calls == ["delete_message", "ban_member"]
+
+
+async def test_no_sweep_for_report_only_verdicts() -> None:
+    """A queued/report-only verdict must not purge anything."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    reports: list[ReportData] = []
+    audits: list[tuple[str, bool]] = []
+    swept: list[int] = []
+
+    async def sweep(event: VerdictEvent) -> object:
+        swept.append(event.uploader_id)
+        raise AssertionError("must not be called")
+
+    coord = _build(
+        rest=rest,
+        redis=redis,
+        cfg=_cfg(safe_mode=True),
+        target=_target(),
+        reports=reports,
+        audits=audits,
+        sweep=sweep,
+    )
+
+    await coord.handle_verdict(_event())
+
+    assert swept == []

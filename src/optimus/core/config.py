@@ -303,6 +303,16 @@ class Settings(BaseSettings):
     mod_circuit_failure_threshold: int = Field(default=5, ge=1)
     mod_circuit_recovery_seconds: float = 30.0
 
+    # Cross-channel campaign sweep. When a scam is confirmed, the uploader's
+    # other image posts inside this window are deleted from every channel and
+    # their hashes harvested into the guild blocklist. This does not depend on
+    # the ban succeeding, so a permission problem no longer leaves the rest of
+    # a multi-channel spam run standing.
+    #: How far back to look for the same uploader's other posts (hours).
+    mod_sweep_window_hours: int = Field(default=24, ge=1, le=168)
+    #: Hard cap on messages examined per sweep, bounding the REST burst.
+    mod_sweep_max_messages: int = Field(default=500, ge=1, le=5000)
+
     # Priority-aware action dispatch (single-replica scheduler in front of the
     # action executor). Protective work (delete scam / timeout / ban) is
     # dispatched ahead of courtesy work (appeal DMs, notifications) under load.

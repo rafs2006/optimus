@@ -172,3 +172,34 @@ async def test_global_index_invalidation(session: AsyncSession) -> None:
     await session.commit()
     await mgr.invalidate(None)
     assert len(await mgr.global_index()) == 2
+
+
+async def test_invalidate_all_refreshes_resident_guild_indexes(session: AsyncSession) -> None:
+    """The periodic sweep must refresh guild indexes, not just the global set.
+
+    The reported incident's root cause: the scheduler published an invalidation
+    with ``guild_id=None``, which rebuilt only the global index. A hash added to
+    a guild's blocklist therefore stayed invisible to the live matcher until the
+    process restarted, so the next post of that same image was not detected.
+    """
+    session.add(Guild(guild_id=GUILD_ID))
+    await _add_guild_hash(session, "h1", 1234)
+    await session.commit()
+
+    mgr = IndexManager(_scope_factory(session))
+    idx = await mgr.guild_index(GUILD_ID)
+    assert len(idx) == 1
+
+    # A moderator confirms a new scam image while the index is already resident.
+    await _add_guild_hash(session, "h2", 5678)
+    await session.commit()
+
+    # A global-scoped invalidation alone leaves the guild index stale...
+    await mgr.invalidate(None)
+    assert len(await mgr.guild_index(GUILD_ID)) == 1
+
+    # ...while the sweep picks the new hash up.
+    await mgr.invalidate_all()
+    refreshed = await mgr.guild_index(GUILD_ID)
+    assert len(refreshed) == 2
+    assert refreshed is not idx

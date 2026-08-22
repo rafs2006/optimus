@@ -163,12 +163,26 @@ class DbDeps:
         #: transaction's SQLite write lock exactly like the self-deadlock this
         #: design removes.
         self.pending_verdicts: list[VerdictEvent] = []
+        #: Guilds whose hash set changed in this request's transaction. The
+        #: detection worker caches each guild's hash index in memory and only
+        #: rebuilds it when told to, so a hash added here stays invisible to
+        #: live detection until the index is invalidated -- the bug that let a
+        #: scammer keep posting an image a moderator had already blocklisted.
+        #: Drained by :meth:`InteractionService._run` after commit, for the
+        #: same reason as ``pending_verdicts``: the rebuild reads the rows this
+        #: transaction is still holding a write lock on.
+        self.pending_index_invalidations: set[int] = set()
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
-        return await GuildHashRepository(self._session, guild_id).add(gh)
+        stored = await GuildHashRepository(self._session, guild_id).add(gh)
+        self.pending_index_invalidations.add(guild_id)
+        return stored
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
-        return await GuildHashRepository(self._session, guild_id).remove(hash_id)
+        removed = await GuildHashRepository(self._session, guild_id).remove(hash_id)
+        if removed:
+            self.pending_index_invalidations.add(guild_id)
+        return removed
 
     async def list_guild_hashes(self, guild_id: int) -> list[GuildHash]:
         return list(await GuildHashRepository(self._session, guild_id).list_active())
@@ -494,6 +508,7 @@ class DbDeps:
         existing = await repo.get(hash_id)
         if existing is not None:
             return existing
+        self.pending_index_invalidations.add(guild_id)
         return await repo.add(
             GuildHash(
                 hash_id=hash_id,
@@ -696,6 +711,11 @@ class InteractionService:
             # -back attempt's verdicts are discarded with its deps; the
             # retry's fresh attempt re-persists them idempotently.
             if self._detection is not None:
+                # Refresh the hash index BEFORE handing over the verdict: the
+                # moderation lane may sweep the rest of the campaign, and the
+                # sweep is only as good as the index it matches against.
+                for guild_id in deps.pending_index_invalidations:
+                    await self._detection.invalidate_guild_index(guild_id)
                 for verdict in deps.pending_verdicts:
                     await self._detection.publish_confirmed_match(verdict)
             return response

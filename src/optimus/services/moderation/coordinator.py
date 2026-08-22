@@ -24,6 +24,7 @@ from optimus.services.moderation.priority import (
     classify_action,
 )
 from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.sweep import SweepOutcome
 
 _log = get_logger(__name__)
 
@@ -93,6 +94,9 @@ TargetResolver = Callable[[int, int], Awaitable[TargetContext | None]]
 ReportPoster = Callable[[int, ReportData], Awaitable[int | None]]
 #: Persists the action taken + an audit row; returns the detection row id (if any).
 AuditRecorder = Callable[[VerdictEvent, str, ActionResult], Awaitable[int | None]]
+#: Purges the rest of a confirmed scammer's campaign across every channel and
+#: harvests the variant hashes. Returns a summary for the review card.
+Sweeper = Callable[[VerdictEvent], Awaitable[SweepOutcome]]
 
 
 class ModerationCoordinator:
@@ -107,12 +111,14 @@ class ModerationCoordinator:
         report: ReportPoster,
         audit: AuditRecorder,
         dispatcher: PriorityDispatcher[ActionResult] | None = None,
+        sweep: Sweeper | None = None,
     ) -> None:
         self._config = config
         self._target = target
         self._executor = executor
         self._report = report
         self._audit = audit
+        self._sweep = sweep
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -148,9 +154,39 @@ class ModerationCoordinator:
             return ActionResult(Action.NONE, success=True, detail=outcome.reason)
 
         result = await self._execute(event, cfg, action, decision)
+        # Enforcement landed on a real scam, so clean up the rest of the
+        # campaign. Deliberately NOT gated on ``result.success``: the whole
+        # point of the sweep is to cover the case where the punitive half
+        # failed (no Ban Members permission, role hierarchy, account already
+        # gone) and Discord's native ban purge therefore never ran, leaving
+        # every other copy standing. That failure mode is precisely what made
+        # a delete_ban policy behave like "deleted one message".
+        swept = await self._sweep_campaign(event, decision, action)
         detection_id = await self._audit(event, action.value, result)
-        await self._post_report(event, cfg, action, detection_id, result)
+        await self._post_report(event, cfg, action, detection_id, result, swept)
         return result
+
+    async def _sweep_campaign(
+        self, event: VerdictEvent, decision: Decision, action: Action
+    ) -> SweepOutcome | None:
+        """Purge the uploader's other posts, when this verdict warranted action."""
+        if self._sweep is None or decision is not Decision.AUTO_ACT:
+            return None
+        if action in (Action.NONE, Action.REPORT_ONLY):
+            return None
+        try:
+            return await self._sweep(event)
+        except Exception:
+            # Best-effort cleanup: the primary action already ran and was
+            # audited, and a bus redelivery would only re-run it into a
+            # "duplicate". Never fail the verdict over the sweep.
+            _log.error(
+                "campaign_sweep_failed",
+                guild_id=event.guild_id,
+                uploader_id=event.uploader_id,
+                exc_info=True,
+            )
+            return None
 
     async def _apply_boundaries(
         self, event: VerdictEvent, action: Action, decision: Decision
@@ -220,6 +256,7 @@ class ModerationCoordinator:
         action: Action,
         detection_id: int | None,
         result: ActionResult,
+        swept: SweepOutcome | None = None,
     ) -> None:
         if cfg.review_channel_id is None or detection_id is None:
             return
@@ -229,6 +266,16 @@ class ModerationCoordinator:
         action_taken = (
             action.value if result.success else f"{action.value} (failed: {result.detail})"
         )
+        if swept is not None and swept.touched:
+            # Make the cross-channel cleanup visible to moderators: without it
+            # the card reports one deletion while the sweep quietly removed a
+            # campaign spanning a dozen channels.
+            extra = f"purged {swept.deleted} more in {swept.channels} channels"
+            if swept.failed:
+                extra += f", {swept.failed} unreachable"
+            if swept.harvested:
+                extra += f", +{len(swept.harvested)} hashes blocklisted"
+            action_taken = f"{action_taken} — {extra}"
         try:
             await self._report(
                 cfg.review_channel_id,

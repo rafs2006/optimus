@@ -267,3 +267,75 @@ async def test_default_breaker_records_transition_metric() -> None:
     for i in range(5):  # default failure_threshold (5) trips the breaker open
         await ex.execute(_req(key=f"trip{i}"))
     assert label._value.get() == before + 1
+
+
+class _NotFoundError(Exception):
+    """Stands in for hikari.NotFoundError (matched by class name)."""
+
+    status = 404
+
+
+class _ForbiddenError(Exception):
+    """Stands in for hikari.ForbiddenError -- a missing Ban Members permission."""
+
+    status = 403
+
+
+class _BanFailsRest(_FakeRest):
+    """Deletes fine, but the ban always fails -- the reported incident.
+
+    Mirrors a guild where the bot has Manage Messages but not Ban Members.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_attempts = 0
+
+    async def delete_message(self, channel_id: int, message_id: int) -> None:
+        self.delete_attempts += 1
+        if self.delete_attempts > 1:
+            # Discord's real behaviour on re-deleting a removed message.
+            raise _NotFoundError("Unknown Message")
+        self._record("delete_message", channel_id, message_id)
+
+    async def ban_member(
+        self, guild_id: int, user_id: int, reason: str, purge_seconds: int = 0
+    ) -> None:
+        raise _ForbiddenError("Missing Permissions")
+
+
+async def test_ban_failure_is_reported_not_masked_by_redelete() -> None:
+    """The real ban error must survive the retry, not be replaced by a 404.
+
+    Previously the retry re-ran the whole apply step, so attempt 2 re-deleted
+    an already-deleted message and the resulting "Unknown Message" became the
+    recorded failure -- hiding the actual missing-permission cause and making
+    the incident look like a message-not-found problem.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _BanFailsRest()
+
+    result = await _executor(rest, redis=redis).execute(_req(Action.DELETE_BAN))
+
+    assert result.success is False
+    # The recorded cause is the ban's 403, not the re-delete's 404.
+    assert result.detail == "error:_ForbiddenError"
+    assert "NotFound" not in result.detail
+    # The delete was genuinely retried; it just no longer hijacks the error.
+    assert rest.delete_attempts > 1
+
+
+async def test_delete_of_already_removed_message_still_reaches_ban() -> None:
+    """An already-gone message must not stop the punitive half of the action."""
+
+    class _GoneRest(_FakeRest):
+        async def delete_message(self, channel_id: int, message_id: int) -> None:
+            raise _NotFoundError("Unknown Message")
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _GoneRest()
+
+    result = await _executor(rest, redis=redis).execute(_req(Action.DELETE_BAN))
+
+    assert result.success
+    assert [c[0] for c in rest.calls] == ["ban_member"]

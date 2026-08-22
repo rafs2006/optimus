@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +32,7 @@ from optimus.contracts.events import (
 from optimus.core.config import Sensitivity, Settings, get_settings
 from optimus.core.health import HealthServer
 from optimus.core.idempotency import IdempotencyGuard
-from optimus.core.logging import configure_logging, get_logger
+from optimus.core.logging import configure_logging, get_correlation_id, get_logger
 from optimus.core.readiness import db_check, nats_check, redis_check
 from optimus.db.engine import (
     SessionScope,
@@ -85,9 +86,47 @@ class DetectionService:
             await self._bus.publish(SUBJECT_SWARM_ALERT, result.swarm_alert)
 
     async def on_invalidate(self, event: IndexInvalidateEvent) -> None:
-        """Reload an index in response to a control-plane invalidation."""
-        await self._indexes.invalidate(event.guild_id)
+        """Reload an index in response to a control-plane invalidation.
+
+        A ``guild_id`` of ``None`` is the scheduler's periodic sweep: refresh
+        the global set *and* every resident guild index, so a guild whose
+        invalidation was somehow missed self-heals on the next tick instead of
+        staying stale until restart.
+        """
+        if event.guild_id is None:
+            await self._indexes.invalidate_all()
+        else:
+            await self._indexes.invalidate(event.guild_id)
         _log.info("index_invalidated", guild_id=event.guild_id)
+
+    async def invalidate_guild_index(self, guild_id: int) -> None:
+        """Rebuild one guild's hash index now, and tell other workers to as well.
+
+        Called by every path that mutates a guild's blocklist. Without this a
+        newly added hash is durable in the database but absent from the
+        in-memory index the worker actually matches against, so the very image
+        a moderator just blocklisted keeps sailing through -- the index is
+        cached until explicitly invalidated and nothing invalidated it.
+
+        The local rebuild is what fixes single-process (``OPTIMUS_MODE=simple``)
+        deployments, where this service instance *is* the matcher. The publish
+        covers distributed deployments, where other detection processes hold
+        their own copy of the index; it is best-effort so a bus hiccup cannot
+        fail the moderator's command after the local index is already correct.
+        """
+        await self._indexes.invalidate(guild_id)
+        _log.info("guild_index_refreshed", guild_id=guild_id)
+        try:
+            await self._bus.publish(
+                SUBJECT_INDEX_INVALIDATE,
+                IndexInvalidateEvent(
+                    correlation_id=get_correlation_id() or f"hashwrite:{guild_id}",
+                    occurred_at=datetime.now(UTC),
+                    guild_id=guild_id,
+                ),
+            )
+        except Exception:
+            _log.warning("index_invalidate_publish_failed", guild_id=guild_id, exc_info=True)
 
     async def submit_confirmed_match(self, verdict: VerdictEvent) -> None:
         """Persist and publish a verdict that is already known to be a match.
