@@ -21,6 +21,7 @@ import contextlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from datetime import datetime
 
 from optimus.core.config import Settings
@@ -28,10 +29,13 @@ from optimus.core.guild_config import GuildConfigCache
 from optimus.core.logging import get_logger
 from optimus.core.ratelimit import InMemoryRateLimiter
 from optimus.core.readiness import shards_check
+from optimus.db.repositories import GuildRepository
+from optimus.services.gateway.access_watch import AccessWatcher
 from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_start_kwargs
-from optimus.services.gateway.permission_probe import CachePermissionProbe
+from optimus.services.gateway.permission_probe import CachePermissionProbe, to_overwrites
 from optimus.services.gateway.watchdog import GatewayWatchdog
 from optimus.services.interactions.service import InteractionService, respond_to_interaction
+from optimus.services.moderation.explain import explain_rescan_summary
 from optimus.services.moderation.rest_adapter import HikariRestActions
 
 if TYPE_CHECKING:
@@ -106,6 +110,37 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         fetch_message=_fetch_message,
         history=_RestHistoryReader(),
     )
+
+    async def _rescan(guild_id: int, channel_ids: Sequence[int]) -> None:
+        """Rescan channels the bot has just regained access to, then say so.
+
+        The rescan republishes through the ordinary live-scan path, so anything
+        scam-like posted while the bot was blocked lands as a normal review
+        card. The summary line exists so a moderator who has just fixed an
+        overwrite can see the fix took effect.
+        """
+        probe.forget(guild_id)
+        channels, messages = await gateway.rescan_channels(
+            guild_id, channel_ids, trigger="access_regained"
+        )
+        _log.info(
+            "access_regained_rescan",
+            guild_id=guild_id,
+            channels=channels,
+            messages=messages,
+        )
+        if not channels:
+            return
+        async with app._scope() as session:
+            guild = await GuildRepository(session).get(guild_id)
+        if guild is None or guild.review_channel_id is None:
+            return
+        summary = explain_rescan_summary(tuple(channel_ids), messages, guild.locale)
+        with contextlib.suppress(Exception):
+            await bot.rest.create_message(guild.review_channel_id, summary)
+
+    access = AccessWatcher(probe, _rescan, bot_user_id=bot_user_id)
+
     interactions = InteractionService(
         app._scope,
         InMemoryRateLimiter(),
@@ -118,6 +153,8 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         # Same probe as enforcement, so the reply a moderator sees and the
         # action the bot later attempts agree about what is possible.
         probe=probe,
+        # /config permissions audits every channel from the same cache.
+        inventory=probe,
     )
 
     # Readiness should track the gateway, not just the DB: a wedged gateway
@@ -143,6 +180,37 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
     async def _on_guild_join(event: hikari.GuildJoinEvent) -> None:
         await gateway.on_guild_join(event)
 
+    @bot.listen(hikari.GuildChannelUpdateEvent)
+    async def _on_channel_update(event: hikari.GuildChannelUpdateEvent) -> None:
+        # An overwrite edit is how a moderator un-blinds the bot. Without this
+        # the fix took effect only for *future* uploads: scam images already
+        # sitting in the channel stayed up, which is exactly what happened in
+        # the reported incident.
+        await access.channel_updated(
+            int(event.guild_id),
+            int(event.channel.id),
+            before=(to_overwrites(event.old_channel) if event.old_channel is not None else None),
+            after=to_overwrites(event.channel),
+        )
+
+    @bot.listen(hikari.RoleUpdateEvent)
+    async def _on_role_update(event: hikari.RoleUpdateEvent) -> None:
+        # The other way access is granted: editing a role the bot already holds.
+        # One role edit can un-blind many channels at once, so each is evaluated
+        # with the old bits and the new ones and only the flips are rescanned.
+        channels = probe.guild_channels(int(event.guild_id))
+        if channels is None:
+            return
+        await access.role_updated(
+            int(event.guild_id),
+            int(event.role_id),
+            before_permissions=(
+                int(event.old_role.permissions) if event.old_role is not None else None
+            ),
+            after_permissions=int(event.role.permissions),
+            channels=channels,
+        )
+
     @bot.listen(hikari.InteractionCreateEvent)
     async def _on_interaction(event: hikari.InteractionCreateEvent) -> None:
         interaction = event.interaction
@@ -156,6 +224,7 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         await bot.join()
     finally:
         await watchdog.stop()
+        await access.aclose()
         await gateway.drain()
         with contextlib.suppress(Exception):
             await bot.close()

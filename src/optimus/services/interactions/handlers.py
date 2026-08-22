@@ -40,6 +40,8 @@ from optimus.services.interactions.logic import (
 from optimus.services.interactions.logic import (
     ImportHash as _ImportHash,
 )
+from optimus.services.moderation.explain import explain_access_report
+from optimus.services.moderation.permissions import AccessReport
 from optimus.services.moderation.review import BUTTON_LABELS, ParsedCustomId, ReviewAction
 
 _log = get_logger(__name__)
@@ -190,6 +192,10 @@ class InteractionDeps(Protocol):
         self, guild_id: int, channel_id: int, *, action: str, locale: str
     ) -> str | None:
         """Why enforcement in this channel would be refused, or ``None``."""
+        ...
+
+    async def access_report(self, guild_id: int) -> AccessReport | None:
+        """Per-channel enforcement access for the whole guild, or ``None``."""
         ...
 
     async def hash_rate_ok(self, user_id: int) -> bool: ...
@@ -586,6 +592,17 @@ async def _cmd_config(ctx: InteractionContext, deps: InteractionDeps) -> Interac
         return InteractionResponse(
             "command.config_view_header", {"summary": _render_config_summary(current, locale)}
         )
+    if ctx.subcommand == "permissions":
+        current = await deps.get_config(ctx.guild_id)
+        locale = str(current.get("locale", ctx.locale))
+        report = await deps.access_report(ctx.guild_id)
+        # No report means "could not check" (cache not warm, no gateway cache
+        # wired), which must not be shown as a clean bill of health.
+        if report is None:
+            return InteractionResponse("command.permissions_unknown")
+        return InteractionResponse(
+            "command.permissions_report", {"report": explain_access_report(report, locale)}
+        )
     change = validate_config_set(str(ctx.options["field"]), str(ctx.options["value"]))
     await deps.set_config_field(ctx.guild_id, change.field, change.value)
     await deps.audit(ctx.guild_id, ctx.user_id, "config.set", target=change.field)
@@ -633,10 +650,18 @@ def _render_config_summary(current: dict[str, Any], locale: str = "en") -> str:
         if config_field not in current:
             continue
         value = current[config_field]
+        # A channel mention only renders as the channel's name outside a code
+        # span -- inside backticks Discord shows the literal "<#123...>", which
+        # is exactly the raw id a mod would otherwise have to decode. Every
+        # other value stays in backticks: it is the literal text /config set
+        # accepts.
         if config_field == "review_channel":
-            rendered = f"<#{value}>" if value is not None else "not set"
-        else:
-            rendered = str(value)
+            lines.append(
+                f"**{config_field}**: " + (f"<#{value}>" if value is not None else "`not set`")
+            )
+            lines.append(f"-# {translate(f'config_help.{config_field}', locale)}")
+            continue
+        rendered = str(value)
         lines.append(f"**{config_field}**: `{rendered}`")
         lines.append(f"-# {translate(f'config_help.{config_field}', locale)}")
     return "\n".join(lines)
@@ -648,10 +673,14 @@ def _render_config_value(field: str, value: Any) -> str:
     ``review_channel`` stores a raw channel id (or ``None`` when cleared); show
     it as a real channel mention (or "none") instead of a bare integer/"None".
     Every other field renders as-is.
+
+    The returned string carries its own formatting -- a mention must stay
+    *outside* backticks to render as the channel's name, so the catalog template
+    interpolates it bare and each field decides how it is quoted.
     """
     if field == "review_channel":
-        return f"<#{value}>" if value is not None else "none"
-    return str(value)
+        return f"<#{value}>" if value is not None else "`none`"
+    return f"`{value}`"
 
 
 #: Name of the review channel ``/setup`` creates when none is linked yet.

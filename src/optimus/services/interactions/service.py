@@ -27,6 +27,7 @@ from sqlalchemy.exc import OperationalError
 from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy, retry_async
 from optimus.core.config import Settings
+from optimus.core.guild_config import load_from_db
 from optimus.core.loadstats import load_snapshot
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
@@ -70,9 +71,13 @@ from optimus.services.interactions.logic import (
 )
 from optimus.services.moderation.explain import explain_preflight
 from optimus.services.moderation.permissions import (
+    AccessReport,
+    ChannelInventory,
     PermissionProbe,
+    build_access_report,
     preflight_delete,
     preflight_punitive,
+    punitive_requirement,
 )
 from optimus.services.moderation.review import decode_custom_id
 
@@ -154,6 +159,7 @@ class DbDeps:
         detection: DetectionService | None = None,
         rest: ModerationRest | None = None,
         probe: PermissionProbe | None = None,
+        inventory: ChannelInventory | None = None,
     ) -> None:
         self._session = session
         self._rl = rate_limiter
@@ -163,6 +169,7 @@ class DbDeps:
         self._detection = detection
         self._rest = rest
         self._probe = probe
+        self._inventory = inventory
         #: Confirmed-scam verdicts persisted in this request's transaction but
         #: not yet published to the moderation bus. :meth:`InteractionService._run`
         #: publishes these only after the transaction commits -- publishing
@@ -445,6 +452,35 @@ class DbDeps:
         punitive = await preflight_punitive(self._probe, guild_id, policy)
         return explain_preflight(punitive, locale)
 
+    async def access_report(self, guild_id: int) -> AccessReport | None:
+        """Audit every channel's enforcement access, or ``None`` when unknown.
+
+        Answered entirely from the gateway cache -- no request per channel --
+        and unlike a record of past failures it also names channels no scam has
+        landed in yet. ``None`` (cache not warm, or no probe wired) is reported
+        as "cannot check" rather than as "nothing is wrong".
+        """
+        if self._inventory is None:
+            return None
+        access = await self._inventory.channel_access(guild_id)
+        if access is None:
+            return None
+        guild = await GuildRepository(self._session).get(guild_id)
+        try:
+            policy = Action(guild.action_policy) if guild is not None else Action.REPORT_ONLY
+        except ValueError:
+            policy = Action.REPORT_ONLY
+        config = await load_from_db(self._session, guild_id)
+        guild_permissions = (
+            await self._probe.guild_permissions(guild_id) if self._probe is not None else None
+        )
+        return build_access_report(
+            access,
+            ignored_channels=config.ignored_channels,
+            guild_permissions=guild_permissions,
+            punitive=punitive_requirement(policy),
+        )
+
     async def hash_rate_ok(self, user_id: int) -> bool:
         return await self._rl.acquire(f"scamhash:{user_id}", HASH_RATE)
 
@@ -666,6 +702,7 @@ class InteractionService:
         detection: DetectionService | None = None,
         rest: ModerationRest | None = None,
         probe: PermissionProbe | None = None,
+        inventory: ChannelInventory | None = None,
     ) -> None:
         self._scope = scope
         self._rl = rate_limiter
@@ -674,6 +711,7 @@ class InteractionService:
         self._detection = detection
         self._rest = rest
         self._probe = probe
+        self._inventory = inventory
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
         """Run a slash command within a fresh transactional session scope."""
@@ -738,6 +776,7 @@ class InteractionService:
                         detection=self._detection,
                         rest=self._rest,
                         probe=self._probe,
+                        inventory=self._inventory,
                     )
                     response: InteractionResponse = await call(deps)
             except OperationalError as exc:

@@ -15,7 +15,11 @@ from __future__ import annotations
 from optimus.i18n import translate
 from optimus.services.moderation.actions import ActionResult, Step, StepOutcome
 from optimus.services.moderation.failures import FailureKind
-from optimus.services.moderation.permissions import PreflightResult
+from optimus.services.moderation.permissions import AccessReport, PreflightResult
+
+#: Blocked channels listed per group before collapsing into "and N more", so a
+#: 200-channel server cannot produce a reply past Discord's length limit.
+_MAX_CHANNELS_PER_GROUP = 15
 
 #: Per-step description of what could not be done ("Could not delete...").
 _STEP_KEY = {
@@ -80,6 +84,66 @@ def explain_result(
         for step in failed
     ]
     return "\n".join(lines)
+
+
+def explain_access_report(report: AccessReport, locale: str) -> str:
+    """Render an :class:`AccessReport` as the body of ``/config permissions``.
+
+    Deliberately silent when healthy -- a wall of green checkmarks for every
+    channel is noise. When something is blocked, channels are grouped by the
+    permission they are missing and rendered as mentions, which Discord shows as
+    the channel's real name rather than a raw id.
+    """
+    if report.ok:
+        return translate("command.permissions_all_ok", locale, checked=report.checked)
+    lines = [
+        translate(
+            "command.permissions_header",
+            locale,
+            blocked=len(report.blocked),
+            checked=report.checked,
+        )
+    ]
+    if report.guild_missing:
+        lines.append(
+            "\n"
+            + translate(
+                "command.permissions_guild_gap",
+                locale,
+                missing=", ".join(report.guild_missing),
+            )
+        )
+    for missing, channel_ids in report.grouped():
+        shown = channel_ids[:_MAX_CHANNELS_PER_GROUP]
+        listing = "  ".join(f"<#{cid}>" for cid in shown)
+        hidden = len(channel_ids) - len(shown)
+        if hidden:
+            listing += " " + translate("command.permissions_more", locale, count=hidden)
+        lines.append(
+            "\n"
+            + translate("command.permissions_group", locale, missing=", ".join(missing))
+            + "\n"
+            + listing
+        )
+    lines.append("\n" + translate("command.permissions_how_to_fix", locale))
+    if report.ignored:
+        lines.append(translate("command.permissions_ignored", locale, count=report.ignored))
+    return "\n".join(lines)
+
+
+def explain_rescan_summary(channel_ids: tuple[int, ...], messages: int, locale: str) -> str:
+    """One line for the review channel after an access-regained rescan.
+
+    Posted so a moderator who has just fixed a permission sees that the bot
+    noticed and went back over what it missed, rather than having to guess
+    whether the fix took effect.
+    """
+    return translate(
+        "command.access_regained",
+        locale,
+        channels="  ".join(f"<#{cid}>" for cid in channel_ids),
+        messages=messages,
+    )
 
 
 def explain_preflight(

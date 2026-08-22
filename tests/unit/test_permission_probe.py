@@ -81,6 +81,9 @@ class _Cache:
     def get_guild_channel(self, channel_id: int) -> _Channel | None:
         return self._channels.get(channel_id)
 
+    def get_guild_channels_view_for_guild(self, guild_id: int) -> dict[int, _Channel]:
+        return self._channels
+
 
 class _Rest:
     """Records ``fetch_my_member`` calls; raises when the bot is not a member."""
@@ -254,3 +257,86 @@ async def test_failed_member_lookup_returns_unknown() -> None:
 async def test_probe_satisfies_the_protocol_the_preflights_expect() -> None:
     probe: perms.PermissionProbe = _probe(_full_cache())
     assert (await perms.preflight_delete(probe, _GUILD, _CHANNEL)).ok is True
+
+
+# --- whole-guild audit (/config permissions) ----------------------------------
+
+
+class _TypedChannel(_Channel):
+    """A cached channel that also reports its id and Discord channel type."""
+
+    def __init__(self, channel_id: int, overwrites: list[Any], *, channel_type: int = 0) -> None:
+        super().__init__(overwrites)
+        self.id = channel_id
+        self.type = channel_type
+
+
+def _guild_cache(channels: dict[int, _TypedChannel], *, granted: int | None = None) -> _Cache:
+    cache = _full_cache(role_permissions=granted)
+    cache._channels = dict(channels)
+    return cache
+
+
+@pytest.mark.asyncio
+async def test_channel_access_covers_every_channel_without_a_request() -> None:
+    cache = _guild_cache(
+        {
+            301: _TypedChannel(301, []),
+            302: _TypedChannel(302, [_overwrite(_GUILD, deny=perms.VIEW_CHANNEL)]),
+        }
+    )
+    rest = _Rest(_Member([_MOD_ROLE]))
+    probe = _probe(cache, rest)
+
+    access = await probe.channel_access(_GUILD)
+
+    assert access is not None
+    granted = dict(access)
+    assert perms.check(perms.DELETE_REQUIRES, granted[301]).ok is True
+    assert perms.check(perms.DELETE_REQUIRES, granted[302]).ok is False
+    assert rest.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_guild_channels_skips_categories_and_voice() -> None:
+    """Nothing can be uploaded to them, so they are not access problems."""
+    cache = _guild_cache(
+        {
+            301: _TypedChannel(301, [], channel_type=0),  # text
+            302: _TypedChannel(302, [], channel_type=4),  # category
+            303: _TypedChannel(303, [], channel_type=2),  # voice
+            304: _TypedChannel(304, [], channel_type=11),  # public thread
+        }
+    )
+
+    channels = _probe(cache).guild_channels(_GUILD)
+
+    assert channels is not None
+    assert [channel_id for channel_id, _ in channels] == [301, 304]
+
+
+@pytest.mark.asyncio
+async def test_channel_access_is_unknown_when_no_channels_are_cached() -> None:
+    """A cold cache must read as \"cannot check\", never as \"nothing is wrong\"."""
+    probe = _probe(_guild_cache({}))
+
+    assert probe.guild_channels(_GUILD) is None
+    assert await probe.channel_access(_GUILD) is None
+
+
+@pytest.mark.asyncio
+async def test_role_state_exposes_permissions_per_role() -> None:
+    """The access watcher needs per-role bits to recompute a transition."""
+    state = await _probe(_full_cache()).role_state(_GUILD)
+
+    assert state is not None
+    role_ids, role_permissions, is_owner = state
+    assert _MOD_ROLE in role_ids
+    assert role_permissions[_MOD_ROLE] & perms.MANAGE_MESSAGES
+    assert is_owner is False
+
+
+@pytest.mark.asyncio
+async def test_probe_satisfies_the_channel_inventory_protocol() -> None:
+    inventory: perms.ChannelInventory = _probe(_guild_cache({301: _TypedChannel(301, [])}))
+    assert await inventory.channel_access(_GUILD) is not None

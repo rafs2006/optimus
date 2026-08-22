@@ -145,6 +145,10 @@ COMMANDS: tuple[Command, ...] = (
         subcommands=(
             SubCommand(name="view", description="Show all current settings and their values."),
             SubCommand(
+                name="permissions",
+                description="List channels where the bot cannot enforce, and what it is missing.",
+            ),
+            SubCommand(
                 name="set",
                 description="Change one setting.",
                 options=(

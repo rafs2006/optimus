@@ -34,6 +34,12 @@ from optimus.services.moderation.permissions import Overwrite, effective_permiss
 
 _log = get_logger(__name__)
 
+#: Channel types an image can actually be posted in (``hikari.ChannelType``
+#: values). Categories, voice and stage channels are excluded from the access
+#: audit: nothing can be uploaded to them, so reporting them as "blocked" would
+#: be pure noise. Compared as plain ints so the set is exercised without hikari.
+TEXTABLE_CHANNEL_TYPES = frozenset({0, 5, 10, 11, 12, 15, 16})
+
 
 class CachePermissionProbe:
     """Resolves the bot's effective permissions from hikari's gateway cache."""
@@ -54,12 +60,12 @@ class CachePermissionProbe:
 
     async def guild_permissions(self, guild_id: int) -> int | None:
         """Guild-wide permissions for the bot, ignoring channel overwrites."""
-        state = await self._guild_state(guild_id)
+        state = await self.role_state(guild_id)
         if state is None:
             return None
         role_ids, role_perms, is_owner = state
         return effective_permissions(
-            role_permissions=role_perms,
+            role_permissions=role_perms.values(),
             role_ids=role_ids,
             member_id=self._bot_user_id,
             everyone_id=guild_id,
@@ -68,7 +74,7 @@ class CachePermissionProbe:
 
     async def channel_permissions(self, guild_id: int, channel_id: int) -> int | None:
         """Effective permissions for the bot in one channel, or ``None``."""
-        state = await self._guild_state(guild_id)
+        state = await self.role_state(guild_id)
         if state is None:
             return None
         overwrites = self._overwrites(channel_id)
@@ -76,7 +82,7 @@ class CachePermissionProbe:
             return None
         role_ids, role_perms, is_owner = state
         return effective_permissions(
-            role_permissions=role_perms,
+            role_permissions=role_perms.values(),
             role_ids=role_ids,
             member_id=self._bot_user_id,
             everyone_id=guild_id,
@@ -84,8 +90,13 @@ class CachePermissionProbe:
             is_owner=is_owner,
         )
 
-    async def _guild_state(self, guild_id: int) -> tuple[frozenset[int], list[int], bool] | None:
-        """The bot's role ids, those roles' permission bits, and ownership."""
+    async def role_state(self, guild_id: int) -> tuple[frozenset[int], dict[int, int], bool] | None:
+        """The bot's role ids, those roles' permission bits, and ownership.
+
+        Public because the access watcher recomputes permissions with one
+        role's bits substituted, to tell an access-granting role edit from any
+        other role edit.
+        """
         role_ids = await self._bot_role_ids(guild_id)
         if role_ids is None:
             return None
@@ -97,7 +108,9 @@ class CachePermissionProbe:
             return None
         if guild is None or not roles:
             return None
-        perms = [int(role.permissions) for rid in role_ids if (role := roles.get(rid)) is not None]
+        perms = {
+            rid: int(role.permissions) for rid in role_ids if (role := roles.get(rid)) is not None
+        }
         if not perms:
             return None
         return role_ids, perms, int(guild.owner_id) == self._bot_user_id
@@ -129,22 +142,74 @@ class CachePermissionProbe:
         self._roles[guild_id] = role_ids
         return role_ids
 
+    def guild_channels(self, guild_id: int) -> list[tuple[int, list[Overwrite]]] | None:
+        """Every cached textable channel in the guild, with its own overwrites.
+
+        ``None`` when the guild's channels are not cached at all. Categories and
+        voice channels are excluded: a scam image cannot be posted in them, so
+        reporting them as "blocked" would be noise.
+        """
+        try:
+            channels = self._cache.get_guild_channels_view_for_guild(guild_id)
+        except Exception:  # pragma: no cover - defensive; the cache must not raise
+            return None
+        if not channels:
+            return None
+        out: list[tuple[int, list[Overwrite]]] = []
+        for channel in channels.values():
+            channel_type = getattr(channel, "type", None)
+            if channel_type is None or int(channel_type) not in TEXTABLE_CHANNEL_TYPES:
+                continue
+            out.append((int(channel.id), to_overwrites(channel)))
+        return out
+
+    async def channel_access(self, guild_id: int) -> list[tuple[int, int]] | None:
+        """``(channel_id, effective permission bits)`` for every textable channel.
+
+        Computed entirely from cache, so ``/config permissions`` can audit a
+        whole server without spending a request per channel.
+        """
+        state = await self.role_state(guild_id)
+        channels = self.guild_channels(guild_id)
+        if state is None or channels is None:
+            return None
+        role_ids, role_perms, is_owner = state
+        return [
+            (
+                channel_id,
+                effective_permissions(
+                    role_permissions=role_perms.values(),
+                    role_ids=role_ids,
+                    member_id=self._bot_user_id,
+                    everyone_id=guild_id,
+                    overwrites=overwrites,
+                    is_owner=is_owner,
+                ),
+            )
+            for channel_id, overwrites in channels
+        ]
+
     def _overwrites(self, channel_id: int) -> list[Overwrite] | None:
         """The channel's own overwrites, or ``None`` when it is not cached."""
-        import hikari
-
         try:
             channel = self._cache.get_guild_channel(channel_id)
         except Exception:  # pragma: no cover - defensive
             return None
         if channel is None:
             return None
-        return [
-            Overwrite(
-                target_id=int(ow.id),
-                is_role=ow.type == hikari.PermissionOverwriteType.ROLE,
-                allow=int(ow.allow),
-                deny=int(ow.deny),
-            )
-            for ow in getattr(channel, "permission_overwrites", {}).values()
-        ]
+        return to_overwrites(channel)
+
+
+def to_overwrites(channel: Any) -> list[Overwrite]:
+    """Convert a cached channel's permission overwrites to the pure form."""
+    import hikari
+
+    return [
+        Overwrite(
+            target_id=int(ow.id),
+            is_role=ow.type == hikari.PermissionOverwriteType.ROLE,
+            allow=int(ow.allow),
+            deny=int(ow.deny),
+        )
+        for ow in getattr(channel, "permission_overwrites", {}).values()
+    ]
