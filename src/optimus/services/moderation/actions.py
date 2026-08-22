@@ -201,6 +201,17 @@ class ActionResult:
         """Failed steps that a later permission fix could still complete."""
         return tuple(s for s in self.failed_steps if s.recoverable)
 
+    @property
+    def message_deleted(self) -> bool:
+        """Whether the offending message was actually removed.
+
+        Read from the delete step's own outcome rather than inferred from
+        ``action`` or ``success``: a ``delete_ban`` whose delete was refused for
+        want of Manage Messages still leaves the message (and its image) in
+        place, which is exactly the case a moderator needs to look at.
+        """
+        return any(s.step is Step.DELETE and s.success for s in self.steps)
+
 
 class ActionExecutor:
     """Applies moderation actions with rate-limiting, breaker, backoff, idempotency."""

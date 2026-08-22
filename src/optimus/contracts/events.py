@@ -109,6 +109,11 @@ class ImageFetchedEvent(_Event):
     size_bytes: int
     sha256: str
     data_b64: str
+    #: Where the image was fetched from (the Discord CDN attachment URL). Carried
+    #: only so the mod-review card can show the image the moderator is being
+    #: asked to judge; nothing re-fetches it. Optional because a payload
+    #: published by an older replica will not have it.
+    source_url: str | None = None
 
 
 class HashSet(BaseModel):
@@ -163,6 +168,9 @@ class VerdictEvent(_Event):
     #: verdict -- surfaced on the mod-review card so moderators see *why* an
     #: image with no matching hash was flagged.
     ocr: OcrFindings | None = None
+    #: The image's origin URL, forwarded from :class:`ImageFetchedEvent` so the
+    #: review card can render the image inline (see :mod:`.review`).
+    source_url: str | None = None
     distances: dict[str, int] = Field(default_factory=dict)
 
 

@@ -119,7 +119,12 @@ def test_global_index_also_matched() -> None:
 # --- worker (idempotency, decode, swarm) -----------------------------------
 
 
-def _event(*, key: str = "k1", data: bytes = b"\x89PNG\r\n\x1a\n") -> ImageFetchedEvent:
+def _event(
+    *,
+    key: str = "k1",
+    data: bytes = b"\x89PNG\r\n\x1a\n",
+    source_url: str | None = None,
+) -> ImageFetchedEvent:
     return ImageFetchedEvent(
         correlation_id="c",
         occurred_at=datetime.now(UTC),
@@ -133,6 +138,7 @@ def _event(*, key: str = "k1", data: bytes = b"\x89PNG\r\n\x1a\n") -> ImageFetch
         size_bytes=len(data),
         sha256="0" * 64,
         data_b64=base64.b64encode(data).decode(),
+        source_url=source_url,
     )
 
 
@@ -501,3 +507,15 @@ async def test_worker_without_optin_hook_keeps_legacy_always_on() -> None:
     assert result is not None
     assert result.verdict.verdict is Verdict.SCAM
     assert result.verdict.matched_source == "global"
+
+
+async def test_the_verdict_carries_the_origin_url_through_to_the_card() -> None:
+    """Detection is the last hop before the review card is built."""
+    worker = _worker_with_limits(DecodeLimits())
+
+    result = await worker.handle(
+        _event(key="carry", data=_scam_png(), source_url="https://cdn.test/scam.png?ex=abc")
+    )
+
+    assert result is not None
+    assert result.verdict.source_url == "https://cdn.test/scam.png?ex=abc"
