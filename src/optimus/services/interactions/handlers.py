@@ -698,6 +698,45 @@ async def _cmd_setup(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     return InteractionResponse(key, {"channel_id": created})
 
 
+def _stats_load_block(summary: dict[str, Any], locale: str) -> str:
+    """Render the pipeline-load section of ``/stats``, or nothing.
+
+    The throughput numbers are bot-wide and reset on restart (see
+    :mod:`optimus.core.loadstats`), so the heading says so rather than
+    letting a moderator read another server's traffic as their own. The
+    skip breakdown is only appended when something was actually skipped:
+    on a healthy server it would otherwise be four zeroes of noise on every
+    invocation.
+
+    Returns ``""`` when the process has done no work at all -- a bot that
+    has just restarted, where every number would be zero and the section
+    says nothing a moderator can act on.
+    """
+    scanned = int(summary.get("scanned", 0))
+    queued = int(summary.get("queued", 0))
+    skipped = int(summary.get("skipped", 0))
+    if scanned == 0 and queued == 0 and skipped == 0:
+        return ""
+    detail = ""
+    if skipped:
+        detail = translate(
+            "command.stats_load_skipped",
+            locale,
+            duplicates=f"{int(summary.get('duplicates', 0)):,}",
+            rejected=f"{int(summary.get('rejected', 0)):,}",
+            rate_limited=f"{int(summary.get('rate_limited', 0)):,}",
+            dropped=f"{int(summary.get('dropped', 0)):,}",
+        )
+    return translate(
+        "command.stats_load",
+        locale,
+        scanned=f"{scanned:,}",
+        queued=f"{queued:,}",
+        skipped=f"{skipped:,}",
+        skipped_detail=detail,
+    )
+
+
 async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
     assert ctx.guild_id is not None
     summary = await deps.stats_summary(ctx.guild_id)
@@ -713,6 +752,7 @@ async def _cmd_stats(ctx: InteractionContext, deps: InteractionDeps) -> Interact
             "detections": summary.get("detections", 0),
             "boots": summary.get("boots", 0),
             "first_boot": summary.get("first_boot", "unknown"),
+            "load": _stats_load_block(summary, ctx.locale),
         },
     )
 

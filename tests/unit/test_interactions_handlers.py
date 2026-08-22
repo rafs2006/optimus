@@ -1202,6 +1202,91 @@ async def test_stats_zero_detections_still_shows_persistence_canary() -> None:
     assert resp.params["boots"] == 2
 
 
+def _load_deps(**load: int) -> FakeDeps:
+    """FakeDeps whose stats_summary carries pipeline-load numbers."""
+    deps = FakeDeps()
+
+    async def _summary(guild_id: int) -> dict[str, Any]:
+        return {"detections": 3, "hours": 24, "boots": 5, "first_boot": "2026-08-01", **load}
+
+    deps.stats_summary = _summary  # type: ignore[method-assign]
+    return deps
+
+
+@pytest.mark.asyncio
+async def test_stats_renders_pipeline_load_with_skip_breakdown() -> None:
+    """Moderators can see whether the bot is keeping up without /metrics."""
+    deps = _load_deps(
+        scanned=128431,
+        queued=2,
+        skipped=3104,
+        duplicates=2890,
+        rejected=180,
+        rate_limited=29,
+        dropped=5,
+    )
+    resp = await handle_command(_ctx("stats"), deps)
+    body = render(resp, "en")
+    # Thousands separators: a raw 128431 is unreadable at a glance.
+    assert "\u2022 Images scanned: 128,431" in body
+    assert "\u2022 Waiting on moderation: 2" in body
+    assert "\u2022 Skipped: 3,104" in body
+    # The breakdown is Discord subtext so the headline numbers stay dominant.
+    assert "-# already seen 2,890" in body
+    assert "rate-limited 29" in body
+    # Never presented as this server's own traffic -- the counters have no
+    # guild label and cannot be attributed to one server.
+    assert "every server this bot is in" in body
+    # The guild-scoped section is untouched.
+    assert body.startswith("Statistics for the last 24 hours:")
+
+
+@pytest.mark.asyncio
+async def test_stats_omits_skip_breakdown_when_nothing_was_skipped() -> None:
+    """A healthy pipeline must not print four zeroes on every invocation."""
+    deps = _load_deps(scanned=412, queued=0, skipped=0)
+    body = render(await handle_command(_ctx("stats"), deps), "en")
+    assert "\u2022 Skipped: 0" in body
+    assert "already seen" not in body
+
+
+@pytest.mark.asyncio
+async def test_stats_omits_load_section_entirely_on_a_fresh_process() -> None:
+    """Right after a restart every counter is zero and the section says
+    nothing actionable, so it is dropped rather than shown as all zeroes."""
+    deps = _load_deps(scanned=0, queued=0, skipped=0)
+    resp = await handle_command(_ctx("stats"), deps)
+    assert resp.params["load"] == ""
+    body = render(resp, "en")
+    assert "Pipeline load" not in body
+    # Falling back to the pre-existing output exactly, with no dangling blank
+    # lines where the section would have been.
+    assert body == (
+        "Statistics for the last 24 hours:\n"
+        "\u2022 Detections: 3\n"
+        "\u2022 Database: boot #5, storing data since 2026-08-01"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stats_load_section_is_localized() -> None:
+    deps = _load_deps(scanned=10, queued=1, skipped=2, duplicates=2)
+    ctx = InteractionContext(
+        guild_id=1,
+        user_id=99,
+        member_permissions=MANAGE,
+        command="stats",
+        subcommand=None,
+        options={},
+        locale="sr",
+    )
+    body = render(await handle_command(ctx, deps), "sr")
+    assert "Skenirano slika: 10" in body
+    assert "ve\u0107 vi\u0111eno 2" in body
+    # No English leaked through from the sub-key assembled in the handler.
+    assert "already seen" not in body
+
+
 # --- /global (owner-only allowlist) and /help ----------------------------------
 
 

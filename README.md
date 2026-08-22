@@ -87,7 +87,8 @@ commands (registered automatically on first run):
 - **`/config set`** — choose what happens on a match (report / delete / timeout /
   ban), the detection **sensitivity** (`strict` / `balanced` / `permissive`), and
   the moderator review channel. **`/config view`** shows the current settings.
-- **`/stats`** — see detection activity for your server.
+- **`/stats`** — see detection activity for your server, plus how hard the bot
+  is working (images scanned, queue depth, skips) without needing `/metrics`.
 
 Members can right-click any image message → Apps → **_Report scam to mods_** (or
 run **`/report <link-or-id>`**, which does the same thing and works where the

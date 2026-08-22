@@ -27,6 +27,7 @@ from sqlalchemy.exc import OperationalError
 from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy, retry_async
 from optimus.core.config import Settings
+from optimus.core.loadstats import load_snapshot
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
 from optimus.db.engine import SessionScope
@@ -253,11 +254,24 @@ class DbDeps:
         first_boot = (
             boot.first_boot_at.date().isoformat() if boot.first_boot_at is not None else "unknown"
         )
+        # Pipeline load rides along in the same call so /stats stays one
+        # round-trip. It is process-wide rather than guild-scoped (see
+        # optimus.core.loadstats) and involves no I/O -- just a read of the
+        # in-process Prometheus registry -- so it cannot slow the command
+        # down or hold the session's transaction open.
+        load = load_snapshot()
         return {
             "detections": detections,
             "hours": 24,
             "boots": boot.boots,
             "first_boot": first_boot,
+            "scanned": load.scanned,
+            "queued": load.queued,
+            "skipped": load.skipped,
+            "rejected": load.rejected,
+            "rate_limited": load.rate_limited,
+            "dropped": load.dropped,
+            "duplicates": load.duplicates,
         }
 
     async def opt_out_user(self, user_id: int) -> int:
