@@ -75,7 +75,73 @@ Notes on cards:
   Approve/Deny buttons. Approving an appeal reverses the action and unbans
   the appellant.
 
+## Deciding fast
+
+A review card is built to be judged in a few seconds without leaving the
+channel. Read it in this order and stop as soon as you have an answer.
+
+1. **The image**, shown on the card itself. Most decisions end here.
+2. **OCR/QR risk scan** — present only when the image did *not* match a known
+   hash. This is the bot saying "I have never seen this, but the text or QR code
+   in it looks like phishing", with the signals it found. Treat it as a prompt
+   to look, not as a verdict.
+3. **Matched hash** and **Confidence** — present when it *did* match. A match
+   against a hash your own team added is the strongest signal on the card.
+4. **Source** — if it says the global database, nothing has been done and
+   nothing will be until you press a button, whatever your `action_policy` says.
+5. **Uploader** and **Channel** — context for *who*, which is a different
+   question from *is this a scam* (below).
+6. **Action taken** / **Needs attention** — what already happened, and anything
+   the bot could not finish.
+
+### Tells on the image
+
+What the OCR lane is scoring, and what to look for yourself:
+
+- A **QR code** in a giveaway, gift, support, or "verify your wallet" image.
+  QR codes are decoded but never opened, so nobody has visited the destination —
+  and a QR code is the point of most drainer images.
+- **Login or seed-phrase prompts** rendered inside a picture. No legitimate
+  service asks for credentials via a screenshot.
+- **Lookalike domains** — a character swapped, a bracket added, an extra
+  hyphen. The scan flags impersonations of well-known AI and crypto brands, but
+  read the URL in the image yourself; it is often the fastest tell.
+- **Urgency plus a deadline** — "first 100 users", "expires today", a countdown
+  baked into the picture.
+- **Free Nitro / Steam gift / exchange-balance screenshots.** These are
+  templates. Once you block one, reposts are caught automatically even after
+  cropping and recoloring, so confirming the first one pays for itself.
+
+### Scammer or stolen account?
+
+The decision on the *image* and the decision on the *person* are separate, and
+the card gives you signals for both:
+
+| Looks like | Signals | Reasonable response |
+| --- | --- | --- |
+| A scammer | brand-new account, no history in the server, posted the same image into several channels, no other messages | **Confirm scam**, then **Ban uploader** — the ban purges their recent messages too |
+| A stolen or hacked account | a known member with real history who suddenly posts a giveaway image, often across many channels at once, often at an odd hour | **Confirm scam** to kill the image, then a timeout rather than a ban — the owner is the victim and will want the account back |
+| Someone sharing a warning | a member posting a screenshot *of* a scam to warn others | **Whitelist image** if it will keep re-tripping, or leave it; do not punish |
+
+When you cannot tell, act on the image and be gentle with the account. Deleting
+the post is the urgent half; a ban is the reversible-but-annoying half, and
+**Unban** and `/appeal` both exist.
+
+### The bar for pressing Confirm
+
+**False positives are cheap, misses are not.** A wrong Confirm costs one member
+one `/appeal` — which lands right back in this channel with Approve/Deny, and
+approving it reverses the action and unbans them. A miss costs somebody their
+account or their wallet. When in doubt, Confirm.
+
+The one thing worth slowing down for is **Ban uploader** on an account with real
+history in the server. That is the case where a timeout is the better first move.
+
 ## How members help
+
+There is a plain-language page for your members at
+[for-members.md](for-members.md) — what the bot looks at, what it keeps, and how
+to appeal. Link or pin it; it needs no moderator context to read.
 
 - **Report scam to mods** — right-click any message → Apps → *Report scam to
   mods*. Available to everyone, rate-limited, files a review card with the
@@ -105,6 +171,7 @@ Moderator commands (require **Manage Server**):
 | `/scamhash review <message>` | Mark a posted message as scam by link/ID: blocks its images and applies the action policy. Also available as right-click → Apps → *Review as scam*. |
 | `/config view` | Show all settings. |
 | `/config set <field> <value>` | Change one setting (fields below). |
+| `/config permissions` | List every channel where the bot cannot enforce, and the exact permission it is missing. The first thing to run when "the bot ignored a scam". |
 | `/stats` | Detection activity, pipeline load, and the database persistence canary. |
 | `/help` | This guide's short version, right inside Discord. Available to everyone. |
 
@@ -180,6 +247,12 @@ community can ever cause action on your server**:
 - **New-member backfill:** when scanning is enabled the bot also scans recent
   history, including active threads and forum posts, so scams posted just
   before the bot joined don't survive.
+- **`/config permissions` answers "why did the bot ignore that?"** Nine times
+  out of ten the bot could not act in that channel rather than chose not to.
+  The command lists the blocked channels and the missing permission for each.
+  Grant it and the bot notices on its own — no restart, no re-running anything:
+  it rescans that channel's recent history for scams posted while it was locked
+  out and posts a note in the review channel saying what it found.
 - **The database line in `/stats`** shows a boot counter and first-boot date —
   if the boot count resets, your host is not persisting the database file.
 - **The pipeline-load section of `/stats`** answers "is the bot keeping up?":

@@ -129,17 +129,24 @@ card — this lane never deletes, bans, or stores a hash on its own. Disable wit
 
 ## More
 
-**You don't need any of this to run the bot.** These cover the internals and
-running at scale:
+**You don't need any of this to run the bot.** [docs/](docs/README.md) is the
+full index, grouped by who reads it:
 
+- [docs/for-members.md](docs/for-members.md) — for the people in your server:
+  what gets scanned, what is kept, how to appeal, how to report. Pin it.
 - [docs/moderator-guide.md](docs/moderator-guide.md) — hand this to your mod
-  team: setup, the review workflow, every button, command, and setting.
-- [docs/](docs/README.md) — full documentation index.
+  team: setup, the review workflow, judging a card fast, every button, command,
+  and setting.
+- [docs/running-optimus.md](docs/running-optimus.md) — for whoever runs it: the
+  shape of a live deployment, reading the pipeline-load numbers, the cost/
+  coverage knobs, and a triage table.
+- [docs/dashboard.md](docs/dashboard.md) — the optional read-only web dashboard,
+  behind Discord login, on the port the bot already serves.
 - [docs/architecture.md](docs/architecture.md) — system design and the
   six-service distributed topology (`OPTIMUS_MODE=distributed`) for very large
   fleets.
 - [docs/scaling.md](docs/scaling.md) — operating at scale: sharding, detection
-  replicas, distributed rate limiting, retention, pooling, monitoring, alerting.
+  replicas, distributed rate limiting, retention, pooling, metrics, alerting.
 - [docs/security-audit.md](docs/security-audit.md) — the security model and audit
   record (SSRF defense, decode sandboxing, signed global DB, multi-tenant RLS).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — developer workflow, tests, and PR

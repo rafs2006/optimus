@@ -67,6 +67,30 @@ If any of the settings are missing the bot refuses to start with a one-line
 message saying which variable to fix (simple mode), so a half-configured
 dashboard can't silently ship a broken login.
 
+## Is it worth turning on?
+
+For a deployment that is already running, usually yes — it is the only view of
+the bot that is not a Discord slash command, and it costs nothing extra to run:
+
+- **No new service, no new port, no new container.** It is served by the web
+  server that already answers health checks, in the process that is already
+  running.
+- **No new storage.** It reads the records the bot already writes, and honors the
+  same retention.
+- **No new permissions for moderators.** Anyone with Manage Server in a server
+  the bot is in gets that server's pages automatically — nothing to grant, no
+  accounts to create.
+
+The one thing it requires is a **public domain**, because Discord OAuth needs a
+reachable redirect URI. That also exposes `/healthz`, `/readyz`, and `/metrics`
+on the same port — `/metrics` is unauthenticated and reveals aggregate traffic
+counters (never message content or user data). If that matters, restrict
+`/metrics` at your platform's edge; see
+[running-optimus.md](running-optimus.md#the-health-port).
+
+If you only need "is the bot keeping up right now", `/stats` in Discord answers
+that with no setup at all.
+
 ## Notes
 
 - The dashboard shows records; retention still applies — detections older
