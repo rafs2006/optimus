@@ -105,7 +105,7 @@ Moderator commands (require **Manage Server**):
 | `/scamhash review <message>` | Mark a posted message as scam by link/ID: blocks its images and applies the action policy. Also available as right-click → Apps → *Review as scam*. |
 | `/config view` | Show all settings. |
 | `/config set <field> <value>` | Change one setting (fields below). |
-| `/stats` | Detection activity + database persistence canary. |
+| `/stats` | Detection activity, pipeline load, and the database persistence canary. |
 | `/help` | This guide's short version, right inside Discord. Available to everyone. |
 
 Admin-only:
@@ -182,6 +182,14 @@ community can ever cause action on your server**:
   before the bot joined don't survive.
 - **The database line in `/stats`** shows a boot counter and first-boot date —
   if the boot count resets, your host is not persisting the database file.
+- **The pipeline-load section of `/stats`** answers "is the bot keeping up?":
+  images scanned, how many are waiting on moderation right now, and how many
+  were skipped (with a breakdown). Two things to read it correctly: the
+  numbers cover **every server the bot is in**, not just yours — the
+  underlying counters carry no server label — and they **reset on restart**,
+  which is why the boot number sits right above them. A large "already seen"
+  count is normal and healthy (it is the same image caught twice); a growing
+  "waiting on moderation" or a large "rate-limited" is the bot running behind.
 - **Rate limits** protect against abuse of `/scamhash add`, member reports,
   and global votes; hitting one is an explicit "try later" reply.
 - **`/config view` explains every setting inline** — each field shows its
