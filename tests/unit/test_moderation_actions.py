@@ -16,6 +16,7 @@ from optimus.services.moderation.actions import (
     render_dm,
 )
 from optimus.services.moderation.cooldown import Cooldown
+from optimus.services.moderation.reasons import REASON_PREFIX
 
 
 class _FakeRest:
@@ -35,8 +36,10 @@ class _FakeRest:
             raise RuntimeError("transient")
         self._record("delete_message", channel_id, message_id)
 
-    async def timeout_member(self, guild_id: int, user_id: int, seconds: int) -> None:
-        self._record("timeout_member", guild_id, user_id, seconds)
+    async def timeout_member(
+        self, guild_id: int, user_id: int, seconds: int, reason: str = ""
+    ) -> None:
+        self._record("timeout_member", guild_id, user_id, seconds, reason)
 
     async def kick_member(self, guild_id: int, user_id: int, reason: str) -> None:
         self._record("kick_member", guild_id, user_id)
@@ -126,8 +129,11 @@ async def test_timeout_deletes_and_times_out_with_configured_seconds() -> None:
     result = await _executor(rest, redis=redis).execute(req)
     assert result.success
     assert [c[0] for c in rest.calls] == ["delete_message", "timeout_member"]
-    # The configured timeout is forwarded as the third positional arg.
-    assert rest.calls[1] == ("timeout_member", (1, 42, 600))
+    # The configured timeout is forwarded as the third positional arg, and the
+    # audit reason as the fourth -- timeouts used to reach Discord with no
+    # reason at all, leaving the audit-log entry blank.
+    assert rest.calls[1] == ("timeout_member", (1, 42, 600, req.reason))
+    assert req.reason.startswith(REASON_PREFIX)
 
 
 async def test_kick_deletes_and_kicks() -> None:

@@ -10,11 +10,12 @@ from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy
 from optimus.core.circuit import CircuitBreaker
 from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit
-from optimus.services.moderation.actions import ActionExecutor
+from optimus.services.moderation.actions import ActionExecutor, ActionRequest
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
 from optimus.services.moderation.priority import PriorityDispatcher
+from optimus.services.moderation.reasons import REASON_PREFIX
 from optimus.services.moderation.review import ReportData
 
 
@@ -23,20 +24,26 @@ class _FakeRest:
         self.calls: list[str] = []
         self.dms: list[int] = []
         self.ban_purges: list[int] = []
+        self.reasons: list[str] = []
 
     async def delete_message(self, channel_id: int, message_id: int) -> None:
         self.calls.append("delete_message")
 
-    async def timeout_member(self, guild_id: int, user_id: int, seconds: int) -> None:
+    async def timeout_member(
+        self, guild_id: int, user_id: int, seconds: int, reason: str = ""
+    ) -> None:
         self.calls.append("timeout_member")
+        self.reasons.append(reason)
 
     async def kick_member(self, guild_id: int, user_id: int, reason: str) -> None:
         self.calls.append("kick_member")
+        self.reasons.append(reason)
 
     async def ban_member(
         self, guild_id: int, user_id: int, reason: str, purge_seconds: int = 0
     ) -> None:
         self.calls.append("ban_member")
+        self.reasons.append(reason)
         self.ban_purges.append(purge_seconds)
 
     async def unban_member(self, guild_id: int, user_id: int, reason: str) -> None:
@@ -170,6 +177,44 @@ async def test_auto_act_ban_executes_and_audits_and_reports() -> None:
     assert audits == [("delete_ban", True)]
     assert len(reports) == 1
     assert reports[0].action_taken == "delete_ban"
+
+
+async def test_auto_act_ban_sends_the_match_evidence_as_the_audit_reason() -> None:
+    """The audit log is the only after-the-fact record of why someone was banned.
+
+    Before this, the coordinator built its ActionRequest without a ``reason``,
+    so every automated removal reached Discord with the dataclass default and
+    the audit entry named no confidence, no fingerprint and no message.
+    """
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    rest = _FakeRest()
+    coord = _build(
+        rest=rest,
+        redis=redis,
+        cfg=_cfg(),
+        target=_target(),
+        reports=[],
+        audits=[],
+    )
+    result = await coord.handle_verdict(_event(confidence=0.93))
+    assert result.success
+    assert rest.reasons
+    reason = rest.reasons[0]
+    assert reason.startswith(REASON_PREFIX)
+    assert (
+        reason
+        != ActionRequest(
+            guild_id=1,
+            channel_id=2,
+            message_id=3,
+            uploader_id=42,
+            action=Action.DELETE_BAN,
+            idempotency_key="k",
+        ).reason
+    ), "automated enforcement must not fall back to the bare default"
+    assert "auto-enforced" in reason
+    assert "conf 0.93" in reason
+    assert "msg 3" in reason
 
 
 async def test_boundary_refusal_downgrades_to_report() -> None:

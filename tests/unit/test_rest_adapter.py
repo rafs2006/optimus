@@ -49,12 +49,22 @@ async def test_unban_member_binds_with_keyword_reason(rest: Any) -> None:
 
 async def test_timeout_member_maps_to_edit_member_disabled_until(rest: Any) -> None:
     before = datetime.now(UTC)
-    await HikariRestActions(rest).timeout_member(1, 2, 3600)
+    await HikariRestActions(rest).timeout_member(1, 2, 3600, "Scam image \u2014 test")
     rest.edit_member.assert_awaited_once()
     args, kwargs = rest.edit_member.await_args
     assert args == (1, 2)
     until = kwargs["communication_disabled_until"]
     assert (until - before).total_seconds() == pytest.approx(3600, abs=5)
+    # A timeout is audit-logged like a ban, so the reason must reach Discord.
+    assert kwargs["reason"] == "Scam image \u2014 test"
+
+
+async def test_timeout_member_omits_blank_reason(rest: Any) -> None:
+    # hikari sends the audit header for any *defined* value, so passing an
+    # empty string would set a blank reason instead of omitting the header.
+    await HikariRestActions(rest).timeout_member(1, 2, 60)
+    _, kwargs = rest.edit_member.await_args
+    assert kwargs["reason"] is hikari.UNDEFINED
 
 
 async def test_send_dm_creates_channel_then_message(rest: Any) -> None:

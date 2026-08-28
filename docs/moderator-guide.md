@@ -263,6 +263,24 @@ community can ever cause action on your server**:
   which is why the boot number sits right above them. A large "already seen"
   count is normal and healthy (it is the same image caught twice); a growing
   "waiting on moderation" or a large "rate-limited" is the bot running behind.
+- **Every action is written to Discord's own audit log**, with the cause and
+  the evidence, under **Server Settings → Audit Log**. Optimus only ever acts
+  for one reason — a posted image matched a known scam fingerprint — so every
+  entry starts with the same words, `Scam image`, and you can filter on that to
+  see the bot's whole history in the server:
+
+  | Entry begins | What happened |
+  | --- | --- |
+  | `Scam image — optimus auto-enforced` | the bot acted on its own; the entry carries the match confidence, the fingerprint, and the message id |
+  | `Scam image — confirmed by moderator` | a moderator pressed **Confirm scam** or **Ban uploader**; carries the detection number |
+  | `Scam image — false positive, action reversed` | a moderator pressed **False positive** |
+  | `Scam image — unbanned by moderator` | a moderator pressed **Unban** |
+  | `Scam image — appeal approved` | a member's appeal was granted |
+
+  Two things worth knowing. The audit-log reason is visible only to people with
+  **View Audit Log**, never to the person who was removed. And Discord keeps
+  audit entries for a limited window, so your review channel — not the audit
+  log — is the durable record.
 - **Rate limits** protect against abuse of `/scamhash add`, member reports,
   and global votes; hitting one is an explicit "try later" reply.
 - **`/config view` explains every setting inline** — each field shows its

@@ -32,6 +32,7 @@ from optimus.services.moderation.permissions import (
     VIEW_CHANNEL,
     build_access_report,
 )
+from optimus.services.moderation.reasons import confirmed_reason
 from optimus.services.moderation.review import ParsedCustomId, ReviewAction
 
 ADMIN = int(Permission.ADMINISTRATOR)
@@ -629,7 +630,7 @@ async def test_ban_uploader_bans_with_configured_purge() -> None:
         {
             "guild_id": 1,
             "user_id": 333,
-            "reason": "Optimus: scam image (detection #5)",
+            "reason": confirmed_reason(5),
             "purge": 48 * 3600,
         }
     ]

@@ -15,6 +15,7 @@ from prometheus_client import Counter
 
 from optimus.contracts.events import Action, OcrFindings, VerdictEvent
 from optimus.core.logging import get_logger
+from optimus.services.moderation import reasons
 from optimus.services.moderation.actions import ActionExecutor, ActionRequest, ActionResult
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
 from optimus.services.moderation.explain import explain_result
@@ -232,6 +233,16 @@ class ModerationCoordinator:
             locale=cfg.locale,
             timeout_seconds=cfg.timeout_seconds,
             ban_purge_seconds=cfg.ban_purge_seconds,
+            # Without this the audit log recorded only ActionRequest's bare
+            # default for every automated removal: no confidence, no
+            # fingerprint, no message. The audit log is the only record a
+            # moderator can consult afterwards, so it carries the evidence.
+            reason=reasons.auto_reason(
+                confidence=event.confidence,
+                matched_hash_id=event.matched_hash_id,
+                matched_source=event.matched_source,
+                message_id=event.message_id,
+            ),
         )
         result = await self._dispatch(action, request)
         ACTIONS_TAKEN.labels(action=action.value, success=str(result.success).lower()).inc()

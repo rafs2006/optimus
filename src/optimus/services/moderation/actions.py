@@ -95,7 +95,9 @@ class RestActions(Protocol):
 
     async def delete_message(self, channel_id: int, message_id: int) -> None: ...
 
-    async def timeout_member(self, guild_id: int, user_id: int, seconds: int) -> None: ...
+    async def timeout_member(
+        self, guild_id: int, user_id: int, seconds: int, reason: str = ""
+    ) -> None: ...
 
     async def kick_member(self, guild_id: int, user_id: int, reason: str) -> None: ...
 
@@ -121,7 +123,13 @@ class ActionRequest:
     guild_name: str = ""
     locale: str = "en"
     timeout_seconds: int = 3600
-    reason: str = "Automated scam-image removal"
+    #: Audit-log reason, sent as ``X-Audit-Log-Reason`` on the punitive call.
+    #: This is the ONLY place a moderator can later read why the member was
+    #: removed, so callers are expected to build it with
+    #: :mod:`optimus.services.moderation.reasons` rather than leave the
+    #: default. The default is kept deliberately vague-but-honest for the
+    #: handful of tests and tools that construct a request directly.
+    reason: str = "Scam image \u2014 optimus enforcement"
     #: Discord-native "delete message history" window applied with a ban: the
     #: banned user's messages from the last N seconds are purged in ALL
     #: channels (like the manual ban dialog). 0 disables the purge.
@@ -365,7 +373,9 @@ class ActionExecutor:
 
     def _punitive_call(self, req: ActionRequest, step: Step) -> Awaitable[None]:
         if step is Step.TIMEOUT:
-            return self._rest.timeout_member(req.guild_id, req.uploader_id, req.timeout_seconds)
+            return self._rest.timeout_member(
+                req.guild_id, req.uploader_id, req.timeout_seconds, req.reason
+            )
         if step is Step.KICK:
             return self._rest.kick_member(req.guild_id, req.uploader_id, req.reason)
         return self._rest.ban_member(
