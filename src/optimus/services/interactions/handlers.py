@@ -40,6 +40,7 @@ from optimus.services.interactions.logic import (
 from optimus.services.interactions.logic import (
     ImportHash as _ImportHash,
 )
+from optimus.services.moderation import reasons
 from optimus.services.moderation.explain import explain_access_report
 from optimus.services.moderation.permissions import AccessReport
 from optimus.services.moderation.review import BUTTON_LABELS, ParsedCustomId, ReviewAction
@@ -1091,7 +1092,7 @@ async def handle_review_button(
         await deps.rest_unban(
             ctx.guild_id,
             det.uploader_id,
-            reason=f"Optimus: detection #{detection_id} marked false positive",
+            reason=reasons.false_positive_reason(detection_id),
         )
         if hashes is not None:
             await deps.add_whitelist(
@@ -1131,7 +1132,7 @@ async def handle_review_button(
         banned = await deps.rest_ban(
             ctx.guild_id,
             det.uploader_id,
-            reason=f"Optimus: scam image (detection #{detection_id})",
+            reason=reasons.confirmed_reason(detection_id),
             purge_seconds=purge_hours * 3600,
         )
         if not banned:
@@ -1148,7 +1149,7 @@ async def handle_review_button(
         unbanned = await deps.rest_unban(
             ctx.guild_id,
             det.uploader_id,
-            reason=f"Optimus: unbanned by moderator (detection #{detection_id})",
+            reason=reasons.manual_unban_reason(detection_id),
         )
         if not unbanned:
             return InteractionResponse("button.action_failed")
@@ -1217,7 +1218,7 @@ async def handle_component(
                 await deps.rest_unban(
                     ctx.guild_id,
                     int(appeal["user_id"]),
-                    reason=f"Optimus: appeal approved (detection #{detection_id})",
+                    reason=reasons.appeal_approved_reason(detection_id),
                 )
                 await deps.reverse_detection_action(ctx.guild_id, detection_id)
             await deps.audit(ctx.guild_id, ctx.user_id, "appeal.approve", target=str(ref_id))

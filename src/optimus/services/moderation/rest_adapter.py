@@ -45,9 +45,21 @@ class HikariRestActions:
         with contextlib.suppress(hikari.NotFoundError):
             await self._rest.delete_message(channel_id, message_id)
 
-    async def timeout_member(self, guild_id: int, user_id: int, seconds: int) -> None:
+    async def timeout_member(
+        self, guild_id: int, user_id: int, seconds: int, reason: str = ""
+    ) -> None:
+        # A timeout is an audit-logged moderation action just like a kick or a
+        # ban, and until the reason was threaded through here it was the only
+        # one optimus left blank in the log.
         until = datetime.now(UTC) + timedelta(seconds=seconds)
-        await self._rest.edit_member(guild_id, user_id, communication_disabled_until=until)
+        # hikari sends the audit header for any defined value, so an empty
+        # string would set a blank reason rather than omit it.
+        await self._rest.edit_member(
+            guild_id,
+            user_id,
+            communication_disabled_until=until,
+            reason=reason or hikari.UNDEFINED,
+        )
 
     async def kick_member(self, guild_id: int, user_id: int, reason: str) -> None:
         await self._rest.kick_user(guild_id, user_id, reason=reason)

@@ -98,8 +98,10 @@ class RecordingRest:
     async def delete_message(self, channel_id: int, message_id: int) -> None:
         self._record("delete_message", channel_id, message_id)
 
-    async def timeout_member(self, guild_id: int, user_id: int, seconds: int) -> None:
-        self._record("timeout_member", guild_id, user_id, seconds)
+    async def timeout_member(
+        self, guild_id: int, user_id: int, seconds: int, reason: str = ""
+    ) -> None:
+        self._record("timeout_member", guild_id, user_id, seconds, reason)
 
     async def kick_member(self, guild_id: int, user_id: int, reason: str) -> None:
         self._record("kick_member", guild_id, user_id)
