@@ -433,14 +433,35 @@ class Settings(BaseSettings):
             return value
         if not value.strip():
             return None
-        from optimus.services.interactions.commands import MEMBER_COMMANDS
+        from optimus.services.interactions.commands import (
+            COMMAND_PERMISSIONS,
+            MEMBER_COMMANDS,
+        )
 
         names = tuple(dict.fromkeys(p.strip().lstrip("/") for p in value.split(",") if p.strip()))
-        unknown = [n for n in names if n not in MEMBER_COMMANDS]
-        if unknown:
+        rejected = [n for n in names if n not in MEMBER_COMMANDS]
+        if rejected:
             allowed = ", ".join(sorted(MEMBER_COMMANDS))
+            # A real command that simply is not member-facing gets a different
+            # explanation from a typo: the operator asked for something this
+            # setting structurally cannot do, so say which side of the split the
+            # command sits on instead of only listing the valid choices.
+            privileged = {
+                n: perm for n in rejected if (perm := COMMAND_PERMISSIONS.get(n)) is not None
+            }
+            if privileged:
+                gated_by = ", ".join(
+                    f"/{name} ({perm.name})" for name, perm in sorted(privileged.items())
+                )
+                raise ValueError(
+                    f"member_commands: {sorted(privileged)} names a moderator command, which "
+                    "this setting cannot disable -- it narrows the member-facing surface only. "
+                    f"Moderator commands stay registered and are gated by permission instead "
+                    f"({gated_by}). Member-facing commands are: {allowed}"
+                )
             raise ValueError(
-                f"member_commands: {unknown} is not a member-facing command; choose from: {allowed}"
+                f"member_commands: {rejected} is not a member-facing command; "
+                f"choose from: {allowed}"
             )
         return names
 

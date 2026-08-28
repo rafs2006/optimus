@@ -173,3 +173,28 @@ def test_settings_parses_and_validates_member_commands() -> None:
     for bad in ("report,scamhash", "reprot"):
         with pytest.raises(ValidationError):
             Settings(discord_token="t", member_commands=bad)
+
+
+def test_member_commands_error_explains_the_moderator_split() -> None:
+    """The two rejection reasons read differently.
+
+    An operator who names ``/scamhash`` has not made a typo -- they asked for
+    something the setting structurally cannot do, so the error has to say that
+    moderator commands sit outside its reach rather than only listing the
+    member-facing names.
+    """
+    from optimus.core.config import Settings
+
+    with pytest.raises(ValidationError) as privileged:
+        Settings(discord_token="t", member_commands="report,scamhash")
+    message = str(privileged.value)
+    assert "moderator command" in message
+    assert "MANAGE_GUILD" in message
+    assert "narrows the member-facing surface only" in message
+
+    with pytest.raises(ValidationError) as typo:
+        Settings(discord_token="t", member_commands="reprot")
+    typo_message = str(typo.value)
+    assert "is not a member-facing command" in typo_message
+    # A typo is not a permission problem, so it must not claim to be one.
+    assert "moderator command" not in typo_message
