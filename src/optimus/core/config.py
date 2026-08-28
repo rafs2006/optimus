@@ -288,6 +288,24 @@ class Settings(BaseSettings):
     #: rate-limiter fallback (seconds), used only when Redis is unavailable.
     interactions_inmemory_sweep_seconds: float = Field(default=300.0, gt=0.0)
 
+    # Member-facing command surface
+    #: Which of the member-facing slash commands to expose, as a
+    #: comma-separated list. ``None`` (the default) exposes all of them, so
+    #: leaving this unset changes nothing.
+    #:
+    #: Only commands that require *no* permission can be named here -- see
+    #: :data:`optimus.services.interactions.commands.MEMBER_COMMANDS`. Moderator
+    #: and admin commands are deliberately outside this setting's reach so a
+    #: typo here can never disable ``/scamhash`` or ``/config``, and the
+    #: right-click "Report scam to mods" entry is always available because it is
+    #: the primary way a member flags something.
+    #:
+    #: Operators running a closed deployment (a couple of their own servers,
+    #: policy set to ban) typically want ``report`` alone: an appeal cannot be
+    #: filed by someone who is no longer in the server, and a self-serve
+    #: erasure command lets an offender delete their own detection history.
+    member_commands: tuple[str, ...] | None = None
+
     # Moderation
     #: Confidence at or above which a verdict is queued for moderator review.
     mod_queue_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -399,6 +417,32 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("member_commands", mode="before")
+    @classmethod
+    def _coerce_member_commands(cls, value: object) -> object:
+        """Parse the comma-separated list, rejecting names this cannot control.
+
+        An unrecognised name is a hard error rather than a silent no-op: the
+        whole point of the setting is to shrink what members can reach, and a
+        typo that quietly left a command exposed would be the one failure mode
+        an operator would never notice. Naming a moderator command is refused
+        outright -- this setting must not be able to disable ``/scamhash``.
+        """
+        if not isinstance(value, str):
+            return value
+        if not value.strip():
+            return None
+        from optimus.services.interactions.commands import MEMBER_COMMANDS
+
+        names = tuple(dict.fromkeys(p.strip().lstrip("/") for p in value.split(",") if p.strip()))
+        unknown = [n for n in names if n not in MEMBER_COMMANDS]
+        if unknown:
+            allowed = ", ".join(sorted(MEMBER_COMMANDS))
+            raise ValueError(
+                f"member_commands: {unknown} is not a member-facing command; choose from: {allowed}"
+            )
+        return names
 
     @field_validator("shard_ids", mode="before")
     @classmethod

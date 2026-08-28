@@ -67,6 +67,7 @@ class CommandError(StrEnum):
     """
 
     NO_PERMISSION = "no_permission"
+    COMMAND_DISABLED = "command_disabled"
     GUILD_ONLY = "guild_only"
     RATE_LIMITED = "rate_limited"
     INVALID_HEX = "invalid_hex"

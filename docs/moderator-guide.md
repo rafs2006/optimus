@@ -154,7 +154,8 @@ to appeal. Link or pin it; it needs no moderator context to read.
 - **/appeal** — a punished member's way to contest their most recent
   detection. Appears as an Approve/Deny card in the review channel.
 - **/forget_me** — GDPR: erases the requesting user's data and opts them out
-  of all processing.
+  of all processing, which stops their images being scanned from then on.
+  Blocked hashes are unaffected (they fingerprint an image, not a person).
 
 ## Commands
 
@@ -190,6 +191,11 @@ Everyone:
 | `/forget_me` | Erase your data and opt out of processing. |
 | `/help` | Explains the commands and the review workflow. |
 | Apps → *Report scam to mods* | File a message into the mod-review queue. |
+
+Whoever hosts the bot can narrow that last table with
+`OPTIMUS_MEMBER_COMMANDS` — see
+[Narrowing what members can run](running-optimus.md#narrowing-what-members-can-run).
+The right-click *Report scam to mods* entry is always available.
 
 Bot owner only (anyone else gets an "owner only" refusal, even if they can
 see the command):

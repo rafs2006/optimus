@@ -73,7 +73,10 @@ turned evil — reporting it fast is how its owner gets it back.
   server's retention schedule — 30 days unless its moderators changed it.
 - **What is never kept:** your message text.
 - **`/forget_me`** erases your data and opts you out of processing entirely. It
-  is honored in full, immediately, no moderator approval needed.
+  is honored in full, immediately, no moderator approval needed. From then on
+  your images are not scanned in any server running this bot. Images that were
+  already blocked stay blocked — a blocklist entry is a fingerprint of the
+  image, not a record of you.
 - If a server has a privacy policy from its host, it will say more about how
   they run the bot.
 
@@ -87,3 +90,7 @@ turned evil — reporting it fast is how its owner gets it back.
 | `/help` | Short version of all of this, inside Discord. |
 
 Everything else is restricted to moderators.
+
+The server's host can choose to expose only some of these — most often
+`/report` alone. If a command is not in your picker, it is not available here;
+ask the moderators.

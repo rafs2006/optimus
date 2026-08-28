@@ -320,17 +320,50 @@ for _menu_cmd in MESSAGE_COMMANDS:
     COMMAND_PERMISSIONS[_menu_cmd.name] = _menu_cmd.required_permission
 
 
+#: Slash commands any member can run -- those requiring no permission. This is
+#: the only set :attr:`~optimus.core.config.Settings.member_commands` can
+#: narrow, which is what keeps a typo in that setting from ever disabling a
+#: moderator command.
+MEMBER_COMMANDS: frozenset[str] = frozenset(
+    cmd.name for cmd in COMMANDS if cmd.required_permission is None
+)
+
+
 def required_permission(command_name: str) -> Permission | None:
     """Return the server-side permission required for ``command_name``."""
     return COMMAND_PERMISSIONS.get(command_name)
 
 
-def build_command_builders() -> list[hikari.api.SlashCommandBuilder]:
-    """Build hikari ``SlashCommandBuilder`` objects for global registration."""
+def is_enabled(command_name: str, member_commands: tuple[str, ...] | None) -> bool:
+    """Return whether ``command_name`` is exposed under this configuration.
+
+    Moderator and admin commands are always enabled: ``member_commands`` only
+    ever narrows the member-facing surface. ``None`` means "expose everything",
+    so the default configuration answers ``True`` for every command.
+    """
+    if member_commands is None:
+        return True
+    if command_name not in MEMBER_COMMANDS:
+        return True
+    return command_name in member_commands
+
+
+def build_command_builders(
+    member_commands: tuple[str, ...] | None = None,
+) -> list[hikari.api.SlashCommandBuilder]:
+    """Build hikari ``SlashCommandBuilder`` objects for global registration.
+
+    Commands excluded by ``member_commands`` are not registered at all, so they
+    never appear in a member's command picker. Registration is only the
+    cosmetic half: :func:`is_enabled` is re-checked server-side, because an
+    unregistered command can still be invoked by a stale client.
+    """
     import hikari
 
     builders: list[hikari.api.SlashCommandBuilder] = []
     for cmd in COMMANDS:
+        if not is_enabled(cmd.name, member_commands):
+            continue
         builder = hikari.impl.SlashCommandBuilder(cmd.name, cmd.description)
         if cmd.required_permission is not None:
             builder.set_default_member_permissions(int(cmd.required_permission))

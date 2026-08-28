@@ -353,7 +353,7 @@ async def run_simple() -> None:  # pragma: no cover - runtime entrypoint
         ) from exc
     bot_user_id = int(me.id)
 
-    await _register_commands(rest, bot_user_id)
+    await _register_commands(rest, bot_user_id, settings.member_commands)
 
     # Moderation must talk to hikari through the adapter: the executor's
     # RestActions protocol (ban_member(guild, user, reason), timeout_member,
@@ -432,7 +432,9 @@ async def _close_rest(rest: object, rest_app: object) -> None:  # pragma: no cov
         await rest_app.close()  # type: ignore[attr-defined]
 
 
-async def _register_commands(rest: object, bot_user_id: int) -> None:  # pragma: no cover - net
+async def _register_commands(  # pragma: no cover - net
+    rest: object, bot_user_id: int, member_commands: tuple[str, ...] | None = None
+) -> None:
     """Register slash commands globally using the bot's own application id.
 
     Simple mode owns one bot, so we register against the application that the
@@ -451,7 +453,7 @@ async def _register_commands(rest: object, bot_user_id: int) -> None:  # pragma:
     try:
         await rest.set_application_commands(  # type: ignore[attr-defined]
             hikari.Snowflake(bot_user_id),
-            build_command_builders() + build_context_menu_command_builders(),
+            build_command_builders(member_commands) + build_context_menu_command_builders(),
         )
     except Exception:
         _log.warning("command_registration_failed", exc_info=True)
