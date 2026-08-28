@@ -8,7 +8,7 @@ name: Notify PR events
 
 on:
   pull_request:
-    types: [opened, synchronize, closed]
+    types: [opened, synchronize, closed, ready_for_review, reopened]
 
 # Emailing is enough; no repo checkout, no code execution on the PR head.
 permissions:
@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event.action == 'opened' ||
+      github.event.action == 'reopened' ||
+      github.event.action == 'ready_for_review' ||
       github.event.action == 'synchronize' ||
       (github.event.action == 'closed' && github.event.pull_request.merged == true)
     steps:
@@ -27,7 +29,7 @@ jobs:
         id: subject
         run: |
           case "${{ github.event.action }}" in
-            opened)
+            opened|reopened|ready_for_review)
               echo "prefix=Opened" >> "$GITHUB_OUTPUT" ;;
             synchronize)
               echo "prefix=Synchronized" >> "$GITHUB_OUTPUT" ;;
