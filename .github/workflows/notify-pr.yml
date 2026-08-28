@@ -1,0 +1,83 @@
+name: Notify PR events
+
+# Emails alexr@perplexity.ai on PR open, push-update, and merge so the
+# Perplexity automations (PR review on open/update, PR doc-sync on merge)
+# can fire on these events. Uses Resend HTTP API — needs two secrets:
+#   RESEND_API_KEY  — Resend API key
+#   MAIL_FROM       — verified sender (e.g. bot@yourdomain.com or onboarding@resend.dev)
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+
+# Emailing is enough; no repo checkout, no code execution on the PR head.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.action == 'opened' ||
+      github.event.action == 'synchronize' ||
+      (github.event.action == 'closed' && github.event.pull_request.merged == true)
+    steps:
+      - name: Compute subject prefix
+        id: subject
+        run: |
+          case "${{ github.event.action }}" in
+            opened)
+              echo "prefix=Opened" >> "$GITHUB_OUTPUT" ;;
+            synchronize)
+              echo "prefix=Synchronized" >> "$GITHUB_OUTPUT" ;;
+            closed)
+              echo "prefix=Merged" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Send email via Resend
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          SUBJECT_PREFIX: ${{ steps.subject.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESEND_API_KEY:-}" ] || [ -z "${MAIL_FROM:-}" ]; then
+            echo "::error::RESEND_API_KEY or MAIL_FROM is missing"
+            exit 1
+          fi
+          SUBJECT="[${REPO}] ${SUBJECT_PREFIX} #${PR_NUMBER} ${PR_TITLE}"
+          BODY=$(cat <<EOF
+          Repo: ${REPO}
+          PR: #${PR_NUMBER} — ${PR_TITLE}
+          Action: ${PR_ACTION} (merged=${PR_MERGED})
+          Author: ${PR_AUTHOR}
+          URL: ${PR_URL}
+          EOF
+          )
+          # Build JSON payload safely with jq
+          PAYLOAD=$(jq -n \
+            --arg from "$MAIL_FROM" \
+            --arg to "alexr@perplexity.ai" \
+            --arg subject "$SUBJECT" \
+            --arg body "$BODY" \
+            '{from: $from, to: [$to], subject: $subject, text: $body}')
+          RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY_RESPONSE=$(echo "$RESPONSE" | sed '$d')
+          echo "Resend HTTP $HTTP_CODE"
+          echo "$BODY_RESPONSE"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Resend returned $HTTP_CODE"
+            exit 1
+          fi
