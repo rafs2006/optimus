@@ -15,6 +15,7 @@ from optimus.db.models import (
     GuildChannelIgnored,
     GuildRoleIgnored,
     GuildTrustedUser,
+    UserOptout,
 )
 
 
@@ -122,3 +123,56 @@ async def test_cache_without_redis_always_hits_db(session: AsyncSession) -> None
     assert config.sensitivity is Sensitivity.PERMISSIVE
     # invalidate is a no-op when there is no cache backend.
     await cache.invalidate(9)
+
+
+def _scan(config: GuildConfig, uploader_id: int) -> bool:
+    return config.should_scan(
+        channel_id=1,
+        uploader_id=uploader_id,
+        author_role_ids=frozenset(),
+        is_bot=False,
+        is_webhook=False,
+    )
+
+
+def test_opted_out_uploader_is_never_scanned() -> None:
+    config = GuildConfig(guild_id=1, opted_out_users=frozenset({7}))
+    assert _scan(config, 7) is False
+    assert _scan(config, 8) is True
+
+
+async def test_load_from_db_carries_opt_outs_into_the_scan_policy(
+    session: AsyncSession,
+) -> None:
+    session.add(Guild(guild_id=20, sensitivity="balanced"))
+    session.add(UserOptout(user_id=7))
+    await session.flush()
+
+    config = await load_from_db(session, 20)
+    assert config.opted_out_users == frozenset({7})
+    assert _scan(config, 7) is False
+
+
+async def test_opt_out_applies_in_a_guild_that_never_ran_setup(session: AsyncSession) -> None:
+    # The unconfigured-guild shortcut must not skip the opt-out lookup: an
+    # erasure request is global and does not depend on a Guild row existing.
+    session.add(UserOptout(user_id=7))
+    await session.flush()
+
+    config = await load_from_db(session, 999)
+    assert _scan(config, 7) is False
+
+
+def test_opt_outs_survive_a_cache_round_trip() -> None:
+    config = GuildConfig(guild_id=1, opted_out_users=frozenset({7, 9}))
+    assert GuildConfig.from_json(config.to_json()) == config
+
+
+def test_snapshot_cached_by_an_older_build_still_loads() -> None:
+    # A JSON blob written before this field existed must not fail every lookup
+    # until its TTL expires.
+    legacy = (
+        '{"guild_id":1,"sensitivity":"balanced","scan_bots":false,"safe_mode":false,'
+        '"ignored_channels":[],"ignored_roles":[],"trusted_users":[]}'
+    )
+    assert GuildConfig.from_json(legacy).opted_out_users == frozenset()

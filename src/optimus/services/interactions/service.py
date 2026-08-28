@@ -55,6 +55,7 @@ from optimus.services.interactions.attachment_hash import (
     FetchFn,
     hash_attachment,
 )
+from optimus.services.interactions.commands import is_enabled
 from optimus.services.interactions.handlers import (
     DetectionFacts,
     InteractionContext,
@@ -120,6 +121,7 @@ REPORT_RATE = RateLimit(capacity=3.0, refill_rate=1.0 / 60.0)
 #: whose enum value differs from the catalog suffix are remapped explicitly.
 _ERROR_KEYS: dict[CommandError, str] = {
     CommandError.NO_PERMISSION: "command.no_permission",
+    CommandError.COMMAND_DISABLED: "command.command_disabled",
     CommandError.GUILD_ONLY: "command.guild_only",
     CommandError.RATE_LIMITED: "command.rate_limited",
     CommandError.INVALID_HEX: "command.hash_invalid_hex",
@@ -714,7 +716,16 @@ class InteractionService:
         self._inventory = inventory
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
-        """Run a slash command within a fresh transactional session scope."""
+        """Run a slash command within a fresh transactional session scope.
+
+        A command excluded by ``member_commands`` is refused here rather than
+        only being left out of registration: an unregistered command is absent
+        from the picker, but a client that cached the old command list can
+        still send the interaction, so the setting needs a server-side half to
+        actually mean anything.
+        """
+        if not is_enabled(ctx.command, self._settings.member_commands):
+            raise InteractionRejected(CommandError.COMMAND_DISABLED)
         return await self._run(lambda deps: handle_command(ctx, deps))
 
     async def dispatch_button(self, ctx: InteractionContext, custom_id: str) -> InteractionResponse:

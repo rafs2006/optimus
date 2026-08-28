@@ -31,6 +31,7 @@
   },
   "command": {
     "no_permission": "You do not have permission to use this command.",
+    "command_disabled": "That command is not available on this server.",
     "guild_only": "This command can only be used in a server.",
     "rate_limited": "You are doing that too quickly. Please slow down.",
     "hash_added": "Blocked that image as hash `{hash_id}`. Future posts of it will be caught.",

@@ -31,6 +31,7 @@
   },
   "command": {
     "no_permission": "Nemate dozvolu da koristite ovu komandu.",
+    "command_disabled": "Ta komanda nije dostupna na ovom serveru.",
     "guild_only": "Ova komanda se može koristiti samo na serveru.",
     "rate_limited": "To radite previše brzo. Molimo usporite.",
     "hash_added": "Ta slika je blokirana kao heš `{hash_id}`. Buduće objave iste slike biće uhvaćene.",

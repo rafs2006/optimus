@@ -36,7 +36,10 @@ async def _register(guild_id: int | None) -> None:
     try:
         async with rest_app.acquire(settings.discord_token, hikari.TokenType.BOT) as rest:
             application = hikari.Snowflake(int(settings.discord_client_id))
-            builders = build_command_builders() + build_context_menu_command_builders()
+            builders = (
+                build_command_builders(settings.member_commands)
+                + build_context_menu_command_builders()
+            )
             await rest.set_application_commands(
                 application,
                 builders,  # type: ignore[arg-type]

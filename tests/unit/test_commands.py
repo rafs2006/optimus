@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hikari
 import pytest
+from pydantic import ValidationError
 
 from optimus.services.interactions.commands import (
     COMMANDS,
+    MEMBER_COMMANDS,
     build_command_builders,
+    is_enabled,
     required_permission,
 )
 from optimus.services.interactions.logic import (
@@ -117,3 +120,81 @@ def test_required_permission_lookup() -> None:
     assert required_permission("delete_server_data") is Permission.ADMINISTRATOR
     assert required_permission("appeal") is None
     assert required_permission("does_not_exist") is None
+
+
+def test_member_commands_set_is_exactly_the_permissionless_commands() -> None:
+    assert {"report", "appeal", "forget_me", "help"} == MEMBER_COMMANDS
+
+
+def test_is_enabled_defaults_to_exposing_everything() -> None:
+    # ``None`` is the shipped default, so an operator who never sets
+    # OPTIMUS_MEMBER_COMMANDS sees no behavioural change at all.
+    for cmd in COMMANDS:
+        assert is_enabled(cmd.name, None) is True
+
+
+def test_member_commands_narrows_only_the_member_surface() -> None:
+    narrowed = ("report",)
+    assert is_enabled("report", narrowed) is True
+    assert is_enabled("appeal", narrowed) is False
+    assert is_enabled("forget_me", narrowed) is False
+    assert is_enabled("help", narrowed) is False
+    # Moderator and admin commands are out of this setting's reach entirely, so
+    # no value here can ever take /scamhash or /config away from mods.
+    assert is_enabled("scamhash", narrowed) is True
+    assert is_enabled("config", narrowed) is True
+    assert is_enabled("delete_server_data", narrowed) is True
+
+
+def test_builders_omit_disabled_member_commands() -> None:
+    names = {b.name for b in build_command_builders(("report",))}
+    assert "report" in names
+    assert names.isdisjoint({"appeal", "forget_me", "help"})
+    assert {"scamhash", "config", "setup", "stats", "global"} <= names
+
+
+def test_empty_member_commands_hides_every_member_command() -> None:
+    names = {b.name for b in build_command_builders(())}
+    assert names.isdisjoint(MEMBER_COMMANDS)
+    assert {c.name for c in COMMANDS} - names == MEMBER_COMMANDS
+
+
+def test_settings_parses_and_validates_member_commands() -> None:
+    from optimus.core.config import Settings
+
+    assert Settings(discord_token="t").member_commands is None
+    assert Settings(discord_token="t", member_commands="").member_commands is None
+    # Slashes, whitespace and duplicates are all tolerated in the env value.
+    assert Settings(
+        discord_token="t", member_commands=" /report , report,  help "
+    ).member_commands == ("report", "help")
+    # A moderator command cannot be smuggled in, and a typo is a hard error
+    # rather than a silent no-op that leaves the command exposed.
+    for bad in ("report,scamhash", "reprot"):
+        with pytest.raises(ValidationError):
+            Settings(discord_token="t", member_commands=bad)
+
+
+def test_member_commands_error_explains_the_moderator_split() -> None:
+    """The two rejection reasons read differently.
+
+    An operator who names ``/scamhash`` has not made a typo -- they asked for
+    something the setting structurally cannot do, so the error has to say that
+    moderator commands sit outside its reach rather than only listing the
+    member-facing names.
+    """
+    from optimus.core.config import Settings
+
+    with pytest.raises(ValidationError) as privileged:
+        Settings(discord_token="t", member_commands="report,scamhash")
+    message = str(privileged.value)
+    assert "moderator command" in message
+    assert "MANAGE_GUILD" in message
+    assert "narrows the member-facing surface only" in message
+
+    with pytest.raises(ValidationError) as typo:
+        Settings(discord_token="t", member_commands="reprot")
+    typo_message = str(typo.value)
+    assert "is not a member-facing command" in typo_message
+    # A typo is not a permission problem, so it must not claim to be one.
+    assert "moderator command" not in typo_message
