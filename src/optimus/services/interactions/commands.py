@@ -62,7 +62,7 @@ class Command:
 
     ``required_permission`` is the permission the *service* enforces server-side
     for every (sub)command under it; ``None`` means any guild member may run it
-    (e.g. ``/appeal``, ``/forget_me``). ``guild_only`` commands are refused in
+    (e.g. ``/report``, ``/forget_me``). ``guild_only`` commands are refused in
     DMs even before the permission check.
     """
 
@@ -244,11 +244,6 @@ COMMANDS: tuple[Command, ...] = (
         description="Erase your data and opt out of all processing.",
         required_permission=None,
         guild_only=False,
-    ),
-    Command(
-        name="appeal",
-        description="Appeal your most recent detection in this server.",
-        required_permission=None,
     ),
     Command(
         name="report",

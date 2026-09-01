@@ -25,13 +25,16 @@ infrastructure — just a bot token.
 3. Still on the **Bot** tab, scroll to **Privileged Gateway Intents** and turn on
    **Message Content Intent**. Optimus needs this to see the images people post.
    (Leave Presence and Server Members off.)
-4. Open **OAuth2 → URL Generator**. Under **Scopes** tick `bot` and
-   `applications.commands`. Under **Bot Permissions** tick:
-   **View Channels**, **Read Message History**, **Manage Messages** (to delete
-   scams), **Moderate Members** (timeouts), and **Kick Members** / **Ban Members**
-   if you want those actions available.
-5. Copy the generated URL at the bottom, open it in your browser, and invite the
-   bot to your server.
+4. Copy your **Application ID** from the **General Information** tab, paste it
+   into the URL below, then open the URL in your browser to invite the bot:
+
+   ```
+   https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&permissions=1099511720982&scope=bot+applications.commands
+   ```
+
+   That permission number grants exactly what Optimus uses: read and delete
+   messages, post review cards, create the private review channel, and time out,
+   kick or ban an offender. Anything it cannot do, it reports instead.
 
 ### 2. Run it
 
@@ -93,8 +96,8 @@ commands (registered automatically on first run):
 Members can right-click any image message → Apps → **_Report scam to mods_** (or
 run **`/report <link-or-id>`**, which does the same thing and works where the
 right-click menu is hidden) to flag it for the moderator queue (nothing is
-deleted or blocked until a mod confirms), run **`/appeal`** on a detection, and
-**`/forget_me`** to erase their data. That's the whole product — register scam
+deleted or blocked until a mod confirms), and run **`/forget_me`** to erase
+their data. That's the whole product — register scam
 images, pick an action, done.
 
 ### What gets scanned
@@ -133,7 +136,7 @@ card — this lane never deletes, bans, or stores a hash on its own. Disable wit
 full index, grouped by who reads it:
 
 - [docs/for-members.md](docs/for-members.md) — for the people in your server:
-  what gets scanned, what is kept, how to appeal, how to report. Pin it.
+  what gets scanned, what is kept, how to reach your mods, how to report. Pin it.
 - [docs/moderator-guide.md](docs/moderator-guide.md) — hand this to your mod
   team: setup, the review workflow, judging a card fast, every button, command,
   and setting.

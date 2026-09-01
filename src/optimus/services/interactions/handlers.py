@@ -154,7 +154,6 @@ class InteractionDeps(Protocol):
     async def stats_summary(self, guild_id: int) -> dict[str, Any]: ...
     async def opt_out_user(self, user_id: int) -> int: ...
     async def purge_guild(self, guild_id: int) -> int: ...
-    async def recent_detection_for(self, guild_id: int, user_id: int) -> int | None: ...
     async def detection_belongs_to(
         self, guild_id: int, detection_id: int, user_id: int
     ) -> bool: ...
@@ -839,18 +838,6 @@ async def _cmd_forget_me(ctx: InteractionContext, deps: InteractionDeps) -> Inte
     return InteractionResponse("command.forget_me_ok")
 
 
-async def _cmd_appeal(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
-    assert ctx.guild_id is not None
-    if not await deps.appeal_cooldown_ok(ctx.user_id):
-        return InteractionResponse("dm.appeal_cooldown")
-    detection_id = await deps.recent_detection_for(ctx.guild_id, ctx.user_id)
-    if detection_id is None:
-        return InteractionResponse("command.appeal_none")
-    await deps.open_appeal(ctx.guild_id, detection_id, ctx.user_id)
-    await deps.audit(ctx.guild_id, ctx.user_id, "appeal.open", target=str(detection_id))
-    return InteractionResponse("command.appeal_opened")
-
-
 _CommandHandler = Callable[
     ["InteractionContext", "InteractionDeps"], Awaitable["InteractionResponse"]
 ]
@@ -864,7 +851,6 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "help": _cmd_help,
     "delete_server_data": _cmd_delete_server_data,
     "forget_me": _cmd_forget_me,
-    "appeal": _cmd_appeal,
     "review_message": _cmd_review_message,
     "report_message": _cmd_report_message,
     "report": _cmd_report_message,
@@ -1192,8 +1178,8 @@ async def handle_component(
             raise InteractionRejected(CommandError.GUILD_ONLY)
         # The detection id rides in the (client-echoed, forgeable) custom id, so
         # never trust it: only the user the detection was filed against may appeal
-        # it, and only within the detection's own guild. The /appeal command path
-        # derives this server-side; here we re-verify ownership explicitly.
+        # it, and only within the detection's own guild, so ownership is
+        # re-verified server-side here.
         if not await deps.detection_belongs_to(ctx.guild_id, ref_id, ctx.user_id):
             return InteractionResponse("command.appeal_none")
         if not await deps.appeal_cooldown_ok(ctx.user_id):

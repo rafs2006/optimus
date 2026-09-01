@@ -71,9 +71,8 @@ Notes on cards:
 - Buttons require the **Manage Server** permission; ordinary members can see
   nothing in the private channel anyway.
 - **False positives are cheap, misses are not.** When in doubt, Confirm — the
-  affected user can `/appeal`, and appeals land back in the same channel with
-  Approve/Deny buttons. Approving an appeal reverses the action and unbans
-  the appellant.
+  card keeps an **Unban** button, so a wrong call is one press away from being
+  undone. Members who need to contest a call reach you directly.
 
 ## Deciding fast
 
@@ -125,14 +124,13 @@ the card gives you signals for both:
 
 When you cannot tell, act on the image and be gentle with the account. Deleting
 the post is the urgent half; a ban is the reversible-but-annoying half, and
-**Unban** and `/appeal` both exist.
+**Unban** is right there on the card.
 
 ### The bar for pressing Confirm
 
 **False positives are cheap, misses are not.** A wrong Confirm costs one member
-one `/appeal` — which lands right back in this channel with Approve/Deny, and
-approving it reverses the action and unbans them. A miss costs somebody their
-account or their wallet. When in doubt, Confirm.
+one message to you, and one press of **Unban** to put right. A miss costs
+somebody their account or their wallet. When in doubt, Confirm.
 
 The one thing worth slowing down for is **Ban uploader** on an account with real
 history in the server. That is the case where a timeout is the better first move.
@@ -141,7 +139,7 @@ history in the server. That is the case where a timeout is the better first move
 
 There is a plain-language page for your members at
 [for-members.md](for-members.md) — what the bot looks at, what it keeps, and how
-to appeal. Link or pin it; it needs no moderator context to read.
+to reach you. Link or pin it; it needs no moderator context to read.
 
 - **Report scam to mods** — right-click any message → Apps → *Report scam to
   mods*. Available to everyone, rate-limited, files a review card with the
@@ -151,8 +149,6 @@ to appeal. Link or pin it; it needs no moderator context to read.
   message link, or a bare message ID when the message is in the current
   channel. Identical limits: same per-user rate limit, and reporting the same
   message twice does not create a second card.
-- **/appeal** — a punished member's way to contest their most recent
-  detection. Appears as an Approve/Deny card in the review channel.
 - **/forget_me** — GDPR: erases the requesting user's data and opts them out
   of all processing, which stops their images being scanned from then on.
   Blocked hashes are unaffected (they fingerprint an image, not a person).
@@ -187,7 +183,6 @@ Everyone:
 | Command | What it does |
 | --- | --- |
 | `/report <message>` | Send a message's image to the mod-review queue by link/ID. Same as right-click → Apps → *Report scam to mods*. |
-| `/appeal` | Contest your most recent detection. |
 | `/forget_me` | Erase your data and opt out of processing. |
 | `/help` | Explains the commands and the review workflow. |
 | Apps → *Report scam to mods* | File a message into the mod-review queue. |

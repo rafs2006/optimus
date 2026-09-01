@@ -57,7 +57,6 @@ class FakeDeps:
         self._report_rate_ok = flags.get("report_rate_ok", True)
         self.user_reports: list[dict[str, Any]] = []
         self._appeal_ok = flags.get("appeal_ok", True)
-        self._recent_detection = flags.get("recent_detection", 555)
         self._owned_detections: set[int] = set(flags.get("owned_detections", {77}))
         self._next_appeal_id = 1
         # -- global trust lane -------------------------------------------------
@@ -136,9 +135,6 @@ class FakeDeps:
     async def purge_guild(self, guild_id: int) -> int:
         self.purged.append(guild_id)
         return 7
-
-    async def recent_detection_for(self, guild_id: int, user_id: int) -> int | None:
-        return self._recent_detection
 
     async def detection_belongs_to(self, guild_id: int, detection_id: int, user_id: int) -> bool:
         return detection_id in self._owned_detections
@@ -790,30 +786,6 @@ async def test_false_positive_without_global_entry_stays_local() -> None:
 
 
 # --- appeal lifecycle ----------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_appeal_open_via_command() -> None:
-    deps = FakeDeps()
-    resp = await handle_command(_ctx("appeal", perms=NONE), deps)
-    assert resp.i18n_key == "command.appeal_opened"
-    assert deps.appeals
-    assert deps.audits[0][2] == "appeal.open"
-
-
-@pytest.mark.asyncio
-async def test_appeal_command_cooldown() -> None:
-    deps = FakeDeps(appeal_ok=False)
-    resp = await handle_command(_ctx("appeal", perms=NONE), deps)
-    assert resp.i18n_key == "dm.appeal_cooldown"
-    assert not deps.appeals
-
-
-@pytest.mark.asyncio
-async def test_appeal_command_no_detection() -> None:
-    deps = FakeDeps(recent_detection=None)
-    resp = await handle_command(_ctx("appeal", perms=NONE), deps)
-    assert resp.i18n_key == "command.appeal_none"
 
 
 @pytest.mark.asyncio

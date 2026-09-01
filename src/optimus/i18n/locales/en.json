@@ -1,11 +1,8 @@
 {
   "dm": {
-    "warning": "Your message in **{guild}** was removed because it matched a known scam/phishing image. If you believe this was a mistake, use the Appeal button below to contact the server moderators.",
-    "appeal_button": "Appeal",
+    "warning": "Your message in **{guild}** was removed because it matched a known scam/phishing image. If you believe this was a mistake, contact the server's moderators.",
     "appeal_submitted": "Your appeal for **{guild}** has been submitted. A moderator will review it.",
-    "appeal_cooldown": "You have already submitted an appeal recently. Please wait before trying again.",
-    "appeal_approved": "Your appeal in **{guild}** was approved and the action against you has been reversed.",
-    "appeal_denied": "Your appeal in **{guild}** was reviewed and denied. The action stands."
+    "appeal_cooldown": "You have already submitted an appeal recently. Please wait before trying again."
   },
   "report": {
     "title": "Scam detection #{detection_id} — {verdict}",
@@ -22,9 +19,6 @@
     "field_swarm": "Swarm",
     "field_swarm_value": "seen across {count} guilds",
     "field_evidence": "Evidence",
-    "appeal_title": "Appeal for detection #{detection_id}",
-    "appeal_user": "User",
-    "appeal_status": "Status",
     "field_problem": "Needs attention",
     "field_partial": "Partially applied",
     "field_partial_value": "The offender was punished, but not everything could be cleaned up. See **Needs attention**."
@@ -96,9 +90,8 @@
     "global_servers": "{count} server(s) approved to contribute global confirmations:\n{listing}",
     "global_servers_none": "No servers are approved to contribute global confirmations yet.",
     "global_invalid_server": "`{value}` is not a valid server ID (numbers only).",
-    "help": "**How Optimus works**\nEvery posted image is hashed and compared against this server's blocklist (and, if opted in, the shared global scam list). Matches either act automatically or land as a review card in your review channel, depending on `action_policy`. Global matches ALWAYS come as review cards — the shared list never bans or deletes on its own.\n\n**Commands**\n• `/setup` — create or link the private review channel (start here)\n• `/scamhash add|remove|list|review|import|export` — manage this server's blocklist; `review` marks a posted message as scam by link/ID\n• `/config view|set` — every setting, each explained inline\n• `/stats` — detection activity and database health\n• `/report` — any member can send a scam image to the mods by link/ID (same as right-click → Apps → Report scam to mods)\n• `/appeal`, `/forget_me` — member self-service (appeals, GDPR opt-out)\n• `/delete_server_data` — admin-only full wipe (GDPR)\n\n**Review card buttons**\nConfirm scam · False positive · Ban uploader · Unban · Whitelist image — one press each, logged to the audit trail. On servers approved for global contribution, *Confirm scam* also casts this server's vote toward the shared scam list, and *False positive* revokes a bad global entry for everyone.\n\nFull guide: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
+    "help": "**How Optimus works**\nEvery posted image is hashed and compared against this server's blocklist (and, if opted in, the shared global scam list). Matches either act automatically or land as a review card in your review channel, depending on `action_policy`. Global matches ALWAYS come as review cards — the shared list never bans or deletes on its own.\n\n**Commands**\n• `/setup` — create or link the private review channel (start here)\n• `/scamhash add|remove|list|review|import|export` — manage this server's blocklist; `review` marks a posted message as scam by link/ID\n• `/config view|set` — every setting, each explained inline\n• `/stats` — detection activity and database health\n• `/report` — any member can send a scam image to the mods by link/ID (same as right-click → Apps → Report scam to mods)\n• `/forget_me` — member self-service (GDPR opt-out)\n• `/delete_server_data` — admin-only full wipe (GDPR)\n\n**Review card buttons**\nConfirm scam · False positive · Ban uploader · Unban · Whitelist image — one press each, logged to the audit trail. On servers approved for global contribution, *Confirm scam* also casts this server's vote toward the shared scam list, and *False positive* revokes a bad global entry for everyone.\n\nFull guide: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
     "appeal_none": "You have no recent detection to appeal in this server.",
-    "appeal_opened": "Your appeal has been opened and sent to the server moderators.",
     "reviewmsg_result_blocked": "Added {added} hash(es) ({failed} failed). Recorded the scam and requested {action} against <@{author_id}>'s message, but the bot cannot carry it out yet: {problem}"
   },
   "button": {
