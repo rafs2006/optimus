@@ -291,13 +291,6 @@ class DbDeps:
     async def purge_guild(self, guild_id: int) -> int:
         return await GuildPurgeRepository(self._session, guild_id).purge()
 
-    async def recent_detection_for(self, guild_id: int, user_id: int) -> int | None:
-        recent = await DetectionRepository(self._session, guild_id).list_recent(limit=20)
-        for detection in recent:
-            if detection.uploader_id == user_id:
-                return detection.id
-        return None
-
     async def detection_belongs_to(self, guild_id: int, detection_id: int, user_id: int) -> bool:
         return await DetectionRepository(self._session, guild_id).belongs_to(detection_id, user_id)
 

@@ -1,11 +1,8 @@
 {
   "dm": {
-    "warning": "Vaša poruka u serveru **{guild}** je uklonjena jer odgovara poznatoj prevarantskoj/fišing slici. Ako mislite da je ovo greška, koristite dugme „Žalba“ ispod da kontaktirate moderatore servera.",
-    "appeal_button": "Žalba",
+    "warning": "Vaša poruka u serveru **{guild}** je uklonjena jer odgovara poznatoj prevarantskoj/fišing slici. Ako mislite da je ovo greška, kontaktirajte moderatore servera.",
     "appeal_submitted": "Vaša žalba za **{guild}** je poslata. Moderator će je pregledati.",
-    "appeal_cooldown": "Već ste nedavno poslali žalbu. Sačekajte pre nego što pokušate ponovo.",
-    "appeal_approved": "Vaša žalba u serveru **{guild}** je odobrena i mera protiv vas je poništena.",
-    "appeal_denied": "Vaša žalba u serveru **{guild}** je pregledana i odbijena. Mera ostaje na snazi."
+    "appeal_cooldown": "Već ste nedavno poslali žalbu. Sačekajte pre nego što pokušate ponovo."
   },
   "report": {
     "title": "Otkrivanje prevare #{detection_id} — {verdict}",
@@ -22,9 +19,6 @@
     "field_swarm": "Roj",
     "field_swarm_value": "viđeno na {count} servera",
     "field_evidence": "Dokaz",
-    "appeal_title": "Žalba za otkrivanje #{detection_id}",
-    "appeal_user": "Korisnik",
-    "appeal_status": "Status",
     "field_problem": "Zahteva pažnju",
     "field_partial": "Delimično primenjeno",
     "field_partial_value": "Prekršilac je kažnjen, ali nije sve moglo da se očisti. Vidite **Zahteva pažnju**."
@@ -96,9 +90,8 @@
     "global_servers": "{count} server(a) odobreno za globalne potvrde:\n{listing}",
     "global_servers_none": "Nijedan server još nije odobren za globalne potvrde.",
     "global_invalid_server": "`{value}` nije važeći ID servera (samo brojevi).",
-    "help": "**Kako Optimus radi**\nSvaka objavljena slika se hešira i poredi sa crnom listom ovog servera (i, ako je uključeno, sa deljenom globalnom listom prevara). Poklapanja ili deluju automatski ili stižu kao kartica za pregled u vaš kanal za pregled, u zavisnosti od `action_policy`. Globalna poklapanja UVEK stižu kao kartice za pregled — deljena lista nikada sama ne banuje niti briše.\n\n**Komande**\n• `/setup` — kreira ili poveže privatni kanal za pregled (počnite ovde)\n• `/scamhash add|remove|list|review|import|export` — upravljanje crnom listom servera; `review` označava objavljenu poruku kao prevaru po linku/ID-u\n• `/config view|set` — sva podešavanja, svako objašnjeno\n• `/stats` — aktivnost detekcije i stanje baze\n• `/report` — svaki član može poslati sliku prevare moderatorima po linku/ID-u (isto kao desni klik → Apps → Report scam to mods)\n• `/appeal`, `/forget_me` — samousluga za članove (žalbe, GDPR odjava)\n• `/delete_server_data` — potpuno brisanje, samo za administratore (GDPR)\n\n**Dugmad na kartici za pregled**\nPotvrdi prevaru · Lažna uzbuna · Banuj pošiljaoca · Odbanuj · Bela lista — jedan pritisak, sve se beleži u revizorski dnevnik. Na serverima odobrenim za globalni doprinos, *Potvrdi prevaru* takođe šalje glas ovog servera za deljenu listu prevara, a *Lažna uzbuna* povlači loš globalni unos za sve.\n\nCeo vodič: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
+    "help": "**Kako Optimus radi**\nSvaka objavljena slika se hešira i poredi sa crnom listom ovog servera (i, ako je uključeno, sa deljenom globalnom listom prevara). Poklapanja ili deluju automatski ili stižu kao kartica za pregled u vaš kanal za pregled, u zavisnosti od `action_policy`. Globalna poklapanja UVEK stižu kao kartice za pregled — deljena lista nikada sama ne banuje niti briše.\n\n**Komande**\n• `/setup` — kreira ili poveže privatni kanal za pregled (počnite ovde)\n• `/scamhash add|remove|list|review|import|export` — upravljanje crnom listom servera; `review` označava objavljenu poruku kao prevaru po linku/ID-u\n• `/config view|set` — sva podešavanja, svako objašnjeno\n• `/stats` — aktivnost detekcije i stanje baze\n• `/report` — svaki član može poslati sliku prevare moderatorima po linku/ID-u (isto kao desni klik → Apps → Report scam to mods)\n• `/forget_me` — samousluga za članove (GDPR odjava)\n• `/delete_server_data` — potpuno brisanje, samo za administratore (GDPR)\n\n**Dugmad na kartici za pregled**\nPotvrdi prevaru · Lažna uzbuna · Banuj pošiljaoca · Odbanuj · Bela lista — jedan pritisak, sve se beleži u revizorski dnevnik. Na serverima odobrenim za globalni doprinos, *Potvrdi prevaru* takođe šalje glas ovog servera za deljenu listu prevara, a *Lažna uzbuna* povlači loš globalni unos za sve.\n\nCeo vodič: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
     "appeal_none": "Nemate nedavno otkrivanje na koje možete uložiti žalbu na ovom serveru.",
-    "appeal_opened": "Vaša žalba je otvorena i poslata moderatorima servera.",
     "reviewmsg_result_blocked": "Dodato {added} heš vrednosti ({failed} neuspešno). Prevara je zabeležena i zatražena je akcija {action} za poruku korisnika <@{author_id}>, ali bot još ne može da je izvrši: {problem}"
   },
   "button": {

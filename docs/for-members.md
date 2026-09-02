@@ -40,13 +40,13 @@ doing nothing when it is unsure.
 
 ## If you get caught by mistake
 
-Run **`/appeal`** in the server. It sends your most recent detection back to the
-moderators with Approve and Deny buttons. If they approve it, the action is
-reversed — including an unban — and the image is added to a list so it is never
-flagged again.
+Contact the server's moderators directly. There is no self-service appeal
+command: the bot cannot offer one that works, because the members most likely to
+need it have already been removed from the server and can no longer run commands
+in it.
 
-You do not need to argue your case with anyone or find the right moderator to
-DM. `/appeal` is the path.
+A moderator can reverse any action the bot took, including an unban, and can add
+the image to a whitelist so it is never flagged again.
 
 ## If you spot a scam
 
@@ -85,7 +85,6 @@ turned evil — reporting it fast is how its owner gets it back.
 | Command | What it does |
 | --- | --- |
 | `/report <message>` | Send a message's image to the moderators. |
-| `/appeal` | Contest your most recent detection. |
 | `/forget_me` | Erase your data and opt out. |
 | `/help` | Short version of all of this, inside Discord. |
 

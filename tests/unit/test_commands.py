@@ -118,12 +118,22 @@ def test_submit_global_removed_and_global_help_present() -> None:
 def test_required_permission_lookup() -> None:
     assert required_permission("scamhash") is Permission.MANAGE_GUILD
     assert required_permission("delete_server_data") is Permission.ADMINISTRATOR
-    assert required_permission("appeal") is None
+    assert required_permission("report") is None
     assert required_permission("does_not_exist") is None
 
 
 def test_member_commands_set_is_exactly_the_permissionless_commands() -> None:
-    assert {"report", "appeal", "forget_me", "help"} == MEMBER_COMMANDS
+    assert {"report", "forget_me", "help"} == MEMBER_COMMANDS
+
+
+def test_no_appeal_command_is_registered() -> None:
+    # /appeal was removed: its DM button was never attached to the warning DM
+    # and opening an appeal never notified a moderator, so the command promised
+    # a review that could not happen. Members contact moderators directly and
+    # mods reverse a bad call with the Unban button on the review card.
+    assert "appeal" not in {cmd.name for cmd in COMMANDS}
+    assert required_permission("appeal") is None  # unknown name, not a member command
+    assert "appeal" not in MEMBER_COMMANDS
 
 
 def test_is_enabled_defaults_to_exposing_everything() -> None:
@@ -136,7 +146,6 @@ def test_is_enabled_defaults_to_exposing_everything() -> None:
 def test_member_commands_narrows_only_the_member_surface() -> None:
     narrowed = ("report",)
     assert is_enabled("report", narrowed) is True
-    assert is_enabled("appeal", narrowed) is False
     assert is_enabled("forget_me", narrowed) is False
     assert is_enabled("help", narrowed) is False
     # Moderator and admin commands are out of this setting's reach entirely, so
@@ -149,7 +158,7 @@ def test_member_commands_narrows_only_the_member_surface() -> None:
 def test_builders_omit_disabled_member_commands() -> None:
     names = {b.name for b in build_command_builders(("report",))}
     assert "report" in names
-    assert names.isdisjoint({"appeal", "forget_me", "help"})
+    assert names.isdisjoint({"forget_me", "help"})
     assert {"scamhash", "config", "setup", "stats", "global"} <= names
 
 

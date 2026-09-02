@@ -301,8 +301,7 @@ class Settings(BaseSettings):
     #: the primary way a member flags something.
     #:
     #: Operators running a closed deployment (a couple of their own servers,
-    #: policy set to ban) typically want ``report`` alone: an appeal cannot be
-    #: filed by someone who is no longer in the server, and a self-serve
+    #: policy set to ban) typically want ``report`` alone, since a self-serve
     #: erasure command lets an offender delete their own detection history.
     member_commands: tuple[str, ...] | None = None
 

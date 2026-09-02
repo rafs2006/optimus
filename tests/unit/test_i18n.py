@@ -61,4 +61,4 @@ def test_sr_placeholders_match_en() -> None:
 
 @pytest.mark.parametrize("locale", ["en", "sr"])
 def test_known_keys_render(locale: str) -> None:
-    assert translate("dm.appeal_button", locale).strip()
+    assert translate("dm.warning", locale, guild="G").strip()

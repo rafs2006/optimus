@@ -44,7 +44,7 @@ def _ctx(command: str) -> InteractionContext:
 async def test_disabled_member_command_is_refused_without_touching_the_db() -> None:
     service, entered = _service(("report",))
 
-    for command in ("appeal", "forget_me", "help"):
+    for command in ("forget_me", "help"):
         with pytest.raises(InteractionRejected) as excinfo:
             await service.dispatch_command(_ctx(command))
         assert excinfo.value.reason is CommandError.COMMAND_DISABLED
@@ -69,7 +69,7 @@ async def test_default_settings_gate_nothing() -> None:
     service, entered = _service(None)
 
     with pytest.raises(Exception) as excinfo:
-        await service.dispatch_command(_ctx("appeal"))
+        await service.dispatch_command(_ctx("forget_me"))
     assert not isinstance(excinfo.value, InteractionRejected) or (
         excinfo.value.reason is not CommandError.COMMAND_DISABLED
     )
