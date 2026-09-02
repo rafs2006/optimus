@@ -1,6 +1,6 @@
 {
   "dm": {
-    "warning": "Vaša poruka u serveru **{guild}** je uklonjena jer odgovara poznatoj prevarantskoj/fišing slici. Ako mislite da je ovo greška, kontaktirajte moderatore servera.",
+    "warning": "Vaša poruka u serveru **{guild}** je uklonjena jer odgovara poznatoj prevarantskoj/fišing slici. Ako mislite da je ovo greška, kontaktirajte moderatore servera.\n\nŠta ovaj bot čuva o vama: <https://github.com/rafs2006/optimus/blob/main/docs/privacy-policy.md>",
     "appeal_submitted": "Vaša žalba za **{guild}** je poslata. Moderator će je pregledati.",
     "appeal_cooldown": "Već ste nedavno poslali žalbu. Sačekajte pre nego što pokušate ponovo."
   },
@@ -77,7 +77,6 @@
     "stats_empty": "Još uvek nema zabeležene statistike za ovaj server.",
     "stats_detections": "Otkrivanja",
     "stats_false_positives": "Lažni pozitivi",
-    "forget_me_ok": "Vaši podaci su obrisani i isključeni ste iz obrade.",
     "delete_server_confirm": "Ovo će trajno obrisati SVE podatke za ovaj server. Ovo se ne može opozvati.",
     "delete_server_button": "Potvrdi brisanje",
     "delete_server_ok": "Svi podaci za ovaj server su trajno obrisani.",
@@ -90,7 +89,7 @@
     "global_servers": "{count} server(a) odobreno za globalne potvrde:\n{listing}",
     "global_servers_none": "Nijedan server još nije odobren za globalne potvrde.",
     "global_invalid_server": "`{value}` nije važeći ID servera (samo brojevi).",
-    "help": "**Kako Optimus radi**\nSvaka objavljena slika se hešira i poredi sa crnom listom ovog servera (i, ako je uključeno, sa deljenom globalnom listom prevara). Poklapanja ili deluju automatski ili stižu kao kartica za pregled u vaš kanal za pregled, u zavisnosti od `action_policy`. Globalna poklapanja UVEK stižu kao kartice za pregled — deljena lista nikada sama ne banuje niti briše.\n\n**Komande**\n• `/setup` — kreira ili poveže privatni kanal za pregled (počnite ovde)\n• `/scamhash add|remove|list|review|import|export` — upravljanje crnom listom servera; `review` označava objavljenu poruku kao prevaru po linku/ID-u\n• `/config view|set` — sva podešavanja, svako objašnjeno\n• `/stats` — aktivnost detekcije i stanje baze\n• `/report` — svaki član može poslati sliku prevare moderatorima po linku/ID-u (isto kao desni klik → Apps → Report scam to mods)\n• `/forget_me` — samousluga za članove (GDPR odjava)\n• `/delete_server_data` — potpuno brisanje, samo za administratore (GDPR)\n\n**Dugmad na kartici za pregled**\nPotvrdi prevaru · Lažna uzbuna · Banuj pošiljaoca · Odbanuj · Bela lista — jedan pritisak, sve se beleži u revizorski dnevnik. Na serverima odobrenim za globalni doprinos, *Potvrdi prevaru* takođe šalje glas ovog servera za deljenu listu prevara, a *Lažna uzbuna* povlači loš globalni unos za sve.\n\nCeo vodič: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
+    "help": "**Kako Optimus radi**\nSvaka objavljena slika se hešira i poredi sa crnom listom ovog servera (i, ako je uključeno, sa deljenom globalnom listom prevara). Poklapanja ili deluju automatski ili stižu kao kartica za pregled u vaš kanal za pregled, u zavisnosti od `action_policy`. Globalna poklapanja UVEK stižu kao kartice za pregled — deljena lista nikada sama ne banuje niti briše.\n\n**Komande**\n• `/setup` — kreira ili poveže privatni kanal za pregled (počnite ovde)\n• `/scamhash add|remove|list|review|import|export` — upravljanje crnom listom servera; `review` označava objavljenu poruku kao prevaru po linku/ID-u\n• `/config view|set` — sva podešavanja, svako objašnjeno\n• `/stats` — aktivnost detekcije i stanje baze\n• `/report` — svaki član može poslati sliku prevare moderatorima po linku/ID-u (isto kao desni klik → Apps → Report scam to mods)\n• `/delete_server_data` — potpuno brisanje, samo za administratore (GDPR)\n\n**Dugmad na kartici za pregled**\nPotvrdi prevaru · Lažna uzbuna · Banuj pošiljaoca · Odbanuj · Bela lista — jedan pritisak, sve se beleži u revizorski dnevnik. Na serverima odobrenim za globalni doprinos, *Potvrdi prevaru* takođe šalje glas ovog servera za deljenu listu prevara, a *Lažna uzbuna* povlači loš globalni unos za sve.\n\nCeo vodič: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>\nPolitika privatnosti: <https://github.com/rafs2006/optimus/blob/main/docs/privacy-policy.md>",
     "appeal_none": "Nemate nedavno otkrivanje na koje možete uložiti žalbu na ovom serveru.",
     "reviewmsg_result_blocked": "Dodato {added} heš vrednosti ({failed} neuspešno). Prevara je zabeležena i zatražena je akcija {action} za poruku korisnika <@{author_id}>, ali bot još ne može da je izvrši: {problem}"
   },

@@ -49,7 +49,6 @@ class FakeDeps:
         self.appeals: dict[int, dict[str, Any]] = {}
         self.reversed: list[int] = []
         self.purged: list[int] = []
-        self.opted_out: list[int] = []
         self.safe_mode_disabled: list[int] = []
         self.config_set: list[tuple[str, Any]] = []
         self.resolved: list[tuple[int, bool]] = []
@@ -127,10 +126,6 @@ class FakeDeps:
 
     async def stats_summary(self, guild_id: int) -> dict[str, Any]:
         return {"detections": 3, "hours": 24, "boots": 5, "first_boot": "2026-08-01"}
-
-    async def opt_out_user(self, user_id: int) -> int:
-        self.opted_out.append(user_id)
-        return 1
 
     async def purge_guild(self, guild_id: int) -> int:
         self.purged.append(guild_id)
@@ -428,11 +423,12 @@ async def test_guild_only_command_in_dm_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_forget_me_allowed_in_dm_without_permission() -> None:
-    deps = FakeDeps()
-    resp = await handle_command(_ctx("forget_me", perms=NONE, guild_id=None), deps)
-    assert resp.i18n_key == "command.forget_me_ok"
-    assert deps.opted_out == [99]
+async def test_forget_me_has_no_handler() -> None:
+    # The command is gone; a client holding a cached command list that still
+    # sends it must get a clean refusal, not a scanning exemption.
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("forget_me", perms=NONE, guild_id=None), FakeDeps())
+    assert exc.value.reason is CommandError.UNKNOWN_FIELD
 
 
 # --- command side effects + audit ----------------------------------------------

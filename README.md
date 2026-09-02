@@ -96,9 +96,12 @@ commands (registered automatically on first run):
 Members can right-click any image message → Apps → **_Report scam to mods_** (or
 run **`/report <link-or-id>`**, which does the same thing and works where the
 right-click menu is hidden) to flag it for the moderator queue (nothing is
-deleted or blocked until a mod confirms), and run **`/forget_me`** to erase
-their data. That's the whole product — register scam
-images, pick an action, done.
+deleted or blocked until a mod confirms). That's the whole product — register
+scam images, pick an action, done.
+
+There is no member-facing opt-out from scanning, by design: see the
+[privacy policy](docs/privacy-policy.md) for what is stored and how to request
+erasure.
 
 ### What gets scanned
 

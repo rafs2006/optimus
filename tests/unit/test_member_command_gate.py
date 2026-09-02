@@ -44,10 +44,9 @@ def _ctx(command: str) -> InteractionContext:
 async def test_disabled_member_command_is_refused_without_touching_the_db() -> None:
     service, entered = _service(("report",))
 
-    for command in ("forget_me", "help"):
-        with pytest.raises(InteractionRejected) as excinfo:
-            await service.dispatch_command(_ctx(command))
-        assert excinfo.value.reason is CommandError.COMMAND_DISABLED
+    with pytest.raises(InteractionRejected) as excinfo:
+        await service.dispatch_command(_ctx("help"))
+    assert excinfo.value.reason is CommandError.COMMAND_DISABLED
     assert entered == []
 
 
@@ -68,11 +67,10 @@ async def test_enabled_and_moderator_commands_reach_the_handler() -> None:
 async def test_default_settings_gate_nothing() -> None:
     service, entered = _service(None)
 
-    with pytest.raises(Exception) as excinfo:
-        await service.dispatch_command(_ctx("forget_me"))
-    assert not isinstance(excinfo.value, InteractionRejected) or (
-        excinfo.value.reason is not CommandError.COMMAND_DISABLED
-    )
+    # /help is self-contained, so with the gate open it runs to completion --
+    # which is the strongest form of "nothing was gated".
+    resp = await service.dispatch_command(_ctx("help"))
+    assert resp.i18n_key == "command.help"
     assert entered == [1]
 
 

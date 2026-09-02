@@ -44,7 +44,6 @@ from optimus.db.repositories import (
     GuildPurgeRepository,
     GuildRepository,
     ModActionRepository,
-    UserOptoutRepository,
     WhitelistRepository,
 )
 from optimus.globaldb.service import GlobalHashService, SubmissionDenied
@@ -282,11 +281,6 @@ class DbDeps:
             "dropped": load.dropped,
             "duplicates": load.duplicates,
         }
-
-    async def opt_out_user(self, user_id: int) -> int:
-        repo = UserOptoutRepository(self._session)
-        await repo.opt_out(user_id)
-        return await repo.purge_user(user_id)
 
     async def purge_guild(self, guild_id: int) -> int:
         return await GuildPurgeRepository(self._session, guild_id).purge()

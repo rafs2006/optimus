@@ -331,11 +331,14 @@ query filters by `guild_id`; no raw SQL/`text()` interpolation). Key tables:
 - **global_hashes** / **global_hash_approvals** / **global_submitters** —
   the signed cross-guild promoted-hash database and its approval/reputation
   bookkeeping.
-- **detections** — one row per processed image (verdict, distances, action taken,
-  unique `idempotency_key`); the audit backbone.
-- **appeals**, **mod_actions**, **stats_rollups**, **evidence**, **user opt-out** —
-  appeals workflow, moderation audit, periodic rollups, optional evidence
-  pointers, and GDPR opt-out state.
+- **detections** — one row per *flagged* image (verdict, distances, action taken,
+  unique `idempotency_key`); the audit backbone. An image that matches nothing
+  writes no row at all: the coordinator returns on a `Decision.NONE` outcome
+  before the audit step, so a clean scan leaves no trace.
+- **appeals**, **mod_actions**, **stats_rollups**, **evidence**, **users_optout** —
+  appeals workflow, moderation audit, periodic rollups, and optional evidence
+  pointers. `users_optout` is a dormant table: it is no longer read on the scan
+  path, because there is deliberately no member-facing opt-out from scanning.
 
 Migrations live in [`migrations/`](../migrations): `0001` initial schema, `0002`
 PostgreSQL **row-level security** for multi-tenant (`multi`) deployments (policies

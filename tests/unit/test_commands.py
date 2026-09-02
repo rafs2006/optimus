@@ -34,9 +34,9 @@ def test_builder_sets_permissions_and_guild_only_context() -> None:
     assert hikari.ApplicationContextType.GUILD in scamhash.context_types
     assert hikari.ApplicationContextType.BOT_DM not in scamhash.context_types
 
-    # /forget_me is permission-free and usable in DMs.
-    forget = builders["forget_me"]
-    assert hikari.ApplicationContextType.BOT_DM in forget.context_types
+    # /help is permission-free and usable in DMs.
+    help_cmd = builders["help"]
+    assert hikari.ApplicationContextType.BOT_DM in help_cmd.context_types
 
 
 def test_builder_expands_subcommands_and_their_options() -> None:
@@ -123,7 +123,19 @@ def test_required_permission_lookup() -> None:
 
 
 def test_member_commands_set_is_exactly_the_permissionless_commands() -> None:
-    assert {"report", "forget_me", "help"} == MEMBER_COMMANDS
+    assert {"report", "help"} == MEMBER_COMMANDS
+
+
+def test_no_forget_me_command_is_registered() -> None:
+    # /forget_me was removed. It was guild_only=False, so a single DM to the bot
+    # wrote a guild-less ``users_optout`` row that ``should_scan`` honoured in
+    # *every* guild, with no command anywhere to undo it: a self-serve,
+    # permanent, silent exemption from scam detection. Members who want to know
+    # what is held about them, or want it erased, email the address in
+    # docs/privacy-policy.md; mods exempt someone via trusted users.
+    assert "forget_me" not in {cmd.name for cmd in COMMANDS}
+    assert required_permission("forget_me") is None  # unknown name, not a member command
+    assert "forget_me" not in MEMBER_COMMANDS
 
 
 def test_no_appeal_command_is_registered() -> None:
@@ -146,7 +158,6 @@ def test_is_enabled_defaults_to_exposing_everything() -> None:
 def test_member_commands_narrows_only_the_member_surface() -> None:
     narrowed = ("report",)
     assert is_enabled("report", narrowed) is True
-    assert is_enabled("forget_me", narrowed) is False
     assert is_enabled("help", narrowed) is False
     # Moderator and admin commands are out of this setting's reach entirely, so
     # no value here can ever take /scamhash or /config away from mods.
@@ -158,7 +169,7 @@ def test_member_commands_narrows_only_the_member_surface() -> None:
 def test_builders_omit_disabled_member_commands() -> None:
     names = {b.name for b in build_command_builders(("report",))}
     assert "report" in names
-    assert names.isdisjoint({"forget_me", "help"})
+    assert "help" not in names
     assert {"scamhash", "config", "setup", "stats", "global"} <= names
 
 

@@ -71,12 +71,17 @@ turned evil — reporting it fast is how its owner gets it back.
 - **What is kept:** image fingerprints, and the ids needed to act on a detection
   (which user, which channel, which message). Records are deleted on the
   server's retention schedule — 30 days unless its moderators changed it.
-- **What is never kept:** your message text.
-- **`/forget_me`** erases your data and opts you out of processing entirely. It
-  is honored in full, immediately, no moderator approval needed. From then on
-  your images are not scanned in any server running this bot. Images that were
-  already blocked stay blocked — a blocklist entry is a fingerprint of the
-  image, not a record of you.
+- **What is never kept:** your message text, and the images themselves. Nothing
+  at all is recorded for an image that doesn't match — not even a note that it
+  was checked. If you have never been flagged, there is no record of you.
+- **There is no opt-out from scanning.** You are posting publicly in a server
+  whose owners chose to run this bot, and an opt-out would just be a way to
+  grant yourself immunity before posting a scam. Only a server's own moderators
+  can exempt someone, by marking them as trusted.
+- **To ask what is held about you, or to request erasure**, email
+  [optimus.privacy@proton.me](mailto:optimus.privacy@proton.me) with your
+  Discord user ID. See the [privacy policy](privacy-policy.md) for the full
+  detail. Note that records are deleted automatically within 30 days anyway.
 - If a server has a privacy policy from its host, it will say more about how
   they run the bot.
 
@@ -85,7 +90,6 @@ turned evil — reporting it fast is how its owner gets it back.
 | Command | What it does |
 | --- | --- |
 | `/report <message>` | Send a message's image to the moderators. |
-| `/forget_me` | Erase your data and opt out. |
 | `/help` | Short version of all of this, inside Discord. |
 
 Everything else is restricted to moderators.

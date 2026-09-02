@@ -20,7 +20,6 @@ from optimus.db.models import (
     GuildChannelIgnored,
     GuildRoleIgnored,
     GuildTrustedUser,
-    UserOptout,
 )
 
 _CACHE_PREFIX = "optimus:guildcfg"
@@ -38,11 +37,6 @@ class GuildConfig:
     ignored_channels: frozenset[int] = field(default_factory=frozenset)
     ignored_roles: frozenset[int] = field(default_factory=frozenset)
     trusted_users: frozenset[int] = field(default_factory=frozenset)
-    #: Users who ran ``/forget_me``. Global rather than per-guild, but carried
-    #: on the cached per-guild snapshot so honouring an opt-out costs a set
-    #: membership test on the hot path instead of a query per message. The
-    #: table is tiny and this is only read on a cache miss.
-    opted_out_users: frozenset[int] = field(default_factory=frozenset)
 
     def should_scan(
         self,
@@ -53,13 +47,13 @@ class GuildConfig:
         is_bot: bool,
         is_webhook: bool,
     ) -> bool:
-        """Whether a message from this author/channel should be scanned."""
-        # An opt-out is a refusal to be processed at all, so it is checked
-        # before every other rule. Until this was wired up, ``/forget_me``
-        # wrote its tombstone and then told the user they were "opted out of
-        # processing" while their images kept being scanned.
-        if uploader_id in self.opted_out_users:
-            return False
+        """Whether a message from this author/channel should be scanned.
+
+        Deliberately has no per-user opt-out. Scanning covers images posted
+        publicly in a server whose operator installed the bot; a member-triggered
+        exemption would be a self-serve immunity grant, not a privacy control.
+        Only a moderator can exempt someone, via ``trusted_users``.
+        """
         if channel_id in self.ignored_channels:
             return False
         if uploader_id in self.trusted_users:
@@ -79,7 +73,6 @@ class GuildConfig:
                 "ignored_channels": sorted(self.ignored_channels),
                 "ignored_roles": sorted(self.ignored_roles),
                 "trusted_users": sorted(self.trusted_users),
-                "opted_out_users": sorted(self.opted_out_users),
             },
             separators=(",", ":"),
         )
@@ -96,28 +89,19 @@ class GuildConfig:
             ignored_channels=frozenset(int(x) for x in data["ignored_channels"]),
             ignored_roles=frozenset(int(x) for x in data["ignored_roles"]),
             trusted_users=frozenset(int(x) for x in data["trusted_users"]),
-            # Tolerate a snapshot cached by an older build, which has no such
-            # key, rather than failing every lookup until the TTL expires.
-            opted_out_users=frozenset(int(x) for x in data.get("opted_out_users", ())),
         )
 
     @classmethod
-    def default(
-        cls, guild_id: int, *, opted_out_users: frozenset[int] = frozenset()
-    ) -> GuildConfig:
+    def default(cls, guild_id: int) -> GuildConfig:
         """A safe default snapshot for an unconfigured guild (scan everything human)."""
-        return cls(guild_id=guild_id, opted_out_users=opted_out_users)
+        return cls(guild_id=guild_id)
 
 
 async def load_from_db(session: AsyncSession, guild_id: int) -> GuildConfig:
     """Load a guild's scan policy directly from Postgres."""
-    # Loaded before the unconfigured-guild shortcut below: an opt-out is
-    # global and must be honoured even in a guild that has never run /setup.
-    opted_out = frozenset((await session.execute(select(UserOptout.user_id))).scalars().all())
-
     guild = await session.get(Guild, guild_id)
     if guild is None:
-        return GuildConfig.default(guild_id, opted_out_users=opted_out)
+        return GuildConfig.default(guild_id)
 
     channels = (
         (
@@ -157,7 +141,6 @@ async def load_from_db(session: AsyncSession, guild_id: int) -> GuildConfig:
         ignored_channels=frozenset(channels),
         ignored_roles=frozenset(roles),
         trusted_users=frozenset(users),
-        opted_out_users=opted_out,
     )
 
 

@@ -122,7 +122,7 @@ document: [scaling.md](scaling.md), with a worked capacity study in
 ## Narrowing what members can run
 
 `OPTIMUS_MEMBER_COMMANDS` is a comma-separated list of the member-facing
-commands to expose. Unset — the default — exposes all four, so this changes
+commands to expose. Unset — the default — exposes both, so this changes
 nothing until you set it.
 
 ```
@@ -131,37 +131,34 @@ OPTIMUS_MEMBER_COMMANDS=report
 
 | Value | Members get |
 | --- | --- |
-| unset | `/report`, `/forget_me`, `/help` |
+| unset | `/report` and `/help` |
 | `report` | `/report` only |
-| `report,help` | `/report` and `/help` |
+| `help` | `/help` only |
 
-Only those three names are accepted. Moderator and admin commands are outside
+Only those two names are accepted. Moderator and admin commands are outside
 this setting's reach, so no value here can take `/scamhash` or `/config` away
 from your moderators, and right-click → Apps → *Report scam to mods* is always
 available. A name that is not a member command is a startup error rather than a
 silent no-op — a typo that quietly left a command exposed is the one failure
 mode you would never notice.
 
-Why an operator running a couple of their own servers on a ban policy usually
-wants `report` alone:
-
-- **`/forget_me` is a self-serve erasure button.** Run by an offender, it
-  deletes their own detection and appeal history. It does not unblock anything:
-  blocked image hashes are not tied to a user, so the images stay blocked.
-
-Whether that trade is right depends on who your members are. On a public bot
-serving strangers' servers, keep it: a maintained erasure path is part of
-what [Discord's developer terms](https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service)
-expect of you regardless of size.
+The one reason to narrow it to `report`: `/help` renders the same text for
+everyone, including the moderator and admin commands a member cannot run. That
+is untidy rather than unsafe — every one of those commands is still refused
+server-side — but on a server where you would rather members not see the
+moderator surface at all, `report` alone is the way.
 
 Both halves are enforced. A hidden command is left out of registration so it
 never appears in the picker, and it is also refused server-side — a client
 holding a cached command list can still send the interaction, and the invoker
 gets "That command is not available on this server."
 
-Hiding `/forget_me` does not disable the opt-out itself. An existing opt-out
-still stops that user's images being scanned in every server, and you can still
-honour a request out of band.
+Note that `/help` is the only place the bot surfaces its privacy policy link, so
+if you hide it, make sure the policy is reachable some other way — Discord's
+developer terms expect it to be
+[accessible to users from your application](https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service).
+The warning DM a flagged member receives also carries the link, and that is not
+affected by this setting.
 
 ## Quick triage
 
