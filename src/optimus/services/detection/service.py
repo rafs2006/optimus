@@ -13,6 +13,7 @@ import contextlib
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
+from functools import partial
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -294,7 +295,7 @@ def build_service(
         # cv2/pytesseract import (or need the tesseract binary present).
         from optimus.services.detection.riskscan import scan
 
-        risk_scan = scan
+        risk_scan = partial(scan, timeout=settings.detection_ocr_timeout_seconds)
 
     worker = DetectionWorker(
         guild_index=guild_index,

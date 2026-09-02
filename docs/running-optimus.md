@@ -105,6 +105,7 @@ Roughly in order of how much you save per unit of coverage given up:
 | Lever | Effect | What you lose |
 | --- | --- | --- |
 | `OPTIMUS_DETECTION_OCR_RISK_SCAN=false` | biggest single CPU saving — turns off Tesseract OCR and QR decoding on every unmatched image | the second-look lane. Only images matching a known hash get caught; novel scams pass until a moderator blocks one |
+| `OPTIMUS_DETECTION_OCR_TIMEOUT_SECONDS` (default 8) | caps the OCR budget per unmatched image without disabling the lane | recall on dense or low-contrast screenshots. The budget is shared across all preprocessing passes, and the later passes are the ones that read dark-mode collages — set it too low and only the weakest pass runs |
 | `retention_days` (per server, default 30) | bounds database growth | older detections and their dashboard history |
 | `OPTIMUS_GATEWAY_JOIN_SCAN_DAYS=0` | skips the history backfill when joining a server | scams posted before the bot arrived survive |
 | `OPTIMUS_GATEWAY_JOIN_SCAN_MAX_CHANNELS` / `_MESSAGES_PER_CHANNEL` | cheaper backfill without disabling it | depth of the initial sweep |

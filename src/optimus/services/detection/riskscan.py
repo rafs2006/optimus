@@ -33,14 +33,17 @@ from optimus.hashing.qr_extract import extract_qr_urls
 _MAX_CARD_URLS = 5
 
 
-def scan(image_bytes: bytes) -> OcrFindings | None:
+def scan(image_bytes: bytes, *, timeout: float | None = None) -> OcrFindings | None:
     """Run the full OCR + QR risk analysis on one image (blocking; run off-loop).
+
+    ``timeout`` caps the OCR stage across all of its preprocessing variants;
+    ``None`` uses the ocr_extract default.
 
     Returns ``None`` when there is nothing noteworthy: no text signals, no QR
     payloads, no lookalike domains.  Never raises -- every underlying stage
     already degrades to empty output on failure.
     """
-    analysis = analyze_image(image_bytes)
+    analysis = analyze_image(image_bytes, timeout=timeout)
     qr_payloads = extract_qr_urls(image_bytes)
 
     urls: list[str] = list(analysis["urls"])
