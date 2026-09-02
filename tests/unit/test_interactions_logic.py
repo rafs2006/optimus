@@ -68,9 +68,8 @@ def test_delete_server_requires_administrator() -> None:
     assert required_permission("delete_server_data") == Permission.ADMINISTRATOR
 
 
-def test_appeal_and_forget_me_require_no_permission() -> None:
+def test_appeal_requires_no_permission() -> None:
     assert required_permission("appeal") is None
-    assert required_permission("forget_me") is None
 
 
 # --- context-menu commands ("Review as scam") -----------------------------------

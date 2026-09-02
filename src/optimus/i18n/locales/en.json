@@ -1,6 +1,6 @@
 {
   "dm": {
-    "warning": "Your message in **{guild}** was removed because it matched a known scam/phishing image. If you believe this was a mistake, contact the server's moderators.",
+    "warning": "Your message in **{guild}** was removed because it matched a known scam/phishing image. If you believe this was a mistake, contact the server's moderators.\n\nWhat this bot stores about you: <https://github.com/rafs2006/optimus/blob/main/docs/privacy-policy.md>",
     "appeal_submitted": "Your appeal for **{guild}** has been submitted. A moderator will review it.",
     "appeal_cooldown": "You have already submitted an appeal recently. Please wait before trying again."
   },
@@ -77,7 +77,6 @@
     "stats_empty": "No statistics recorded yet for this server.",
     "stats_detections": "Detections",
     "stats_false_positives": "False positives",
-    "forget_me_ok": "Your data has been purged and you are opted out of processing.",
     "delete_server_confirm": "This will permanently delete ALL data for this server. This cannot be undone.",
     "delete_server_button": "Confirm deletion",
     "delete_server_ok": "All data for this server has been permanently deleted.",
@@ -90,7 +89,7 @@
     "global_servers": "{count} server(s) approved to contribute global confirmations:\n{listing}",
     "global_servers_none": "No servers are approved to contribute global confirmations yet.",
     "global_invalid_server": "`{value}` is not a valid server ID (numbers only).",
-    "help": "**How Optimus works**\nEvery posted image is hashed and compared against this server's blocklist (and, if opted in, the shared global scam list). Matches either act automatically or land as a review card in your review channel, depending on `action_policy`. Global matches ALWAYS come as review cards — the shared list never bans or deletes on its own.\n\n**Commands**\n• `/setup` — create or link the private review channel (start here)\n• `/scamhash add|remove|list|review|import|export` — manage this server's blocklist; `review` marks a posted message as scam by link/ID\n• `/config view|set` — every setting, each explained inline\n• `/stats` — detection activity and database health\n• `/report` — any member can send a scam image to the mods by link/ID (same as right-click → Apps → Report scam to mods)\n• `/forget_me` — member self-service (GDPR opt-out)\n• `/delete_server_data` — admin-only full wipe (GDPR)\n\n**Review card buttons**\nConfirm scam · False positive · Ban uploader · Unban · Whitelist image — one press each, logged to the audit trail. On servers approved for global contribution, *Confirm scam* also casts this server's vote toward the shared scam list, and *False positive* revokes a bad global entry for everyone.\n\nFull guide: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>",
+    "help": "**How Optimus works**\nEvery posted image is hashed and compared against this server's blocklist (and, if opted in, the shared global scam list). Matches either act automatically or land as a review card in your review channel, depending on `action_policy`. Global matches ALWAYS come as review cards — the shared list never bans or deletes on its own.\n\n**Commands**\n• `/setup` — create or link the private review channel (start here)\n• `/scamhash add|remove|list|review|import|export` — manage this server's blocklist; `review` marks a posted message as scam by link/ID\n• `/config view|set` — every setting, each explained inline\n• `/stats` — detection activity and database health\n• `/report` — any member can send a scam image to the mods by link/ID (same as right-click → Apps → Report scam to mods)\n• `/delete_server_data` — admin-only full wipe (GDPR)\n\n**Review card buttons**\nConfirm scam · False positive · Ban uploader · Unban · Whitelist image — one press each, logged to the audit trail. On servers approved for global contribution, *Confirm scam* also casts this server's vote toward the shared scam list, and *False positive* revokes a bad global entry for everyone.\n\nFull guide: <https://github.com/rafs2006/optimus/blob/main/docs/moderator-guide.md>\nPrivacy policy: <https://github.com/rafs2006/optimus/blob/main/docs/privacy-policy.md>",
     "appeal_none": "You have no recent detection to appeal in this server.",
     "reviewmsg_result_blocked": "Added {added} hash(es) ({failed} failed). Recorded the scam and requested {action} against <@{author_id}>'s message, but the bot cannot carry it out yet: {problem}"
   },

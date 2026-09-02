@@ -152,7 +152,6 @@ class InteractionDeps(Protocol):
     async def get_config(self, guild_id: int) -> dict[str, Any]: ...
     async def set_config_field(self, guild_id: int, field: str, value: Any) -> None: ...
     async def stats_summary(self, guild_id: int) -> dict[str, Any]: ...
-    async def opt_out_user(self, user_id: int) -> int: ...
     async def purge_guild(self, guild_id: int) -> int: ...
     async def detection_belongs_to(
         self, guild_id: int, detection_id: int, user_id: int
@@ -831,13 +830,6 @@ async def _cmd_delete_server_data(
     return InteractionResponse("command.delete_server_confirm")
 
 
-async def _cmd_forget_me(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
-    await deps.opt_out_user(ctx.user_id)
-    if ctx.guild_id is not None:
-        await deps.audit(ctx.guild_id, ctx.user_id, "forget_me", target=str(ctx.user_id))
-    return InteractionResponse("command.forget_me_ok")
-
-
 _CommandHandler = Callable[
     ["InteractionContext", "InteractionDeps"], Awaitable["InteractionResponse"]
 ]
@@ -850,7 +842,6 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "global": _cmd_global,
     "help": _cmd_help,
     "delete_server_data": _cmd_delete_server_data,
-    "forget_me": _cmd_forget_me,
     "review_message": _cmd_review_message,
     "report_message": _cmd_report_message,
     "report": _cmd_report_message,

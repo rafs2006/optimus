@@ -149,9 +149,14 @@ to reach you. Link or pin it; it needs no moderator context to read.
   message link, or a bare message ID when the message is in the current
   channel. Identical limits: same per-user rate limit, and reporting the same
   message twice does not create a second card.
-- **/forget_me** — GDPR: erases the requesting user's data and opts them out
-  of all processing, which stops their images being scanned from then on.
-  Blocked hashes are unaffected (they fingerprint an image, not a person).
+
+There is no member-facing opt-out from scanning. A member who wants to know
+what is held about them, or wants it erased, emails the address in the
+[privacy policy](privacy-policy.md); requests are handled by the bot's operator,
+not by you. Detections, appeals, and audit rows are deleted automatically after
+30 days (or your server's configured window). If you want to exempt a specific
+person from scanning, mark them as a trusted user — that is a moderator
+decision, deliberately not a member one.
 
 ## Commands
 
@@ -183,7 +188,6 @@ Everyone:
 | Command | What it does |
 | --- | --- |
 | `/report <message>` | Send a message's image to the mod-review queue by link/ID. Same as right-click → Apps → *Report scam to mods*. |
-| `/forget_me` | Erase your data and opt out of processing. |
 | `/help` | Explains the commands and the review workflow. |
 | Apps → *Report scam to mods* | File a message into the mod-review queue. |
 
@@ -286,9 +290,11 @@ community can ever cause action on your server**:
   and global votes; hitting one is an explicit "try later" reply.
 - **`/config view` explains every setting inline** — each field shows its
   current value, what it does, and its default, so you rarely need this page.
-- **Privacy:** no message text is stored; only perceptual hashes, ids needed
-  for enforcement, and (opt-in) evidence. `/forget_me` and
-  `/delete_server_data` are honored fully.
+- **Privacy:** no message text and no images are stored — only perceptual
+  hashes and the ids needed to act on a detection, and only for images that
+  were actually flagged. `/delete_server_data` wipes this server's data in
+  full. Members ask about their own data by email; see the
+  [privacy policy](privacy-policy.md).
 - **Web dashboard (optional):** if whoever hosts the bot has enabled it, you
   can browse scan activity, every detection (including clean scans), and the
   audit log in a browser with your Discord login — anyone with **Manage

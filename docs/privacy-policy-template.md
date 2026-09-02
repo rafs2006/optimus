@@ -8,8 +8,11 @@
 > stable public URL you can point Discord at.
 >
 > The technical claims below are accurate for upstream optimus as shipped. If you
-> fork or change configuration (e.g. enable the optional evidence store), update
-> the wording to match what your deployment actually does.
+> fork or change configuration, update the wording to match what your deployment
+> actually does.
+>
+> For a filled-in example, see this instance's own
+> [privacy policy](privacy-policy.md).
 
 ---
 
@@ -65,17 +68,18 @@ We do **not** sell data or share it with third parties for advertising.
 
 ### Optional evidence storage (off by default)
 
-The Bot supports an **optional, off-by-default** evidence feature
-(`OPTIMUS_EVIDENCE_ENABLED`). When an operator explicitly enables it, a copy of a
-flagged image may be stored on the operator's own S3-compatible object storage,
-**server-side encrypted**, with a **short time-to-live (default 1 hour, hard cap
-24 hours)**, retrievable only via a short-lived presigned link, after which it is
-automatically deleted. This is the **only** circumstance in which raw image bytes
-are persisted, it is never enabled by default, and the storage is the operator's
-own.
+The codebase contains an **optional, off-by-default** evidence subsystem
+(`OPTIMUS_EVIDENCE_ENABLED`), designed to store a copy of a flagged image on the
+operator's own S3-compatible object storage, server-side encrypted, with a short
+time-to-live, retrievable only via a presigned link.
 
-> **Operators:** delete this section if you do not enable the evidence store. If
-> you do enable it, state where the storage is hosted and its region.
+> **Operators — read this before describing it.** As shipped, this subsystem is
+> **not wired into the processing pipeline**: nothing in the detection or
+> moderation path ever writes an evidence object, and enabling the flag only
+> attaches a deleter for rows that are never created. Unless you have added the
+> write path yourself, **delete this section** — claiming to store images you do
+> not store is its own compliance problem. If you have wired it up, state where
+> the storage is hosted and its region.
 
 ## Data retention
 
