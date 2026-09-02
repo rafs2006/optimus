@@ -290,9 +290,11 @@ community can ever cause action on your server**:
   and global votes; hitting one is an explicit "try later" reply.
 - **`/config view` explains every setting inline** — each field shows its
   current value, what it does, and its default, so you rarely need this page.
-- **Privacy:** no message text is stored; only perceptual hashes, ids needed
-  for enforcement, and (opt-in) evidence. `/forget_me` and
-  `/delete_server_data` are honored fully.
+- **Privacy:** no message text and no images are stored — only perceptual
+  hashes and the ids needed to act on a detection, and only for images that
+  were actually flagged. `/delete_server_data` wipes this server's data in
+  full. Members ask about their own data by email; see the
+  [privacy policy](privacy-policy.md).
 - **Web dashboard (optional):** if whoever hosts the bot has enabled it, you
   can browse scan activity, every detection (including clean scans), and the
   audit log in a browser with your Discord login — anyone with **Manage
