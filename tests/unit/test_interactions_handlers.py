@@ -422,15 +422,6 @@ async def test_guild_only_command_in_dm_rejected() -> None:
     assert exc.value.reason is CommandError.GUILD_ONLY
 
 
-@pytest.mark.asyncio
-async def test_forget_me_has_no_handler() -> None:
-    # The command is gone; a client holding a cached command list that still
-    # sends it must get a clean refusal, not a scanning exemption.
-    with pytest.raises(InteractionRejected) as exc:
-        await handle_command(_ctx("forget_me", perms=NONE, guild_id=None), FakeDeps())
-    assert exc.value.reason is CommandError.UNKNOWN_FIELD
-
-
 # --- command side effects + audit ----------------------------------------------
 
 

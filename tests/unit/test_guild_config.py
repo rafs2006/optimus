@@ -138,10 +138,10 @@ def _scan(config: GuildConfig, uploader_id: int) -> bool:
 async def test_an_optout_row_does_not_exempt_a_user_from_scanning(
     session: AsyncSession,
 ) -> None:
-    # There is deliberately no member-facing opt-out from scanning. A leftover
-    # ``users_optout`` row must not suppress it: when this table was wired into
-    # ``should_scan``, anyone could DM the bot ``/forget_me`` and immunise
-    # themselves against detection in *every* guild, permanently and silently.
+    # There is deliberately no member-facing opt-out from scanning. This table
+    # is dormant: a row in it must not suppress scanning, in this guild or any
+    # other, because a user-settable exemption from scam detection is only ever
+    # useful to someone who intends to post a scam.
     session.add(Guild(guild_id=20, sensitivity="balanced"))
     session.add(UserOptout(user_id=7))
     await session.flush()

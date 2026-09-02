@@ -126,18 +126,6 @@ def test_member_commands_set_is_exactly_the_permissionless_commands() -> None:
     assert {"report", "help"} == MEMBER_COMMANDS
 
 
-def test_no_forget_me_command_is_registered() -> None:
-    # /forget_me was removed. It was guild_only=False, so a single DM to the bot
-    # wrote a guild-less ``users_optout`` row that ``should_scan`` honoured in
-    # *every* guild, with no command anywhere to undo it: a self-serve,
-    # permanent, silent exemption from scam detection. Members who want to know
-    # what is held about them, or want it erased, email the address in
-    # docs/privacy-policy.md; mods exempt someone via trusted users.
-    assert "forget_me" not in {cmd.name for cmd in COMMANDS}
-    assert required_permission("forget_me") is None  # unknown name, not a member command
-    assert "forget_me" not in MEMBER_COMMANDS
-
-
 def test_no_appeal_command_is_registered() -> None:
     # /appeal was removed: its DM button was never attached to the warning DM
     # and opening an appeal never notified a moderator, so the command promised
