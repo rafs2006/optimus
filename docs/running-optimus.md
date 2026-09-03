@@ -116,6 +116,32 @@ The OCR lane is the meaningful decision here. It is the only thing that catches
 a scam nobody has reported yet, and it is the most expensive part of the
 pipeline. Turning it off makes the bot cheap and purely reactive.
 
+### What the 8-second budget actually costs
+
+The budget is a **ceiling, not a bill**. It bounds the whole preprocessing set
+for one image, and the lane exits as soon as the passes finish — a typical
+screenshot completes all three well inside it. The measured worst case is the
+case the budget was raised for: a dense multi-panel collage normalised to
+1600px, which cost **6.4s of CPU** end-to-end. Images with no hash match are
+the only ones that reach this lane at all; anything the hash lane already knows
+never pays it.
+
+What that means when sizing a host: the ceiling is per image, and the work is
+synchronous CPU, so sustained unmatched-image throughput is bounded by cores,
+not by the budget. `OPTIMUS_DETECTION_MAX_INFLIGHT` is the lever that keeps a
+burst from committing every core to OCR at once.
+
+The lane now reports its own cost, so none of this has to stay an estimate:
+
+| Metric | What it tells you |
+| --- | --- |
+| `optimus_ocr_duration_seconds` | what the lane really costs per image; buckets straddle the 8s budget |
+| `optimus_ocr_variants_completed` | how many of the three passes finish. A p50 below 3 means the budget is truncating the multi-pass design and you are running on the weakest pass |
+| `optimus_ocr_outcome_total` | `complete` vs `budget_exhausted` vs `decode_failed` vs `error`. A rising `budget_exhausted` share is the signal to raise the budget or add cores |
+
+If `budget_exhausted` is rare and the duration p99 sits well under 8s, the
+budget is not what is costing you — lowering it will only cost recall.
+
 Scaling up rather than down — more replicas, Redis, Postgres — is a different
 document: [scaling.md](scaling.md), with a worked capacity study in
 [capacity.md](capacity.md).

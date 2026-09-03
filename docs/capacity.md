@@ -290,6 +290,17 @@ here and scale the one axis that turns red:
   18 (border-crop recall, see [detection-eval.md](detection-eval.md)) is unchanged
   — MIH gives the recall *and* the speed, so it is no longer a precision/latency
   trade.
+* **The OCR lane is the one pipeline stage with no experiment behind it.** Every
+  number in this document characterizes the hash lane; the OCR/QR second-look
+  lane, which is the most expensive stage per image, has never been run against
+  a corpus here. Its budget (`OPTIMUS_DETECTION_OCR_TIMEOUT_SECONDS`, default 8)
+  was set from a single measured worst case — a dense multi-panel collage at
+  6.4s — not from a distribution. Treat 8s as a per-unmatched-image ceiling when
+  sizing cores, and watch `optimus_ocr_duration_seconds`,
+  `optimus_ocr_variants_completed`, and `optimus_ocr_outcome_total` on your own
+  traffic rather than trusting that figure. A corpus benchmark for this lane is
+  outstanding work, tracked as improvement plan item #1 in
+  [architecture.md](architecture.md).
 * **Per-guild action rate, not the Discord global limit, throttles one big
   guild.** Tune `mod_action_rate_*` for the server; PROTECT actions are never
   dropped regardless.

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import cv2
 import numpy as np
+from prometheus_client import Counter, Histogram
 
 # Official domains of major AI companies — used for lookalike detection.
 OFFICIAL_AI_DOMAINS: frozenset[str] = frozenset(
@@ -138,6 +139,14 @@ _DEFANG_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
 # reads those as noise at native scale and resolves them once upscaled.
 _MAX_OCR_DIM = 1600
 
+# Tolerance around _MAX_OCR_DIM within which normalisation is skipped entirely.
+# Resizing an image whose longest edge is already 1590px to exactly 1600px is a
+# full INTER_CUBIC pass over every pixel to buy a 0.6% scale change -- far too
+# small to resolve a glyph that was unreadable before, so it is pure cost.
+# Screenshots cluster on stock display widths, which puts a real share of real
+# traffic just inside this band.
+_OCR_DIM_DEADBAND = 32
+
 
 def _preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
     """Build 2-3 deterministic preprocessing variants for multi-pass OCR.
@@ -153,7 +162,7 @@ def _preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
     # interpolation cost is paid on one channel rather than three.
     h, w = gray.shape[:2]
     longest = max(h, w)
-    if longest > 0 and longest != _MAX_OCR_DIM:
+    if longest > 0 and abs(longest - _MAX_OCR_DIM) >= _OCR_DIM_DEADBAND:
         scale = _MAX_OCR_DIM / longest
         gray = cv2.resize(
             gray,
@@ -186,6 +195,31 @@ _MIN_CONFIDENCE = 50  # drop tokens below this confidence
 # design -- the first variant consumes it and the CLAHE/Otsu passes, which are
 # the ones that rescue low-contrast dark-mode screenshots, never run at all.
 _OCR_TOTAL_TIMEOUT_SECONDS = 8.0
+
+# The OCR lane is the most expensive stage in the pipeline and the only one with
+# no experiment behind its cost. These three series exist so the budget default
+# can be argued from data rather than from a single hand-timed image: duration
+# says what the lane actually costs, variants says whether the multi-pass design
+# is being truncated in practice, and outcome says how often the budget is the
+# binding constraint.
+OCR_DURATION = Histogram(
+    "optimus_ocr_duration_seconds",
+    "Wall-clock time for one full multi-pass OCR extraction.",
+    # Straddles the budget (8s) so budget-bound calls pile into a visible bucket
+    # instead of the overflow; the low end resolves cheap early exits.
+    buckets=(0.05, 0.25, 1.0, 2.5, 4.0, 6.0, 8.0, 12.0, 20.0),
+)
+OCR_VARIANTS = Histogram(
+    "optimus_ocr_variants_completed",
+    "Preprocessing variants that finished OCR before the budget ran out.",
+    # There are only ever 3 variants; integer bounds make p50 readable directly.
+    buckets=(0, 1, 2, 3),
+)
+OCR_OUTCOME = Counter(
+    "optimus_ocr_outcome_total",
+    "How each OCR extraction terminated.",
+    ["outcome"],
+)
 
 
 def _ocr_confident_text(img: np.ndarray, *, timeout: float) -> str:
@@ -223,32 +257,47 @@ def extract_text(image_bytes: bytes, *, timeout: float | None = None) -> str:
     :data:`_OCR_TOTAL_TIMEOUT_SECONDS`.
     """
     budget = _OCR_TOTAL_TIMEOUT_SECONDS if timeout is None else timeout
+    started = time.monotonic()
+    completed = 0
+    outcome = "error"
     try:
-        started = time.monotonic()
         arr = np.frombuffer(image_bytes, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
+            outcome = "decode_failed"
             return ""
         variants = _preprocess_variants(img)
         seen: set[str] = set()
         combined: list[str] = []
+        outcome = "complete"
         for v in variants:
             remaining = budget - (time.monotonic() - started)
             if remaining <= 0:
+                outcome = "budget_exhausted"
                 break
             try:
                 text = _ocr_confident_text(v, timeout=remaining)
             except Exception:
                 remaining = budget - (time.monotonic() - started)
                 if remaining <= 0:
+                    outcome = "budget_exhausted"
                     break
                 text = _ocr_simple(v, timeout=remaining)
+            completed += 1
             if text and text not in seen:
                 seen.add(text)
                 combined.append(text)
         return "\n".join(combined).strip()
     except Exception:
+        # Kept broad deliberately: this lane must never fail a detection. The
+        # counter is what makes that silence observable.
         return ""
+    finally:
+        # In a finally so the swallowed-exception and decode-failure paths are
+        # counted too -- those are exactly the failures that were invisible.
+        OCR_DURATION.observe(time.monotonic() - started)
+        OCR_VARIANTS.observe(completed)
+        OCR_OUTCOME.labels(outcome=outcome).inc()
 
 
 # ---------------------------------------------------------------------------

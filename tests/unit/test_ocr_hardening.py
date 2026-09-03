@@ -222,3 +222,139 @@ def test_ocr_timeout_setting_defaults_above_single_pass_cost():
     settings = Settings(discord_token="x")
     assert settings.detection_ocr_timeout_seconds == _OCR_TOTAL_TIMEOUT_SECONDS
     assert settings.detection_ocr_timeout_seconds >= 8.0
+
+
+# ---------------------------------------------------------------------------
+# Resize deadband
+# ---------------------------------------------------------------------------
+
+
+def test_preprocess_variants_skips_resize_inside_deadband():
+    """An image already within the deadband is handed to OCR untouched.
+
+    Normalising 1584px -> 1600px is a full INTER_CUBIC pass over every pixel
+    for a 1% scale change, which cannot resolve a glyph that was unreadable
+    before. Screenshots cluster on stock display widths, so this band carries
+    real traffic.
+    """
+    import numpy as np
+
+    from optimus.hashing.ocr_extract import _MAX_OCR_DIM, _OCR_DIM_DEADBAND
+
+    longest = _MAX_OCR_DIM - (_OCR_DIM_DEADBAND - 1)
+    variants = _preprocess_variants(np.random.randint(0, 255, (900, longest, 3), dtype=np.uint8))
+    for v in variants:
+        assert max(v.shape) == longest, "resized despite being inside the deadband"
+
+
+def test_preprocess_variants_resizes_just_outside_deadband():
+    """One pixel past the deadband and normalisation applies as usual.
+
+    Pins the boundary from the other side so the deadband cannot silently
+    widen into the range where upscaling still buys real recall.
+    """
+    import numpy as np
+
+    from optimus.hashing.ocr_extract import _MAX_OCR_DIM, _OCR_DIM_DEADBAND
+
+    longest = _MAX_OCR_DIM - _OCR_DIM_DEADBAND
+    variants = _preprocess_variants(np.random.randint(0, 255, (900, longest, 3), dtype=np.uint8))
+    for v in variants:
+        assert max(v.shape) == _MAX_OCR_DIM, "skipped a resize outside the deadband"
+
+
+def test_preprocess_variants_deadband_applies_to_oversized_images_too():
+    """The deadband is symmetric: a slightly-too-large image is left alone."""
+    import numpy as np
+
+    from optimus.hashing.ocr_extract import _MAX_OCR_DIM, _OCR_DIM_DEADBAND
+
+    longest = _MAX_OCR_DIM + (_OCR_DIM_DEADBAND - 1)
+    variants = _preprocess_variants(np.random.randint(0, 255, (900, longest, 3), dtype=np.uint8))
+    for v in variants:
+        assert max(v.shape) == longest, "shrank an image inside the deadband"
+
+
+# ---------------------------------------------------------------------------
+# Per-call metrics
+# ---------------------------------------------------------------------------
+
+
+def _outcome_count(outcome: str) -> float:
+    """Current value of the outcome counter, 0 when the series is unseeded."""
+    from prometheus_client import REGISTRY
+
+    value = REGISTRY.get_sample_value("optimus_ocr_outcome_total", {"outcome": outcome})
+    return 0.0 if value is None else value
+
+
+def _variants_observed() -> tuple[float, float]:
+    """(count, sum) of the variants-completed histogram."""
+    from prometheus_client import REGISTRY
+
+    count = REGISTRY.get_sample_value("optimus_ocr_variants_completed_count")
+    total = REGISTRY.get_sample_value("optimus_ocr_variants_completed_sum")
+    return (count or 0.0, total or 0.0)
+
+
+def _encoded_image():
+    import cv2
+    import numpy as np
+
+    img = np.random.randint(0, 255, (756, 1148, 3), dtype=np.uint8)
+    return cv2.imencode(".png", img)[1].tobytes()
+
+
+def _decode(data: bytes):
+    import cv2
+    import numpy as np
+
+    return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+def test_extract_text_records_decode_failure():
+    """A payload that is not an image is counted, not silently dropped."""
+    from optimus.hashing import ocr_extract
+
+    before = _outcome_count("decode_failed")
+    assert ocr_extract.extract_text(b"definitely not an image") == ""
+    assert _outcome_count("decode_failed") == before + 1
+
+
+def test_extract_text_records_completion_and_variant_count(monkeypatch):
+    """A clean run reports every variant it finished."""
+    from optimus.hashing import ocr_extract
+
+    monkeypatch.setattr(ocr_extract, "_ocr_confident_text", lambda _img, *, timeout: "text")
+    encoded = _encoded_image()
+    expected_variants = len(ocr_extract._preprocess_variants(_decode(encoded)))
+
+    before_outcome = _outcome_count("complete")
+    before_count, before_sum = _variants_observed()
+    ocr_extract.extract_text(encoded, timeout=9.0)
+    after_count, after_sum = _variants_observed()
+
+    assert _outcome_count("complete") == before_outcome + 1
+    assert after_count == before_count + 1
+    assert after_sum - before_sum == expected_variants
+
+
+def test_extract_text_records_budget_exhaustion(monkeypatch):
+    """Budget exhaustion is the one failure mode the 8s default is tuned on.
+
+    It used to be a bare ``break`` -- invisible, so there was no way to tell a
+    healthy multi-pass run from one truncated to its weakest variant.
+    """
+    import time
+
+    from optimus.hashing import ocr_extract
+
+    def _slow(_img, *, timeout):
+        time.sleep(0.05)
+        return "text"
+
+    monkeypatch.setattr(ocr_extract, "_ocr_confident_text", _slow)
+
+    before = _outcome_count("budget_exhausted")
+    ocr_extract.extract_text(_encoded_image(), timeout=0.04)
+    assert _outcome_count("budget_exhausted") == before + 1
