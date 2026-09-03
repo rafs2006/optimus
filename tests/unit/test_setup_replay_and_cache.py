@@ -45,9 +45,7 @@ def _make_deps(session: AsyncSession) -> DbDeps:
     return DbDeps(session, _NoopRateLimiter(), get_settings())  # type: ignore[arg-type]
 
 
-async def _persist_detection(
-    session: AsyncSession, *, created_at: datetime, key: str
-) -> Detection:
+async def _persist_detection(session: AsyncSession, *, created_at: datetime, key: str) -> Detection:
     """Persist a minimal detection row for the given guild.
 
     Only the fields the ``/setup`` replay actually reads are populated -- the
@@ -132,9 +130,7 @@ async def test_relink_review_channel_does_not_queue_setup_hook(
 
 
 async def test_set_reported_at_stamps_the_row(session: AsyncSession) -> None:
-    detection = await _persist_detection(
-        session, created_at=datetime.now(UTC), key="stamp-1"
-    )
+    detection = await _persist_detection(session, created_at=datetime.now(UTC), key="stamp-1")
     when = datetime.now(UTC)
     await DetectionRepository(session, GUILD_ID).set_reported_at(detection.id, when)
     await session.refresh(detection)
@@ -151,18 +147,10 @@ async def test_list_unreported_since_returns_newest_first_within_window(
     # One inside the window, two inside newer, one *outside* (older than 3d),
     # one already stamped inside the window: only the two newest, unstamped,
     # in-window rows should come back, newest-first.
-    older = await _persist_detection(
-        session, created_at=now - timedelta(days=5), key="older"
-    )
-    stamped = await _persist_detection(
-        session, created_at=now - timedelta(hours=1), key="stamped"
-    )
-    keeper_new = await _persist_detection(
-        session, created_at=now - timedelta(minutes=5), key="new"
-    )
-    keeper_mid = await _persist_detection(
-        session, created_at=now - timedelta(hours=6), key="mid"
-    )
+    older = await _persist_detection(session, created_at=now - timedelta(days=5), key="older")
+    stamped = await _persist_detection(session, created_at=now - timedelta(hours=1), key="stamped")
+    keeper_new = await _persist_detection(session, created_at=now - timedelta(minutes=5), key="new")
+    keeper_mid = await _persist_detection(session, created_at=now - timedelta(hours=6), key="mid")
     repo = DetectionRepository(session, GUILD_ID)
     await repo.set_reported_at(stamped.id, now)
     rows = await repo.list_unreported_since(now - timedelta(days=3), limit=50)
@@ -189,9 +177,7 @@ async def test_list_unreported_since_respects_limit(session: AsyncSession) -> No
     now = datetime.now(UTC)
     # Insert 5 in-window, ask for 2 -> get 2 newest.
     for i in range(5):
-        await _persist_detection(
-            session, created_at=now - timedelta(minutes=i), key=f"limit-{i}"
-        )
+        await _persist_detection(session, created_at=now - timedelta(minutes=i), key=f"limit-{i}")
     repo = DetectionRepository(session, GUILD_ID)
     rows = await repo.list_unreported_since(now - timedelta(days=3), limit=2)
     assert len(rows) == 2
@@ -222,9 +208,7 @@ async def test_has_pending_scan_ignores_stamped_rows(session: AsyncSession) -> N
     detection = await _persist_detection(
         session, created_at=datetime.now(UTC) - timedelta(minutes=1), key="stamped-2"
     )
-    await DetectionRepository(session, GUILD_ID).set_reported_at(
-        detection.id, datetime.now(UTC)
-    )
+    await DetectionRepository(session, GUILD_ID).set_reported_at(detection.id, datetime.now(UTC))
     deps = _make_deps(session)
     assert await deps.has_pending_scan(GUILD_ID) is False
 

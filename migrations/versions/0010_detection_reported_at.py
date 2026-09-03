@@ -1,8 +1,19 @@
 """Track when a detection's moderator review card was posted.
 
-The join backfill runs before an admin has linked a review channel with\n``/setup``, and any detection it produces was silently dropped at the report\nboundary (``review_channel_id`` was still ``None``). The detection row itself\nwas persisted -- only the card delivery failed -- so the evidence is there,\nwe just could not tell after the fact which rows had actually been surfaced.\n\n``reported_at`` closes that gap. ``NULL`` means the card was never posted:\nthose are the rows the ``/setup`` backlog replay finds. A stamped row is\nnever replayed again, which is what keeps replay idempotent under bus\nredelivery and re-invocations of ``/setup``.
+The join backfill runs before an admin has linked a review channel with
+``/setup``, and any detection it produces was silently dropped at the report
+boundary (``review_channel_id`` was still ``None``). The detection row itself
+was persisted -- only the card delivery failed -- so the evidence is there,
+we just could not tell after the fact which rows had actually been surfaced.
 
-The paired composite index ``(guild_id, reported_at, created_at)`` scopes the\nreplay's ``WHERE guild_id = ? AND reported_at IS NULL AND created_at >= ?\nORDER BY created_at DESC LIMIT 50`` to a single index range read.
+``reported_at`` closes that gap. ``NULL`` means the card was never posted:
+those are the rows the ``/setup`` backlog replay finds. A stamped row is
+never replayed again, which is what keeps replay idempotent under bus
+redelivery and re-invocations of ``/setup``.
+
+The paired composite index ``(guild_id, reported_at, created_at)`` scopes the
+replay's ``WHERE guild_id = ? AND reported_at IS NULL AND created_at >= ?
+ORDER BY created_at DESC LIMIT 50`` to a single index range read.
 
 Revision ID: 0010
 Revises: 0009
