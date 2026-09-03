@@ -300,7 +300,7 @@ here and scale the one axis that turns red:
   `optimus_ocr_variants_completed`, and `optimus_ocr_outcome_total` on your own
   traffic rather than trusting that figure. A corpus benchmark for this lane is
   outstanding work, tracked as improvement plan item #1 in
-  [architecture.md](architecture.md).
+  [the root architecture doc](../architecture.md).
 * **Per-guild action rate, not the Discord global limit, throttles one big
   guild.** Tune `mod_action_rate_*` for the server; PROTECT actions are never
   dropped regardless.
