@@ -17,26 +17,33 @@ mode.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime
 
 from optimus.core.config import Settings
 from optimus.core.guild_config import GuildConfigCache
 from optimus.core.logging import get_logger
 from optimus.core.ratelimit import InMemoryRateLimiter
 from optimus.core.readiness import shards_check
-from optimus.db.repositories import GuildRepository
+from optimus.db.repositories import DetectionRepository, GuildRepository
+from optimus.i18n import translate
 from optimus.services.gateway.access_watch import AccessWatcher
 from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_start_kwargs
 from optimus.services.gateway.permission_probe import CachePermissionProbe, to_overwrites
 from optimus.services.gateway.watchdog import GatewayWatchdog
 from optimus.services.interactions.service import InteractionService, respond_to_interaction
-from optimus.services.moderation.explain import explain_rescan_summary
+from optimus.services.moderation.explain import (
+    explain_rescan_summary,
+    explain_setup_replay_summary,
+)
 from optimus.services.moderation.rest_adapter import HikariRestActions
+from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.service import _post_report
 
 if TYPE_CHECKING:
     from optimus.app.simple import SimpleApp
@@ -102,6 +109,20 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
             )
             return list(await iterator)
 
+    async def _has_review_channel(guild_id: int) -> bool:
+        """Gate for the join backfill: does this guild already have a review channel?
+
+        Called by :class:`GatewayService` before running the always-on join
+        scan. When the guild has no review channel linked, the scan is
+        deferred until ``/setup`` fires the sibling ``on_review_channel_linked``
+        hook below -- otherwise every card the scan produced would land in
+        ``_post_report`` with ``review_channel_id is None`` and be dropped
+        silently. Cheap: a single indexed lookup on the ``guilds`` PK.
+        """
+        async with app._scope() as session:
+            guild = await GuildRepository(session).get(guild_id)
+        return guild is not None and guild.review_channel_id is not None
+
     gateway = GatewayService(
         settings,
         app.bus,
@@ -109,6 +130,7 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         app.health,
         fetch_message=_fetch_message,
         history=_RestHistoryReader(),
+        has_review_channel=_has_review_channel,
     )
 
     async def _rescan(guild_id: int, channel_ids: Sequence[int]) -> None:
@@ -141,6 +163,110 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
 
     access = AccessWatcher(probe, _rescan, bot_user_id=bot_user_id)
 
+    # How far back the /setup backlog replay looks (days). Aligned with
+    # InteractionService.has_pending_scan so /config view and the replay
+    # agree on what counts as "pending".
+    setup_replay_days = 3
+    # Hard cap on how many detections the /setup replay posts. A guild joined
+    # mid-scam-wave can accumulate thousands of unreported detections; dumping
+    # all of them into a fresh review channel makes the queue unreadable and
+    # burns rate limit. Newest-first, so the ones most likely still live make
+    # the cut.
+    setup_replay_limit = 50
+
+    async def _on_review_channel_linked(guild_id: int) -> None:
+        """Post the pre-setup detection backlog and run the deferred join scan.
+
+        Called from :class:`InteractionService`'s post-commit hook, i.e.
+        *after* the ``review_channel_id`` write has landed, so a fresh read
+        of the guild here sees the new channel. Runs three things, isolated
+        so one failing does not silently swallow the others:
+
+        1. Replay: newest unreported detections in the last 3 days (cap 50)
+           are posted as review cards and stamped ``reported_at``. Older or
+           over-cap detections stay unreported forever -- see the summary
+           line's "N more not shown" caveat.
+        2. Summary line so the burst of cards reads as a catch-up, not as
+           an active incident wave.
+        3. Deferred join backfill for the guild's recent history, if the
+           original ``on_guild_join`` deferred it here.
+        """
+        async with app._scope() as session:
+            guild = await GuildRepository(session).get(guild_id)
+            if guild is None or guild.review_channel_id is None:
+                return
+            channel_id = guild.review_channel_id
+            locale = guild.locale
+            det_repo = DetectionRepository(session, guild_id)
+            since = datetime.now(UTC) - timedelta(days=setup_replay_days)
+            total_pending = await det_repo.count_unreported_since(since)
+            pending = await det_repo.list_unreported_since(since, limit=setup_replay_limit)
+        posted = 0
+        for detection in pending:
+            data = ReportData(
+                detection_id=detection.id,
+                guild_id=guild_id,
+                channel_id=detection.channel_id,
+                message_id=detection.message_id,
+                uploader_id=detection.uploader_id,
+                verdict=detection.verdict,
+                # Confidence is a runtime property of the verdict -- not
+                # persisted on the row -- so replayed cards omit the line.
+                confidence=None,
+                action_taken=detection.action_taken,
+                locale=locale,
+            )
+            # Reuse the moderation service's own post helper so replayed cards
+            # go through exactly the same render + button wiring as live ones
+            # (no drift between the two code paths on future review-card
+            # tweaks).
+            try:
+                posted_message_id = await _post_report(bot.rest, channel_id, data)
+            except Exception:
+                _log.warning(
+                    "setup_replay_post_failed",
+                    guild_id=guild_id,
+                    detection_id=detection.id,
+                    exc_info=True,
+                )
+                continue
+            if posted_message_id is None:
+                # _post_report returned None -- the rest call itself did not
+                # raise but did not produce a message either. Skip the stamp
+                # so the row stays eligible for the next /setup re-run.
+                continue
+            # Stamp per-row rather than in one UPDATE at the end: a mid-loop
+            # crash then leaves the un-posted tail eligible to be picked up
+            # again on the next ``/setup`` re-run, not double-posted.
+            async with app._scope() as session:
+                await DetectionRepository(session, guild_id).set_reported_at(
+                    detection.id, datetime.now(UTC)
+                )
+            _log.info(
+                "setup_replay_posted",
+                guild_id=guild_id,
+                detection_id=detection.id,
+                message_id=int(posted_message_id),
+            )
+            posted += 1
+        if posted > 0:
+            more = max(total_pending - posted, 0)
+            summary = explain_setup_replay_summary(posted, more, setup_replay_days, locale)
+            with contextlib.suppress(Exception):
+                await bot.rest.create_message(channel_id, summary)
+        _log.info(
+            "setup_replay_complete",
+            guild_id=guild_id,
+            posted=posted,
+            pending=total_pending,
+            capped=total_pending > setup_replay_limit,
+        )
+        # Kick off the deferred join backfill in the background: the
+        # interaction task is already off the critical path (post-commit
+        # hook) but this scan can still take seconds on a big guild, and
+        # blocking here would delay the next handler off the event loop.
+        gateway.track(asyncio.create_task(gateway.run_deferred_join_backfill(guild_id)))
+
     interactions = InteractionService(
         app._scope,
         InMemoryRateLimiter(),
@@ -155,6 +281,11 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
         probe=probe,
         # /config permissions audits every channel from the same cache.
         inventory=probe,
+        # See :meth:`InteractionService._run` -- these two power Fix 1
+        # (scan-policy cache invalidated on ``/config set``) and Fix 3
+        # (backlog replay + deferred join backfill on ``/setup``).
+        config_cache=config_cache,
+        on_review_channel_linked=_on_review_channel_linked,
     )
 
     # Readiness should track the gateway, not just the DB: a wedged gateway
@@ -178,6 +309,32 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
 
     @bot.listen(hikari.GuildJoinEvent)
     async def _on_guild_join(event: hikari.GuildJoinEvent) -> None:
+        # DM the owner a one-line prompt to run /setup. Without a review
+        # channel the moderation pipeline persists detections but drops the
+        # cards silently -- the owner has no way to see the bot is "waiting
+        # on you" unless we tell them. Best-effort: DMs closed / owner not
+        # DMable is not an error -- the same prompt shows up as the
+        # pending-scan line in /config view later. Fired in the background so
+        # the DM latency does not delay the join backfill.
+        guild = event.guild
+        if guild is not None and guild.owner_id is not None:
+
+            async def _dm_owner(owner_id: int, guild_name: str) -> None:
+                try:
+                    channel = await bot.rest.create_dm_channel(owner_id)
+                    await bot.rest.create_message(
+                        channel.id,
+                        translate("command.join_dm", "en", guild_name=guild_name),
+                    )
+                except Exception:
+                    _log.info(
+                        "guild_join_owner_dm_failed",
+                        guild_id=int(event.guild_id),
+                        owner_id=owner_id,
+                        exc_info=True,
+                    )
+
+            gateway.track(asyncio.create_task(_dm_owner(int(guild.owner_id), guild.name)))
         await gateway.on_guild_join(event)
 
     @bot.listen(hikari.GuildChannelUpdateEvent)

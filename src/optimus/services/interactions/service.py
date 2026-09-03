@@ -18,6 +18,7 @@ handler failure rolls back cleanly and never leaks a half-applied state change.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -27,7 +28,7 @@ from sqlalchemy.exc import OperationalError
 from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy, retry_async
 from optimus.core.config import Settings
-from optimus.core.guild_config import load_from_db
+from optimus.core.guild_config import GuildConfigCache, load_from_db
 from optimus.core.loadstats import load_snapshot
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
@@ -87,6 +88,12 @@ if TYPE_CHECKING:
     from optimus.services.detection.service import DetectionService
 
 _log = get_logger(__name__)
+
+#: Called after ``/setup`` links a review channel for the first time in this
+#: transaction, once the commit has landed. The Discord glue in
+#: ``app/discord`` uses it to replay backlogged detections and to run the
+#: deferred join backfill. ``None`` in unit-test paths where neither runs.
+type ReviewChannelLinkedHook = Callable[[int], Awaitable[None]]
 
 
 def _default_fetch(settings: Settings) -> FetchFn:
@@ -189,6 +196,23 @@ class DbDeps:
         #: same reason as ``pending_verdicts``: the rebuild reads the rows this
         #: transaction is still holding a write lock on.
         self.pending_index_invalidations: set[int] = set()
+        #: Guilds whose scan-policy config changed in this request's
+        #: transaction. :class:`optimus.core.guild_config.GuildConfigCache`
+        #: keeps a 300s Redis-backed snapshot of ``sensitivity``, ``safe_mode``,
+        #: ``optin_scan_bots``, and the ignored-channel/role/trusted-user sets;
+        #: without an invalidation on write, ``/config set safe_mode true``
+        #: takes up to 5 minutes to actually take effect for the gateway's
+        #: ``should_scan`` check -- "turn on policies first" not doing anything
+        #: for five minutes is the same class of bug as the review channel
+        #: cache. Drained by :meth:`InteractionService._run` after commit for
+        #: the same reason as the hash index above.
+        self.pending_scan_policy_invalidations: set[int] = set()
+        #: Guilds that just had a review channel linked for the first time in
+        #: this request's transaction. Drained after commit into the setup
+        #: hook so backlog replay and any deferred join backfill run without
+        #: contending on the write lock -- both are network-heavy paths that
+        #: also want to *read* the row this transaction is still holding open.
+        self.pending_review_channel_linked: set[int] = set()
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
         stored = await GuildHashRepository(self._session, guild_id).add(gh)
@@ -236,6 +260,17 @@ class DbDeps:
     #: name is identical to its column name and needs no entry here.
     _FIELD_TO_COLUMN: ClassVar[dict[str, str]] = {"review_channel": "review_channel_id"}
 
+    #: The subset of ``_FIELD_TO_COLUMN`` inputs (plus every field that maps
+    #: 1:1 with a column) whose value is baked into the scan-policy snapshot
+    #: cached by :class:`optimus.core.guild_config.GuildConfigCache`. A write
+    #: to any of these has to invalidate the cache post-commit or
+    #: ``should_scan`` keeps returning the pre-write answer for up to five
+    #: minutes. Kept in one place next to the mapping so a future config
+    #: field that lands in the snapshot has an obvious home to be added to.
+    _SCAN_POLICY_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"sensitivity", "safe_mode", "optin_scan_bots"}
+    )
+
     async def set_config_field(self, guild_id: int, field: str, value: Any) -> None:
         repo = GuildRepository(self._session)
         guild = await repo.get_or_create(guild_id)
@@ -250,8 +285,36 @@ class DbDeps:
                 "Guild column -- add an entry to _FIELD_TO_COLUMN if the command "
                 "field name intentionally differs from the column name."
             )
+        # Queue a scan-policy cache invalidation only when the field is one
+        # the snapshot actually holds. ``review_channel`` and
+        # ``mod_queue_threshold``, for instance, do not live in that snapshot
+        # -- the moderation coordinator reads them straight from the DB per
+        # verdict -- so invalidating on those would just churn Redis.
+        first_review_channel_link = (
+            field == "review_channel" and value is not None and guild.review_channel_id is None
+        )
         setattr(guild, column, value)
         await self._session.flush()
+        if field in self._SCAN_POLICY_FIELDS:
+            self.pending_scan_policy_invalidations.add(guild_id)
+        if first_review_channel_link:
+            # First transition from "no review channel" to "linked": drive the
+            # /setup hook (backlog replay + deferred join backfill) after the
+            # transaction commits.
+            self.pending_review_channel_linked.add(guild_id)
+
+    async def has_pending_scan(self, guild_id: int) -> bool:
+        """Are there unreported detections queued from before ``/setup`` linked a channel?
+
+        Bounded to the same 3-day window as the ``/setup`` replay so
+        ``/config view`` and the replay agree on what "pending" means: an
+        older detection that the replay would not post is not called
+        "pending" here either. Cheap COUNT with the composite index.
+        """
+        since = datetime.now(UTC) - timedelta(days=3)
+        return (
+            await DetectionRepository(self._session, guild_id).count_unreported_since(since)
+        ) > 0
 
     async def stats_summary(self, guild_id: int) -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -692,6 +755,8 @@ class InteractionService:
         rest: ModerationRest | None = None,
         probe: PermissionProbe | None = None,
         inventory: ChannelInventory | None = None,
+        config_cache: GuildConfigCache | None = None,
+        on_review_channel_linked: ReviewChannelLinkedHook | None = None,
     ) -> None:
         self._scope = scope
         self._rl = rate_limiter
@@ -701,6 +766,14 @@ class InteractionService:
         self._rest = rest
         self._probe = probe
         self._inventory = inventory
+        #: Optional so unit tests that build the service with a bare scope keep
+        #: working. When wired (simple mode), a ``/config set`` on a scan-policy
+        #: field drops the affected guild's cached snapshot after commit.
+        self._config_cache = config_cache
+        #: Optional for the same reason. When wired, a ``/setup`` that links
+        #: the first review channel for a guild triggers the backlog replay
+        #: and the deferred join backfill via this callback after commit.
+        self._on_review_channel_linked = on_review_channel_linked
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
         """Run a slash command within a fresh transactional session scope.
@@ -805,6 +878,34 @@ class InteractionService:
                     await self._detection.invalidate_guild_index(guild_id)
                 for verdict in deps.pending_verdicts:
                     await self._detection.publish_confirmed_match(verdict)
+            # Scan-policy cache invalidation is a Redis DELETE that must run
+            # AFTER the transaction commits: the config write we're
+            # invalidating for is only visible to another connection once the
+            # commit lands. Doing it before commit would race a concurrent
+            # ``should_scan`` into repopulating the cache from the pre-write
+            # row, and the invalidation would then delete the fresh entry --
+            # putting the cache back in the exact stale state we're fixing.
+            if self._config_cache is not None:
+                for guild_id in deps.pending_scan_policy_invalidations:
+                    with contextlib.suppress(Exception):
+                        await self._config_cache.invalidate(guild_id)
+            # And finally the setup hook: backlog replay + deferred join
+            # backfill for guilds that just linked their first review channel.
+            # Isolated from the rest via a per-guild try/except so a failure
+            # replaying one guild cannot swallow another's, and can never
+            # bubble out to fail the ``/setup`` command itself -- the setup
+            # write has already committed and the confirmation is on its way
+            # to Discord.
+            if self._on_review_channel_linked is not None:
+                for guild_id in deps.pending_review_channel_linked:
+                    try:
+                        await self._on_review_channel_linked(guild_id)
+                    except Exception:
+                        _log.error(
+                            "post_setup_hook_failed",
+                            guild_id=guild_id,
+                            exc_info=True,
+                        )
             return response
 
         try:

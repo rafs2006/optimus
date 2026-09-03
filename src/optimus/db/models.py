@@ -240,9 +240,20 @@ class Detection(Base):
     """A recorded detection event."""
 
     __tablename__ = "detections"
-    # Drives the deployment-wide retention purge's ``created_at < cutoff`` range
-    # scan (no guild filter, so a leading-guild_id composite would not apply).
-    __table_args__ = (Index("ix_detections_created_at", "created_at"),)
+    __table_args__ = (
+        # Drives the deployment-wide retention purge's ``created_at < cutoff``
+        # range scan (no guild filter, so a leading-guild_id composite would
+        # not apply).
+        Index("ix_detections_created_at", "created_at"),
+        # Powers the /setup backlog replay: ``reported_at IS NULL`` scoped to
+        # one guild, newest-first, within a small window -- see
+        # :meth:`DetectionRepository.list_unreported_since`. A partial index
+        # on the NULL side would be tightest but SQLite's alembic support for
+        # partial indexes is uneven across versions, so a plain composite is
+        # used; the row count on ``reported_at IS NULL`` is small in steady
+        # state anyway.
+        Index("ix_detections_guild_reported", "guild_id", "reported_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
@@ -260,6 +271,12 @@ class Detection(Base):
     action_taken: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     created_at: Mapped[datetime] = _ts()
+    #: When the moderator review card for this detection was posted. ``None``
+    #: means the card has not been posted yet -- either the guild had no
+    #: review channel linked when the detection landed (join backfill before
+    #: ``/setup``) or the post failed. These are the rows the ``/setup``
+    #: backlog replay finds. A stamped row is never replayed again.
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Appeal(Base):

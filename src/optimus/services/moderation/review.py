@@ -64,7 +64,12 @@ class ReportData:
     message_id: int
     uploader_id: int
     verdict: str
-    confidence: float
+    #: Verdict confidence 0..1 for cards from the live path. ``None`` on
+    #: replayed cards from the ``/setup`` backlog: the score is a runtime
+    #: property of the verdict, and the persisted detection row does not
+    #: store it. Replayed cards show the rest of the evidence and rely on a
+    #: click-through jump link for the image.
+    confidence: float | None
     action_taken: str
     matched_hash_id: str | None = None
     #: True when the match came from the shared global scam set (other
@@ -125,9 +130,13 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
         (translate("report.field_uploader", loc), f"<@{data.uploader_id}>"),
         (translate("report.field_channel", loc), f"<#{data.channel_id}>"),
         (translate("report.field_message", loc), message_reference(data)),
-        (translate("report.field_confidence", loc), f"{data.confidence:.2f}"),
         (translate("report.field_action", loc), data.action_taken),
     ]
+    if data.confidence is not None:
+        # Insert directly after Message so live cards render exactly as before;
+        # replayed cards (no confidence) just omit the row rather than showing
+        # a placeholder that would look like a real 0.00 score.
+        fields.insert(3, (translate("report.field_confidence", loc), f"{data.confidence:.2f}"))
     if data.matched_hash_id:
         fields.append((translate("report.field_matched_hash", loc), data.matched_hash_id))
     if data.global_match:

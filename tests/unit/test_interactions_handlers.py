@@ -161,6 +161,9 @@ class FakeDeps:
         self.blocked_checks.append((guild_id, channel_id, action))
         return self._enforcement_blocked
 
+    async def has_pending_scan(self, guild_id: int) -> bool:
+        return bool(getattr(self, "pending_scan", False))
+
     async def access_report(self, guild_id: int) -> Any:
         return self._access_report
 

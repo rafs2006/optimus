@@ -403,6 +403,62 @@ class DetectionRepository:
         await self._session.flush()
         return cast("CursorResult[Any]", result).rowcount or 0
 
+    async def set_reported_at(self, detection_id: int, when: datetime) -> int:
+        """Stamp when the review card for a detection was posted.
+
+        Called after ``_post_report`` succeeds. Stamping is what keeps the
+        ``/setup`` backlog replay idempotent: only rows with
+        ``reported_at IS NULL`` are re-surfaced, so a card that has already
+        been posted (from any path) never turns into a duplicate on the next
+        ``/setup`` invocation or bus redelivery.
+        """
+        from sqlalchemy import update
+
+        stmt = (
+            update(Detection)
+            .where(Detection.guild_id == self._guild_id, Detection.id == detection_id)
+            .values(reported_at=when)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    async def list_unreported_since(self, since: datetime, *, limit: int) -> Sequence[Detection]:
+        """Detections in this guild with no card posted yet, newest-first.
+
+        The ``/setup`` backlog replay reads this: everything the join backfill
+        (or any other path) landed with ``review_channel_id=None`` sits here
+        with ``reported_at IS NULL``. Bounded by ``since`` (a 3-day window is
+        the join backfill's own scope, so replay cannot surface anything the
+        backfill would not have produced) and ``limit`` (newest first, so a
+        noisy backfill truncates the oldest end rather than the freshest).
+        """
+        stmt = (
+            select(Detection)
+            .where(
+                Detection.guild_id == self._guild_id,
+                Detection.reported_at.is_(None),
+                Detection.created_at >= since,
+            )
+            .order_by(Detection.created_at.desc())
+            .limit(limit)
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def count_unreported_since(self, since: datetime) -> int:
+        """Same predicate as :meth:`list_unreported_since` but a bare count.
+
+        The replay uses this to know whether it truncated: when the backlog is
+        larger than the cap, the card note says "N more not shown" so a
+        moderator can see that the replay was bounded rather than complete.
+        """
+        stmt = select(func.count()).where(
+            Detection.guild_id == self._guild_id,
+            Detection.reported_at.is_(None),
+            Detection.created_at >= since,
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     async def set_hashes(self, detection_id: int, hashes: dict[str, int]) -> int:
         """Backfill the hash ensemble onto a detection filed without one."""
         from sqlalchemy import update
