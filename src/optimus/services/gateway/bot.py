@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
@@ -41,7 +42,7 @@ from optimus.services.gateway.extract import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable, Sequence
+    from collections.abc import Iterable, Sequence
 
     #: REST fallback for partial updates: ``(channel_id, message_id) -> Message``.
     FetchMessage = Callable[[int, int], Awaitable[hikari.Message]]
@@ -228,6 +229,12 @@ def to_incoming(event: hikari.GuildMessageCreateEvent) -> IncomingMessage:
 _SEEN_CACHE_MAX = 8192
 
 
+#: Async predicate the gateway uses to decide whether the join backfill can
+#: post cards for a guild yet. Returns ``True`` when a review channel is
+#: already linked -- see ``on_guild_join`` for the rationale.
+type HasReviewChannel = Callable[[int], Awaitable[bool]]
+
+
 class GatewayService:
     """Owns the hikari bot, the event bus, and the health server."""
 
@@ -240,6 +247,7 @@ class GatewayService:
         *,
         fetch_message: FetchMessage | None = None,
         history: HistoryReader | None = None,
+        has_review_channel: HasReviewChannel | None = None,
     ) -> None:
         self._settings = settings
         self._bus = bus
@@ -247,6 +255,15 @@ class GatewayService:
         self._health = health
         self._fetch_message = fetch_message
         self._history = history
+        #: Async predicate: does this guild already have a review channel?
+        #: When wired, ``on_guild_join`` skips the join backfill for guilds
+        #: whose ``review_channel_id`` is ``None`` -- there is no point
+        #: scanning three days of history when every card produced would be
+        #: silently dropped at the report boundary. The deferred scan then
+        #: runs from :meth:`run_deferred_join_backfill` after ``/setup``
+        #: links a channel. ``None`` preserves the old always-scan behavior
+        #: for callers that never had a setup gap (distributed mode).
+        self._has_review_channel = has_review_channel
         self._inflight: set[asyncio.Task[None]] = set()
         # LRU of already-published (message_id, image_url) pairs, so an edited
         # message only re-enters the pipeline for images we have not seen.
@@ -328,7 +345,62 @@ class GatewayService:
         if self._history is not None and self._settings.gateway_join_scan_days > 0:
             # Backfill in the background: joining a big guild must not block
             # the event listener. The task is tracked so drain() awaits it.
-            self.track(asyncio.create_task(self._join_backfill(int(event.guild_id))))
+            # ``_maybe_join_backfill`` is what actually gates on the guild
+            # having a review channel linked -- see its docstring.
+            self.track(asyncio.create_task(self._maybe_join_backfill(int(event.guild_id))))
+
+    async def _maybe_join_backfill(self, guild_id: int) -> None:
+        """Run the join backfill only when there is somewhere to report.
+
+        The old always-scan path spent three days of history on a guild whose
+        ``review_channel_id`` was still ``None``, and every card produced was
+        silently dropped at ``coordinator._post_report``'s
+        ``review_channel_id is None`` guard -- "what's the point if nothing
+        will fire". This gate skips the scan when the predicate says no channel
+        is linked; :meth:`run_deferred_join_backfill` runs it once ``/setup``
+        links one.
+
+        When no predicate is wired (distributed mode's own setup) the old
+        behavior is preserved: always scan on join.
+        """
+        if self._has_review_channel is not None:
+            try:
+                linked = await self._has_review_channel(guild_id)
+            except Exception:
+                # Fail-closed to "defer": a lookup failure that led to a
+                # discarded scan is a worse regression than a slightly late
+                # scan that runs on the next ``/setup`` (or never, if the
+                # admin never runs setup -- in which case the scan would
+                # have been discarded anyway).
+                _log.warning(
+                    "join_backfill_review_channel_check_failed",
+                    guild_id=guild_id,
+                    exc_info=True,
+                )
+                return
+            if not linked:
+                _log.info(
+                    "join_backfill_deferred_no_review_channel",
+                    guild_id=guild_id,
+                    days=self._settings.gateway_join_scan_days,
+                )
+                return
+        await self._join_backfill(guild_id)
+
+    async def run_deferred_join_backfill(self, guild_id: int) -> None:
+        """Run a previously-deferred join backfill after ``/setup`` links a channel.
+
+        Called from :class:`InteractionService`'s post-commit
+        ``on_review_channel_linked`` hook. Idempotency is by design a soft
+        property: the ``/setup`` hook only fires on the first-link transition,
+        and any detection persisted before this scan (that still has
+        ``reported_at IS NULL``) is picked up by the sibling backlog replay
+        rather than by re-running the scan. Wraps the internal implementation
+        so the caller does not have to reason about the always-scan predicate.
+        """
+        if self._history is None or self._settings.gateway_join_scan_days <= 0:
+            return
+        await self._join_backfill(guild_id)
 
     async def _join_backfill(self, guild_id: int) -> None:
         """Scan the last ``gateway_join_scan_days`` of history in a new guild.

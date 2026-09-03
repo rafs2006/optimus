@@ -197,6 +197,10 @@ class InteractionDeps(Protocol):
         """Per-channel enforcement access for the whole guild, or ``None``."""
         ...
 
+    async def has_pending_scan(self, guild_id: int) -> bool:
+        """True when detections are queued waiting for a review channel to be linked."""
+        ...
+
     async def hash_rate_ok(self, user_id: int) -> bool: ...
     async def report_rate_ok(self, user_id: int) -> bool: ...
     async def appeal_cooldown_ok(self, user_id: int) -> bool: ...
@@ -588,9 +592,14 @@ async def _cmd_config(ctx: InteractionContext, deps: InteractionDeps) -> Interac
     if ctx.subcommand == "view":
         current = await deps.get_config(ctx.guild_id)
         locale = str(current.get("locale", "en"))
-        return InteractionResponse(
-            "command.config_view_header", {"summary": _render_config_summary(current, locale)}
-        )
+        summary = _render_config_summary(current, locale)
+        # Show a pending-scan notice when the guild joined before ``/setup``
+        # linked a review channel and detections have been queued. Kept below
+        # the config block so it reads as "here is your config, and by the
+        # way you have not run setup yet" rather than crowding the top.
+        if current.get("review_channel") is None and await deps.has_pending_scan(ctx.guild_id):
+            summary = summary + "\n\n-# " + translate("command.setup_pending_scan", locale)
+        return InteractionResponse("command.config_view_header", {"summary": summary})
     if ctx.subcommand == "permissions":
         current = await deps.get_config(ctx.guild_id)
         locale = str(current.get("locale", ctx.locale))

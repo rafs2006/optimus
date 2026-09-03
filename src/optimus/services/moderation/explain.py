@@ -146,6 +146,25 @@ def explain_rescan_summary(channel_ids: tuple[int, ...], messages: int, locale: 
     )
 
 
+def explain_setup_replay_summary(shown: int, more: int, days: int, locale: str) -> str:
+    """One line posted to the review channel right after a ``/setup`` replay.
+
+    Announces how many pre-existing detections were re-posted, and -- when the
+    cap kicked in -- how many older ones were left out. The count is dominated
+    by the 3-day / 50-newest bound in the caller; without a summary line the
+    burst of cards would look like a live incident wave rather than a
+    one-time catch-up.
+    """
+    truncated = translate("command.setup_replay_truncated", locale, more=more) if more > 0 else ""
+    return translate(
+        "command.setup_replay_summary",
+        locale,
+        shown=shown,
+        days=days,
+        truncated=truncated,
+    )
+
+
 def explain_preflight(
     result: PreflightResult, locale: str, *, channel_id: int | None = None
 ) -> str | None:

@@ -8,6 +8,7 @@ testable without a live gateway or database.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -98,6 +99,9 @@ TargetResolver = Callable[[int, int], Awaitable[TargetContext | None]]
 ReportPoster = Callable[[int, ReportData], Awaitable[int | None]]
 #: Persists the action taken + an audit row; returns the detection row id (if any).
 AuditRecorder = Callable[[VerdictEvent, str, ActionResult], Awaitable[int | None]]
+#: Stamps ``detections.reported_at`` once a review card has been posted, so
+#: the ``/setup`` backlog replay does not re-surface the same row twice.
+ReportedStamper = Callable[[int, int], Awaitable[None]]
 #: Purges the rest of a confirmed scammer's campaign across every channel and
 #: harvests the variant hashes. Returns a summary for the review card.
 Sweeper = Callable[[VerdictEvent], Awaitable[SweepOutcome]]
@@ -116,6 +120,7 @@ class ModerationCoordinator:
         audit: AuditRecorder,
         dispatcher: PriorityDispatcher[ActionResult] | None = None,
         sweep: Sweeper | None = None,
+        mark_reported: ReportedStamper | None = None,
     ) -> None:
         self._config = config
         self._target = target
@@ -123,6 +128,10 @@ class ModerationCoordinator:
         self._report = report
         self._audit = audit
         self._sweep = sweep
+        # Optional so unit tests that fake the coordinator with only the
+        # collaborators they need keep working; production wires it up in
+        # :func:`build_coordinator`.
+        self._mark_reported = mark_reported
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -329,6 +338,9 @@ class ModerationCoordinator:
             # send permission in the review channel, deleted channel) must not
             # fail the verdict handler — the action already ran and was audited,
             # and a bus redelivery would only re-run it into a "duplicate".
+            # The stamper is intentionally NOT called on this path either:
+            # ``reported_at IS NULL`` is what makes the row eligible for the
+            # ``/setup`` backlog replay, so a failed post stays eligible.
             #
             # The cause is classified because this log line is the *only* signal
             # left when the review channel itself is unreachable: "missing
@@ -344,3 +356,13 @@ class ModerationCoordinator:
                 permission_related=failure.permission_related,
                 exc_info=True,
             )
+            return
+        # Stamp only after a successful post: an exception above returned
+        # already, and the retention purge does not care about this column
+        # (its cutoff is ``created_at``). A stamp failure here is best-effort
+        # -- the card is already in Discord, and losing the stamp would only
+        # surface as a duplicate card on the next ``/setup``, not as a
+        # correctness problem.
+        if self._mark_reported is not None:
+            with contextlib.suppress(Exception):
+                await self._mark_reported(event.guild_id, detection_id)

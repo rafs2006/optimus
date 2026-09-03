@@ -267,6 +267,20 @@ def build_coordinator(
                 )
         return outcome
 
+    async def mark_reported(guild_id: int, detection_id: int) -> None:
+        """Stamp ``detections.reported_at`` for the row a card was just posted for.
+
+        Runs in its own scope: the coordinator's other closures already do
+        the same, and the write is small enough that a fresh transaction is
+        the safest thing to do under SQLite's single-writer lock (no risk of
+        piggybacking on a transaction that is holding the write lock for
+        something else).
+        """
+        async with scope() as session:
+            await DetectionRepository(session, guild_id).set_reported_at(
+                detection_id, datetime.now(UTC)
+            )
+
     coordinator = ModerationCoordinator(
         config=config,
         target=target,
@@ -275,6 +289,7 @@ def build_coordinator(
         audit=audit,
         dispatcher=dispatcher,
         sweep=sweep,
+        mark_reported=mark_reported,
     )
     return coordinator, dispatcher
 
