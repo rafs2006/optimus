@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import cv2
 import numpy as np
+from prometheus_client import Counter, Histogram
 
 # Official domains of major AI companies — used for lookalike detection.
 OFFICIAL_AI_DOMAINS: frozenset[str] = frozenset(
@@ -128,11 +129,23 @@ _DEFANG_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
 # Image preprocessing
 # ---------------------------------------------------------------------------
 
-# OCR runs inside the detection lane's bounded time budget, so keeping it
-# responsive matters more than preserving full-resolution detail.  This bounds
-# the work passed to each Tesseract invocation even for a valid (but hostile)
-# large image.
+# The dimension every image is normalised to before OCR: large images are
+# shrunk to it (bounding the work passed to each Tesseract invocation even for
+# a valid but hostile image), and smaller ones are enlarged to it.  Enlarging
+# matters as much as shrinking: scam posts are routinely collages of several
+# UI screenshots tiled into one attachment, so the glyphs that carry the
+# payload (the promo domain, the promo code) are only a handful of pixels tall
+# in an image whose overall dimensions look perfectly adequate.  Tesseract
+# reads those as noise at native scale and resolves them once upscaled.
 _MAX_OCR_DIM = 1600
+
+# Tolerance around _MAX_OCR_DIM within which normalisation is skipped entirely.
+# Resizing an image whose longest edge is already 1590px to exactly 1600px is a
+# full INTER_CUBIC pass over every pixel to buy a 0.6% scale change -- far too
+# small to resolve a glyph that was unreadable before, so it is pure cost.
+# Screenshots cluster on stock display widths, which puts a real share of real
+# traffic just inside this band.
+_OCR_DIM_DEADBAND = 32
 
 
 def _preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
@@ -141,16 +154,21 @@ def _preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
     Tesseract accuracy varies with image quality; running multiple
     variants and deduplicating the text catches more real content.
     """
-    h, w = img.shape[:2]
-    if max(h, w) > _MAX_OCR_DIM:
-        scale = _MAX_OCR_DIM / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
 
-    # Upscale small images for better OCR.
-    if max(gray.shape) < 1000:
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    # Normalise toward _MAX_OCR_DIM in both directions. Shrinking uses INTER_AREA
+    # (correct for decimation); enlarging uses INTER_CUBIC (smoother glyph edges,
+    # which is what Tesseract keys on). Done on the grayscale image so the
+    # interpolation cost is paid on one channel rather than three.
+    h, w = gray.shape[:2]
+    longest = max(h, w)
+    if longest > 0 and abs(longest - _MAX_OCR_DIM) >= _OCR_DIM_DEADBAND:
+        scale = _MAX_OCR_DIM / longest
+        gray = cv2.resize(
+            gray,
+            (max(1, round(w * scale)), max(1, round(h * scale))),
+            interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC,
+        )
 
     variants: list[np.ndarray] = [gray]
 
@@ -170,7 +188,38 @@ def _preprocess_variants(img: np.ndarray) -> list[np.ndarray]:
 # ---------------------------------------------------------------------------
 
 _MIN_CONFIDENCE = 50  # drop tokens below this confidence
-_OCR_TOTAL_TIMEOUT_SECONDS = 3.0
+
+# Wall-clock budget shared by *all* preprocessing variants of one image. It has
+# to accommodate the whole set: a single variant of a 1600px image costs ~2.5s,
+# so a budget that only covers one pass silently truncates the multi-pass
+# design -- the first variant consumes it and the CLAHE/Otsu passes, which are
+# the ones that rescue low-contrast dark-mode screenshots, never run at all.
+_OCR_TOTAL_TIMEOUT_SECONDS = 8.0
+
+# The OCR lane is the most expensive stage in the pipeline and the only one with
+# no experiment behind its cost. These three series exist so the budget default
+# can be argued from data rather than from a single hand-timed image: duration
+# says what the lane actually costs, variants says whether the multi-pass design
+# is being truncated in practice, and outcome says how often the budget is the
+# binding constraint.
+OCR_DURATION = Histogram(
+    "optimus_ocr_duration_seconds",
+    "Wall-clock time for one full multi-pass OCR extraction.",
+    # Straddles the budget (8s) so budget-bound calls pile into a visible bucket
+    # instead of the overflow; the low end resolves cheap early exits.
+    buckets=(0.05, 0.25, 1.0, 2.5, 4.0, 6.0, 8.0, 12.0, 20.0),
+)
+OCR_VARIANTS = Histogram(
+    "optimus_ocr_variants_completed",
+    "Preprocessing variants that finished OCR before the budget ran out.",
+    # There are only ever 3 variants; integer bounds make p50 readable directly.
+    buckets=(0, 1, 2, 3),
+)
+OCR_OUTCOME = Counter(
+    "optimus_ocr_outcome_total",
+    "How each OCR extraction terminated.",
+    ["outcome"],
+)
 
 
 def _ocr_confident_text(img: np.ndarray, *, timeout: float) -> str:
@@ -198,38 +247,57 @@ def _ocr_simple(img: np.ndarray, *, timeout: float) -> str:
     return str(pytesseract.image_to_string(img, config="--oem 3 --psm 11", timeout=timeout)).strip()
 
 
-def extract_text(image_bytes: bytes) -> str:
+def extract_text(image_bytes: bytes, *, timeout: float | None = None) -> str:
     """Extract text from an image via multi-pass Tesseract OCR.
 
     Runs 2-3 preprocessing variants, deduplicates results, and filters
     low-confidence tokens. Returns empty on any failure.
+
+    ``timeout`` is the total budget across every variant, defaulting to
+    :data:`_OCR_TOTAL_TIMEOUT_SECONDS`.
     """
+    budget = _OCR_TOTAL_TIMEOUT_SECONDS if timeout is None else timeout
+    started = time.monotonic()
+    completed = 0
+    outcome = "error"
     try:
-        started = time.monotonic()
         arr = np.frombuffer(image_bytes, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
+            outcome = "decode_failed"
             return ""
         variants = _preprocess_variants(img)
         seen: set[str] = set()
         combined: list[str] = []
+        outcome = "complete"
         for v in variants:
-            remaining = _OCR_TOTAL_TIMEOUT_SECONDS - (time.monotonic() - started)
+            remaining = budget - (time.monotonic() - started)
             if remaining <= 0:
+                outcome = "budget_exhausted"
                 break
             try:
                 text = _ocr_confident_text(v, timeout=remaining)
             except Exception:
-                remaining = _OCR_TOTAL_TIMEOUT_SECONDS - (time.monotonic() - started)
+                remaining = budget - (time.monotonic() - started)
                 if remaining <= 0:
+                    outcome = "budget_exhausted"
                     break
                 text = _ocr_simple(v, timeout=remaining)
+            completed += 1
             if text and text not in seen:
                 seen.add(text)
                 combined.append(text)
         return "\n".join(combined).strip()
     except Exception:
+        # Kept broad deliberately: this lane must never fail a detection. The
+        # counter is what makes that silence observable.
         return ""
+    finally:
+        # In a finally so the swallowed-exception and decode-failure paths are
+        # counted too -- those are exactly the failures that were invisible.
+        OCR_DURATION.observe(time.monotonic() - started)
+        OCR_VARIANTS.observe(completed)
+        OCR_OUTCOME.labels(outcome=outcome).inc()
 
 
 # ---------------------------------------------------------------------------
@@ -375,14 +443,16 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
-def analyze_image(image_bytes: bytes) -> dict[str, Any]:
+def analyze_image(image_bytes: bytes, *, timeout: float | None = None) -> dict[str, Any]:
     """Full analysis: OCR text, URLs, lookalike domains, and phishing signals.
+
+    ``timeout`` is the total OCR budget across all preprocessing variants.
 
     Returns:
         {"text": str, "urls": list[str], "lookalikes": list[dict[str, str]],
          "signals": list[str], "risk_score": int, "risk_level": str}
     """
-    text = extract_text(image_bytes)
+    text = extract_text(image_bytes, timeout=timeout)
     repaired = _repair_urls(text)
     urls = extract_urls(repaired)
     lookalikes: list[dict[str, str]] = []

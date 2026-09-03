@@ -51,7 +51,7 @@ def test_normalize_domain_returns_empty_for_invalid_idna():
 def test_analyze_image_ignores_invalid_idna_domain(monkeypatch):
     monkeypatch.setattr(
         "optimus.hashing.ocr_extract.extract_text",
-        lambda _: "Claim now at https://\u202eopenai.com.example",
+        lambda _, **_kw: "Claim now at https://\u202eopenai.com.example",
     )
     analysis = analyze_image(b"ignored")
     assert analysis["urls"] == ["https://\u202eopenai.com.example"]

@@ -75,6 +75,28 @@ the plan is versioned with the code.
    (defanged URLs, lookalike AI-company domains, credential-harvest wording,
    wallet-connect prompts, QR-payload phishing). Commit a
    `docs/eval/ocr-risk-report.{md,json}` and gate CI on a precision floor.
+
+   Now more urgent, and better specified, after the upscale/budget fix.
+   `benchmarks/` is today entirely a hash-lane harness, and the OCR budget
+   default (8s) was set from *one* measured worst case — a 1148px multi-panel
+   collage at 6.4s — not from a distribution. The lane emits
+   `optimus_ocr_duration_seconds`, `optimus_ocr_variants_completed`, and
+   `optimus_ocr_outcome_total`, which covers production; this item is the
+   offline half, so a preprocessing change can be judged before it ships.
+   Concretely: a multi-panel corpus generator beside `corpus.py` that tiles
+   3-6 synthetic UI panels at geometries spanning the range where the upscale
+   gate matters (including 1148px), scored through `riskscan.scan` for
+   payload-domain recovery and risk-level distribution, with per-case timing so
+   the budget can be re-derived from a distribution.
+
+   Two constraints worth settling first. The corpus should be **generated, not
+   a real screenshot** — every fixture in the repo is synthetic, and a real
+   sample means committing third-party content with real handles to a public
+   repo; a generated collage at the same geometry is the same forcing function.
+   And unlike the current benchmarks this one needs the Tesseract binary, so it
+   stays out of CI, as `benchmarks/` already does. When it lands, replace the
+   OCR entry in Known Limits in [docs/capacity.md](docs/capacity.md) with the
+   measured result.
 2. **Publish `uvx optimus` for real.** Add a tag-triggered release job
    (`.github/workflows/release.yml`) that runs `uv build` + trusted-publisher
    OIDC to PyPI, and pushes a GHCR image from the existing `Dockerfile`. The

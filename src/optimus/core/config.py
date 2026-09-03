@@ -253,9 +253,15 @@ class Settings(BaseSettings):
     detection_guild_index_cap: int = Field(default=1024, ge=1)
     # OCR/QR risk scan of images the hash index has never seen. Advisory only:
     # high/critical findings become AMBIGUOUS verdicts (mod queue, no action).
-    # Costs up to ~3s of CPU per unmatched image (bounded in ocr_extract), so
+    # Costs up to detection_ocr_timeout_seconds of CPU per unmatched image, so
     # very large deployments can turn it off and rely on hashes alone.
     detection_ocr_risk_scan: bool = True
+    #: Total wall-clock budget for the OCR stage of one image, shared across all
+    #: of its preprocessing variants. The scan runs off the event loop in a
+    #: worker thread, so this bounds CPU per unmatched image rather than
+    #: blocking ingestion. Lower it to cap CPU at the cost of recall on dense or
+    #: low-contrast screenshots, which need the later variants to be readable.
+    detection_ocr_timeout_seconds: float = Field(default=8.0, gt=0)
 
     # Bus back-pressure / redelivery
     #: Max messages a single detection replica processes concurrently. Also set

@@ -44,7 +44,7 @@ def _patch(
     analysis: dict[str, object],
     qr: list[str] | None = None,
 ) -> None:
-    monkeypatch.setattr(riskscan, "analyze_image", lambda _b: analysis)
+    monkeypatch.setattr(riskscan, "analyze_image", lambda _b, **_kw: analysis)
     monkeypatch.setattr(riskscan, "extract_qr_urls", lambda _b: qr or [])
 
 
