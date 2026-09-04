@@ -316,6 +316,35 @@ class DbDeps:
             await DetectionRepository(self._session, guild_id).count_unreported_since(since)
         ) > 0
 
+    async def open_queue(self, guild_id: int, *, limit: int) -> dict[str, Any]:
+        """The open review backlog for ``/queue``: capped page plus a true total.
+
+        Returns the raw facts and lets the handler render them, so the age
+        arithmetic and locale formatting stay out of the data layer.
+        """
+        repo = DetectionRepository(self._session, guild_id)
+        rows, total = await repo.list_open(limit=limit)
+        now = datetime.now(UTC)
+        return {
+            "total": total,
+            "rows": [
+                {
+                    "detection_id": row.id,
+                    "channel_id": row.channel_id,
+                    "message_id": row.message_id,
+                    "uploader_id": row.uploader_id,
+                    "verdict": row.verdict,
+                    # aiosqlite strips tzinfo on round-trip, so re-attach UTC
+                    # before subtracting rather than trusting what came back.
+                    "age_seconds": max(
+                        0.0,
+                        (now - row.created_at.replace(tzinfo=UTC)).total_seconds(),
+                    ),
+                }
+                for row in rows
+            ],
+        }
+
     async def stats_summary(self, guild_id: int) -> dict[str, Any]:
         now = datetime.now(UTC)
         detections = await DetectionRepository(self._session, guild_id).count_in_window(

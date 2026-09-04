@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from optimus.db.models import (
@@ -300,3 +302,76 @@ async def test_global_trusted_guild_repo_roundtrip(session: AsyncSession) -> Non
     assert await repo.remove(123) is False  # already gone
     assert await repo.contains(123) is False
     assert [row.guild_id for row in await repo.list_all()] == [456]
+
+
+async def _record_detection(
+    repo: DetectionRepository, *, message_id: int, created_at: datetime
+) -> Detection:
+    return await repo.record(
+        Detection(
+            message_id=message_id,
+            channel_id=11,
+            attachment_id=message_id,
+            uploader_id=13,
+            distances={"phash": 0},
+            verdict="scam",
+            idempotency_key=f"{message_id}:{message_id}",
+            created_at=created_at,
+        )
+    )
+
+
+async def test_list_open_returns_only_posted_and_unactioned_rows(
+    session: AsyncSession,
+) -> None:
+    """The queue exists to be drainable, so every terminal state must leave it."""
+    await _make_guild(session, 5)
+    repo = DetectionRepository(session, guild_id=5)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    waiting = await _record_detection(repo, message_id=1, created_at=base)
+    never_posted = await _record_detection(repo, message_id=2, created_at=base)
+    dismissed = await _record_detection(repo, message_id=3, created_at=base)
+    confirmed = await _record_detection(repo, message_id=4, created_at=base)
+
+    for det in (waiting, dismissed, confirmed):
+        await repo.set_reported_at(det.id, base)
+    await repo.set_action_taken(dismissed.id, "dismissed")
+    await repo.set_action_taken(confirmed.id, "confirmed")
+
+    open_rows, total = await repo.list_open(limit=25)
+    open_ids = [d.id for d in open_rows]
+    assert open_ids == [waiting.id]
+    # A row with no card posted belongs to the /setup replay, not the queue.
+    assert never_posted.id not in open_ids
+    assert total == 1
+
+
+async def test_list_open_is_oldest_first_scoped_and_capped(session: AsyncSession) -> None:
+    await _make_guild(session, 5)
+    await _make_guild(session, 6)
+    repo = DetectionRepository(session, guild_id=5)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    # Recorded newest-first so ordering cannot pass by insertion accident.
+    ids = []
+    for offset in (2, 1, 0):
+        det = await _record_detection(
+            repo, message_id=100 + offset, created_at=base + timedelta(hours=offset)
+        )
+        await repo.set_reported_at(det.id, base)
+        ids.append((offset, det.id))
+    expected = [det_id for _, det_id in sorted(ids)]
+
+    full_rows, full_total = await repo.list_open(limit=25)
+    assert [d.id for d in full_rows] == expected
+    assert full_total == 3
+
+    # The cap must not distort the total a moderator is shown: the count is a
+    # window over every qualifying row, computed before LIMIT applies.
+    capped_rows, capped_total = await repo.list_open(limit=2)
+    assert [d.id for d in capped_rows] == expected[:2]
+    assert capped_total == 3
+
+    other = DetectionRepository(session, guild_id=6)
+    assert await other.list_open(limit=25) == ([], 0)

@@ -54,6 +54,7 @@ after the fact requires `optin_evidence_storage`.
 | --- | --- |
 | **Confirm scam** | Adds the image's hash to this server's blocklist (future reposts are caught automatically), deletes the offending message, and marks the detection confirmed. Works even for member reports, which are filed without hashes: the bot re-fetches the image, hashes it, and stores it. |
 | **False positive** | Whitelists the image so it is never flagged again, reverses the recorded action, and — if the uploader was banned — unbans them. |
+| **Dismiss** | Closes the card and teaches the detector nothing: no hash blocked, no image whitelisted, no action taken or reversed. Use it for a mistaken member report — the one case where you want the report gone but do not want the image made permanently exempt. |
 | **Ban uploader** | Bans the uploader and purges their recent messages (`ban_purge_hours`, default 24h, Discord cap 7 days). If Discord refuses (role hierarchy, missing Ban Members), you get an explicit error — never a silent failure. |
 | **Unban** | Lifts the uploader's ban. |
 | **Whitelist image** | Whitelists the image without touching the detection or the uploader. |
@@ -73,6 +74,14 @@ Notes on cards:
 - **False positives are cheap, misses are not.** When in doubt, Confirm — the
   card keeps an **Unban** button, so a wrong call is one press away from being
   undone. Members who need to contest a call reach you directly.
+- **Do not use False positive to clear junk reports.** It permanently
+  whitelists the image, so a member who reports a real scam image incorrectly
+  would get that image exempted from detection forever. **Dismiss** is the
+  no-op exit for that case; the reporter is not told either way, so nobody can
+  probe the bot to learn what gets through.
+- **Every card is either acted on or dismissed.** Anything left untouched stays
+  in `/queue` indefinitely — that is deliberate, so a neglected backlog stays
+  visible instead of quietly ageing out.
 
 ## Deciding fast
 
@@ -175,6 +184,7 @@ Moderator commands (require **Manage Server**):
 | `/config set <field> <value>` | Change one setting (fields below). |
 | `/config permissions` | List every channel where the bot cannot enforce, and the exact permission it is missing. The first thing to run when "the bot ignored a scam". |
 | `/stats` | Detection activity, pipeline load, and the database persistence canary. |
+| `/queue` | List the cards still waiting on a decision, oldest first, each with a jump link. Answers "what did we miss while nobody was online?" — the review channel cannot, once the backlog has scrolled past a screen. |
 | `/help` | This guide's short version, right inside Discord. Available to everyone. |
 
 Admin-only:

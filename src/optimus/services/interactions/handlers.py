@@ -43,7 +43,12 @@ from optimus.services.interactions.logic import (
 from optimus.services.moderation import reasons
 from optimus.services.moderation.explain import explain_access_report
 from optimus.services.moderation.permissions import AccessReport
-from optimus.services.moderation.review import BUTTON_LABELS, ParsedCustomId, ReviewAction
+from optimus.services.moderation.review import (
+    BUTTON_LABELS,
+    ParsedCustomId,
+    ReviewAction,
+    jump_url,
+)
 
 _log = get_logger(__name__)
 
@@ -152,6 +157,7 @@ class InteractionDeps(Protocol):
     async def get_config(self, guild_id: int) -> dict[str, Any]: ...
     async def set_config_field(self, guild_id: int, field: str, value: Any) -> None: ...
     async def stats_summary(self, guild_id: int) -> dict[str, Any]: ...
+    async def open_queue(self, guild_id: int, *, limit: int) -> dict[str, Any]: ...
     async def purge_guild(self, guild_id: int) -> int: ...
     async def detection_belongs_to(
         self, guild_id: int, detection_id: int, user_id: int
@@ -827,6 +833,92 @@ async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> Interac
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
+#: How many open cards ``/queue`` *fetches*, following the ``/setup`` replay's
+#: "show some, count the rest" convention. This bounds the query, not the
+#: message: the character budget below decides how many of these actually
+#: render, which at ordinary snowflake widths is around half of them.
+QUEUE_PAGE_SIZE = 25
+#: Discord's hard ceiling on message content. Each row carries two snowflakes
+#: and a jump URL, so a full page renders past 3000 characters at ordinary ID
+#: widths -- the row cap alone cannot keep the response sendable, and a
+#: rejected message would make ``/queue`` fail exactly when the backlog is
+#: worst. The budget is measured against the rendered template per locale.
+DISCORD_MESSAGE_LIMIT = 2000
+
+
+def _format_age(seconds: float) -> str:
+    """Render an age as the coarsest useful unit (``3d``, ``4h``, ``12m``)."""
+    if seconds >= 86400:
+        return f"{int(seconds // 86400)}d"
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 60)}m"
+
+
+async def _cmd_queue(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    """List review cards nobody has acted on yet, oldest first.
+
+    The cards themselves stay the work surface -- this only answers "what is
+    waiting?", which the review channel cannot once the backlog has scrolled
+    past a screen or piled up while no moderator was online. Strictly
+    read-only: it starts no action and changes no state, so the buttons remain
+    the only way to resolve anything.
+
+    Rows with no card posted yet are deliberately excluded (see
+    ``DetectionRepository.list_open``) -- those belong to the ``/setup``
+    replay, and listing them here would promise a card that does not exist.
+    """
+    assert ctx.guild_id is not None
+    summary = await deps.open_queue(ctx.guild_id, limit=QUEUE_PAGE_SIZE)
+    total = int(summary["total"])
+    if total == 0:
+        return InteractionResponse("command.queue_empty")
+    rows: list[dict[str, Any]] = list(summary["rows"])
+    oldest = _format_age(float(rows[0]["age_seconds"]))
+
+    # The row cap bounds how many lines we build; this bounds how long the
+    # rendered message may get, which the row cap cannot -- every line carries
+    # two snowflakes and a jump URL, so 25 rows can exceed Discord's limit on
+    # their own. Measure the surrounding template in this locale instead of
+    # guessing at it, and reserve the worst-case "N more" trailer (``more`` can
+    # never exceed ``total``) so adding it later cannot push us over.
+    frame = translate(
+        "command.queue", ctx.locale, count=total, oldest=oldest, listing="", truncated=""
+    )
+    reserve = translate("command.queue_truncated", ctx.locale, more=total)
+    budget = DISCORD_MESSAGE_LIMIT - len(frame) - len(reserve)
+
+    lines: list[str] = []
+    used = 0
+    for row in rows:
+        url = jump_url(ctx.guild_id, int(row["channel_id"]), int(row["message_id"]))
+        age = _format_age(float(row["age_seconds"]))
+        line = (
+            f"\u2022 [#{row['detection_id']}]({url}) \u2014 {row['verdict']}, "
+            f"<@{row['uploader_id']}>, {age} old"
+        )
+        cost = len(line) + (1 if lines else 0)  # the "\n" join adds one each
+        # Always emit the oldest row: a listing of nothing under a header that
+        # says "N waiting" would read as a bug rather than as truncation.
+        if lines and used + cost > budget:
+            break
+        lines.append(line)
+        used += cost
+
+    truncated = ""
+    if total > len(lines):
+        truncated = translate("command.queue_truncated", ctx.locale, more=total - len(lines))
+    return InteractionResponse(
+        "command.queue",
+        {
+            "count": total,
+            "listing": "\n".join(lines),
+            "truncated": truncated,
+            "oldest": oldest,
+        },
+    )
+
+
 async def _cmd_help(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
     return InteractionResponse("command.help")
 
@@ -848,6 +940,7 @@ _COMMAND_HANDLERS: dict[str, _CommandHandler] = {
     "config": _cmd_config,
     "setup": _cmd_setup,
     "stats": _cmd_stats,
+    "queue": _cmd_queue,
     "global": _cmd_global,
     "help": _cmd_help,
     "delete_server_data": _cmd_delete_server_data,
@@ -1110,6 +1203,24 @@ async def handle_review_button(
             key = "button.marked_false_positive_global_revoked"
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
+        )
+
+    if action is ReviewAction.DISMISS:
+        # The queue's only no-op exit. Confirm writes the image into the
+        # guild blocklist and False positive writes it into the whitelist --
+        # both wrong for a report that was simply mistaken, because a
+        # whitelisted image is permanently exempt from detection and a
+        # member's bad report must never buy that exemption. Dismiss records
+        # that a moderator looked and chose to do nothing: no hash write, no
+        # whitelist write, no REST call, nothing restored (a member report
+        # never deleted anything). It exists so /queue can actually drain --
+        # without a terminal state these rows sit at action_taken='none'
+        # forever. The reporter is deliberately not told, so mass-reporting
+        # cannot be used to probe what does and does not get through.
+        await deps.set_detection_action(ctx.guild_id, detection_id, "dismissed")
+        await deps.audit(ctx.guild_id, ctx.user_id, "review.dismiss", target=str(detection_id))
+        return InteractionResponse(
+            "button.dismissed", {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
 
     if action is ReviewAction.BAN_UPLOADER:

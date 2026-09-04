@@ -14,8 +14,11 @@ from optimus.services.interactions.attachment_hash import (
 from optimus.services.interactions.handlers import (
     _CONFIG_VIEW_ORDER,
     _HASH_LIST_PREVIEW_LIMIT,
+    DISCORD_MESSAGE_LIMIT,
+    QUEUE_PAGE_SIZE,
     DetectionFacts,
     InteractionContext,
+    _format_age,
     handle_command,
     handle_component,
     handle_review_button,
@@ -103,6 +106,8 @@ class FakeDeps:
         self.detection_actions: list[tuple[int, str]] = []
         self.backfilled_hashes: list[tuple[int, dict[str, int]]] = []
         self.whitelisted: list[GuildWhitelist] = []
+        #: What open_queue returns, before the handler's page-size cap.
+        self._queue = flags.get("queue", {"total": 0, "rows": []})
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
         self.hashes[gh.hash_id] = gh
@@ -284,6 +289,10 @@ class FakeDeps:
 
     async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None:
         self.detection_actions.append((detection_id, action))
+
+    async def open_queue(self, guild_id: int, *, limit: int) -> dict[str, Any]:
+        rows = list(self._queue["rows"])[:limit]
+        return {"total": self._queue["total"], "rows": rows}
 
     async def set_detection_hashes(
         self, guild_id: int, detection_id: int, hashes: dict[str, int]
@@ -1859,3 +1868,183 @@ async def test_reviewmsg_reply_stays_optimistic_when_nothing_is_in_the_way() -> 
 
     assert resp.i18n_key == "command.reviewmsg_result_submitted"
     assert deps.blocked_checks == [(1, 111, "delete_ban")]
+
+
+# --- Dismiss button ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dismiss_closes_the_card_without_touching_any_list() -> None:
+    """A mistaken report must be able to exit without poisoning either list.
+
+    Confirm writes the blocklist and False positive writes the whitelist, so
+    before Dismiss existed the only ways to clear a card both taught the
+    detector something. Dismiss is the no-op exit: it must record the outcome
+    and nothing else.
+    """
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+
+    assert resp.i18n_key == "button.dismissed"
+    assert resp.card_note_key == "card.handled"
+    assert deps.detection_actions == [(5, "dismissed")]
+    # The whole point: no hash, no whitelist, no ban, no deletion.
+    assert deps.hashes == {}
+    assert deps.whitelisted == []
+    assert deps.bans == []
+    assert deps.unbans == []
+    assert deps.deleted_messages == []
+    assert deps.reversed == []
+
+
+@pytest.mark.asyncio
+async def test_dismiss_is_audited() -> None:
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
+    await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert deps.audits[0][2] == "review.dismiss"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_requires_manage_guild() -> None:
+    parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_review_button(_ctx("", perms=NONE), parsed, FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
+
+
+@pytest.mark.asyncio
+async def test_dismiss_rejects_a_detection_from_another_guild() -> None:
+    """Custom ids are guessable, so the guild-scoped lookup is the real gate."""
+    deps = FakeDeps(detection_missing=True)
+    parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    assert resp.i18n_key == "button.detection_missing"
+    assert deps.detection_actions == []
+
+
+# --- /queue --------------------------------------------------------------------
+
+
+def _queue_row(detection_id: int, age_seconds: float, **over: Any) -> dict[str, Any]:
+    row = {
+        "detection_id": detection_id,
+        "channel_id": 111,
+        "message_id": 222,
+        "uploader_id": 333,
+        "verdict": "scam",
+        "age_seconds": age_seconds,
+    }
+    row.update(over)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_queue_requires_manage_guild() -> None:
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("queue", perms=NONE), FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
+
+
+@pytest.mark.asyncio
+async def test_queue_reports_an_empty_backlog_distinctly() -> None:
+    resp = await handle_command(_ctx("queue", perms=MANAGE), FakeDeps())
+    assert resp.i18n_key == "command.queue_empty"
+
+
+@pytest.mark.asyncio
+async def test_queue_lists_rows_with_jump_links_oldest_first() -> None:
+    rows = [_queue_row(7, 200_000.0), _queue_row(8, 7_200.0), _queue_row(9, 120.0)]
+    deps = FakeDeps(queue={"total": 3, "rows": rows})
+    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+
+    assert resp.i18n_key == "command.queue"
+    assert resp.params["count"] == 3
+    # The oldest row drives the headline age, and ages use coarse units.
+    assert resp.params["oldest"] == "2d"
+    listing = resp.params["listing"].splitlines()
+    assert [line.split("[#")[1].split("]")[0] for line in listing] == ["7", "8", "9"]
+    assert "https://discord.com/channels/1/111/222" in listing[0]
+    assert listing[1].endswith("2h old")
+    assert listing[2].endswith("2m old")
+    assert resp.params["truncated"] == ""
+
+
+@pytest.mark.asyncio
+async def test_queue_caps_the_listing_and_says_how_many_are_hidden() -> None:
+    """A long backlog must not blow past Discord's message limit silently."""
+    rows = [_queue_row(i, float(i)) for i in range(QUEUE_PAGE_SIZE + 10)]
+    deps = FakeDeps(queue={"total": len(rows), "rows": rows})
+    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+
+    assert len(resp.params["listing"].splitlines()) == QUEUE_PAGE_SIZE
+    # The count stays honest even though the listing is truncated.
+    assert resp.params["count"] == QUEUE_PAGE_SIZE + 10
+    assert "10" in resp.params["truncated"]
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (0.0, "0m"),
+        (59.0, "0m"),
+        (60.0, "1m"),
+        (3599.0, "59m"),
+        (3600.0, "1h"),  # boundary: switches to hours exactly at an hour
+        (86399.0, "23h"),
+        (86400.0, "1d"),  # boundary: switches to days exactly at a day
+        (86400.0 * 42, "42d"),  # a long-neglected card still reads sensibly
+    ],
+)
+def test_format_age_unit_boundaries(seconds: float, expected: str) -> None:
+    assert _format_age(seconds) == expected
+
+
+@pytest.mark.asyncio
+async def test_queue_stays_inside_discords_message_limit() -> None:
+    """The row cap alone cannot bound the message: every line carries two
+    snowflakes and a jump URL, so a full page of maximum-width IDs can exceed
+    2000 characters before the header is even added."""
+    big = 10**19 - 1  # a maximum-width snowflake
+    rows = [
+        _queue_row(
+            big - i,
+            float(i),
+            channel_id=big,
+            message_id=big,
+            uploader_id=big,
+            verdict="ambiguous",
+        )
+        for i in range(QUEUE_PAGE_SIZE)
+    ]
+    deps = FakeDeps(queue={"total": len(rows), "rows": rows})
+    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+
+    assert len(render(resp, "en")) <= DISCORD_MESSAGE_LIMIT
+    # It had to drop rows to fit, and it says so rather than silently hiding them.
+    shown = len(resp.params["listing"].splitlines())
+    assert shown < QUEUE_PAGE_SIZE
+    assert str(QUEUE_PAGE_SIZE - shown) in resp.params["truncated"]
+
+
+@pytest.mark.asyncio
+async def test_queue_budget_fits_both_locales() -> None:
+    """The budget is measured per locale, so a longer template cannot overflow."""
+    big = 10**19 - 1
+    rows = [
+        _queue_row(big - i, float(i), channel_id=big, message_id=big, uploader_id=big)
+        for i in range(QUEUE_PAGE_SIZE)
+    ]
+    deps = FakeDeps(queue={"total": 500, "rows": rows})
+    for locale in ("en", "sr"):
+        ctx = InteractionContext(
+            guild_id=1,
+            user_id=99,
+            member_permissions=MANAGE,
+            command="queue",
+            options={},
+            locale=locale,
+        )
+        resp = await handle_command(ctx, deps)
+        assert len(render(resp, locale)) <= DISCORD_MESSAGE_LIMIT, locale
