@@ -346,6 +346,46 @@ class DetectionRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def list_open(self, *, limit: int) -> Sequence[Detection]:
+        """Detections whose card was posted but that no moderator has acted on.
+
+        "Open" is deliberately narrow: ``reported_at IS NOT NULL`` (a card
+        actually reached the review channel) *and* ``action_taken = 'none'``
+        (no button has moved it to a terminal state). Rows with no card yet
+        are the ``/setup`` replay's business, not the queue's -- surfacing
+        them here would double-report them once the replay runs.
+
+        Ordered oldest-first so a moderator coming back to a neglected server
+        works the backlog in arrival order instead of seeing the newest noise
+        first, and capped so a server that ignored the queue for a month
+        cannot render an unbounded response. Served by the existing
+        ``ix_detections_guild_reported`` composite index.
+        """
+        stmt = (
+            select(Detection)
+            .where(
+                Detection.guild_id == self._guild_id,
+                Detection.reported_at.is_not(None),
+                Detection.action_taken == "none",
+            )
+            .order_by(Detection.created_at.asc())
+            .limit(limit)
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def count_open(self) -> int:
+        """How many detections are open, ignoring the display cap.
+
+        Lets ``/queue`` say "N more not shown" truthfully rather than implying
+        the capped page is the whole backlog.
+        """
+        stmt = select(func.count()).where(
+            Detection.guild_id == self._guild_id,
+            Detection.reported_at.is_not(None),
+            Detection.action_taken == "none",
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     async def list_by_uploader_since(
         self, uploader_id: int, since: datetime, *, limit: int = 500
     ) -> Sequence[Detection]:

@@ -26,6 +26,7 @@ class ReviewAction(StrEnum):
     UNBAN = "unban"
     WHITELIST_IMAGE = "whitelist_image"
     SUBMIT_GLOBAL = "submit_global"
+    DISMISS = "dismiss"
 
 
 def encode_custom_id(action: ReviewAction, detection_id: int) -> str:
@@ -172,6 +173,7 @@ def report_fields(data: ReportData) -> list[tuple[str, str]]:
 REVIEW_BUTTONS: tuple[ReviewAction, ...] = (
     ReviewAction.CONFIRM_SCAM,
     ReviewAction.FALSE_POSITIVE,
+    ReviewAction.DISMISS,
     ReviewAction.BAN_UPLOADER,
     ReviewAction.UNBAN,
     ReviewAction.WHITELIST_IMAGE,
@@ -184,6 +186,7 @@ BUTTON_LABELS: dict[ReviewAction, str] = {
     ReviewAction.UNBAN: "Unban",
     ReviewAction.WHITELIST_IMAGE: "Whitelist image",
     ReviewAction.SUBMIT_GLOBAL: "Submit to global",
+    ReviewAction.DISMISS: "Dismiss",
 }
 
 

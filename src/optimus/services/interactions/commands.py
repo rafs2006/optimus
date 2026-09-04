@@ -192,6 +192,11 @@ COMMANDS: tuple[Command, ...] = (
         required_permission=Permission.MANAGE_GUILD,
     ),
     Command(
+        name="queue",
+        description="List scam reports still waiting for a moderator decision.",
+        required_permission=Permission.MANAGE_GUILD,
+    ),
+    Command(
         name="global",
         # Owner-only at the handler (there is no Discord-side "app owner"
         # permission); MANAGE_GUILD here only hides it from ordinary members.
