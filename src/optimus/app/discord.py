@@ -31,7 +31,6 @@ from optimus.core.logging import get_logger
 from optimus.core.ratelimit import InMemoryRateLimiter
 from optimus.core.readiness import shards_check
 from optimus.db.repositories import DetectionRepository, GuildRepository
-from optimus.i18n import translate
 from optimus.services.gateway.access_watch import AccessWatcher
 from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_start_kwargs
 from optimus.services.gateway.permission_probe import CachePermissionProbe, to_overwrites
@@ -309,32 +308,14 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
 
     @bot.listen(hikari.GuildJoinEvent)
     async def _on_guild_join(event: hikari.GuildJoinEvent) -> None:
-        # DM the owner a one-line prompt to run /setup. Without a review
-        # channel the moderation pipeline persists detections but drops the
-        # cards silently -- the owner has no way to see the bot is "waiting
-        # on you" unless we tell them. Best-effort: DMs closed / owner not
-        # DMable is not an error -- the same prompt shows up as the
-        # pending-scan line in /config view later. Fired in the background so
-        # the DM latency does not delay the join backfill.
-        guild = event.guild
-        if guild is not None and guild.owner_id is not None:
-
-            async def _dm_owner(owner_id: int, guild_name: str) -> None:
-                try:
-                    channel = await bot.rest.create_dm_channel(owner_id)
-                    await bot.rest.create_message(
-                        channel.id,
-                        translate("command.join_dm", "en", guild_name=guild_name),
-                    )
-                except Exception:
-                    _log.info(
-                        "guild_join_owner_dm_failed",
-                        guild_id=int(event.guild_id),
-                        owner_id=owner_id,
-                        exc_info=True,
-                    )
-
-            gateway.track(asyncio.create_task(_dm_owner(int(guild.owner_id), guild.name)))
+        # Joining is deliberately silent: the bot sends nothing to the owner,
+        # the inviter, or the guild. Discord's join payload names only the
+        # guild owner, never who actually invited the bot, so an unsolicited
+        # nudge would reach the wrong person whenever an admin or moderator
+        # did the inviting. Discovery is self-serve instead -- ``/help``
+        # explains the pipeline and marks ``/setup`` as the starting point,
+        # and ``/config view`` carries the pending-scan line for as long as no
+        # review channel is linked.
         await gateway.on_guild_join(event)
 
     @bot.listen(hikari.GuildChannelUpdateEvent)

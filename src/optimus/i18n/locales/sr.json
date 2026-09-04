@@ -94,8 +94,7 @@
     "reviewmsg_result_blocked": "Dodato {added} heš vrednosti ({failed} neuspešno). Prevara je zabeležena i zatražena je akcija {action} za poruku korisnika <@{author_id}>, ali bot još ne može da je izvrši: {problem}",
     "setup_replay_summary": "Objavljeno je {shown} detekcija prevare koje su prijavljene poslednjih {days} dana pre povezivanja ovog kanala.{truncated}",
     "setup_replay_truncated": " ({more} starijih detekcija nije prikazano.)",
-    "setup_pending_scan": "Na čekanju: server je dodat pre povezivanja kanala za pregled. Detekcije su spremne za pregled i biće postavljene nakon /setup.",
-    "join_dm": "Hvala što ste dodali bota u server **{guild_name}**. Pokrenite `/setup` u tom serveru i izaberite kanal za pregled — detekcije prevare neće biti prikazivane dok kanal nije povezan."
+    "setup_pending_scan": "Na čekanju: server je dodat pre povezivanja kanala za pregled. Detekcije su spremne za pregled i biće postavljene nakon /setup."
   },
   "button": {
     "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",
