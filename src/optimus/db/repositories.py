@@ -346,8 +346,8 @@ class DetectionRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
-    async def list_open(self, *, limit: int) -> Sequence[Detection]:
-        """Detections whose card was posted but that no moderator has acted on.
+    async def list_open(self, *, limit: int) -> tuple[Sequence[Detection], int]:
+        """Open detections (capped) plus the true total, from one query.
 
         "Open" is deliberately narrow: ``reported_at IS NOT NULL`` (a card
         actually reached the review channel) *and* ``action_taken = 'none'``
@@ -360,9 +360,17 @@ class DetectionRepository:
         first, and capped so a server that ignored the queue for a month
         cannot render an unbounded response. Served by the existing
         ``ix_detections_guild_reported`` composite index.
+
+        The count rides along as a window function rather than a second
+        ``SELECT``: with two queries a moderator pressing a button between
+        them makes the page and the total disagree, and ``/queue`` then
+        reports "N more not shown" against a backlog that already moved.
+        ``COUNT(*) OVER ()`` is evaluated before ``LIMIT``, so it still sees
+        every qualifying row, and both supported dialects (PostgreSQL and
+        SQLite >= 3.25) implement it.
         """
         stmt = (
-            select(Detection)
+            select(Detection, func.count().over().label("total"))
             .where(
                 Detection.guild_id == self._guild_id,
                 Detection.reported_at.is_not(None),
@@ -371,20 +379,12 @@ class DetectionRepository:
             .order_by(Detection.created_at.asc())
             .limit(limit)
         )
-        return (await self._session.execute(stmt)).scalars().all()
-
-    async def count_open(self) -> int:
-        """How many detections are open, ignoring the display cap.
-
-        Lets ``/queue`` say "N more not shown" truthfully rather than implying
-        the capped page is the whole backlog.
-        """
-        stmt = select(func.count()).where(
-            Detection.guild_id == self._guild_id,
-            Detection.reported_at.is_not(None),
-            Detection.action_taken == "none",
-        )
-        return int((await self._session.execute(stmt)).scalar_one())
+        rows = (await self._session.execute(stmt)).all()
+        if not rows:
+            # No rows means no window to count over; an empty page is an
+            # empty backlog, since the total is drawn from the same predicate.
+            return [], 0
+        return [row[0] for row in rows], int(rows[0][1])
 
     async def list_by_uploader_since(
         self, uploader_id: int, since: datetime, *, limit: int = 500

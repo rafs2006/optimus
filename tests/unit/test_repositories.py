@@ -339,11 +339,12 @@ async def test_list_open_returns_only_posted_and_unactioned_rows(
     await repo.set_action_taken(dismissed.id, "dismissed")
     await repo.set_action_taken(confirmed.id, "confirmed")
 
-    open_ids = [d.id for d in await repo.list_open(limit=25)]
+    open_rows, total = await repo.list_open(limit=25)
+    open_ids = [d.id for d in open_rows]
     assert open_ids == [waiting.id]
     # A row with no card posted belongs to the /setup replay, not the queue.
     assert never_posted.id not in open_ids
-    assert await repo.count_open() == 1
+    assert total == 1
 
 
 async def test_list_open_is_oldest_first_scoped_and_capped(session: AsyncSession) -> None:
@@ -362,11 +363,15 @@ async def test_list_open_is_oldest_first_scoped_and_capped(session: AsyncSession
         ids.append((offset, det.id))
     expected = [det_id for _, det_id in sorted(ids)]
 
-    assert [d.id for d in await repo.list_open(limit=25)] == expected
-    assert [d.id for d in await repo.list_open(limit=2)] == expected[:2]
-    # The cap must not distort the total a moderator is shown.
-    assert await repo.count_open() == 3
+    full_rows, full_total = await repo.list_open(limit=25)
+    assert [d.id for d in full_rows] == expected
+    assert full_total == 3
+
+    # The cap must not distort the total a moderator is shown: the count is a
+    # window over every qualifying row, computed before LIMIT applies.
+    capped_rows, capped_total = await repo.list_open(limit=2)
+    assert [d.id for d in capped_rows] == expected[:2]
+    assert capped_total == 3
 
     other = DetectionRepository(session, guild_id=6)
-    assert await other.list_open(limit=25) == []
-    assert await other.count_open() == 0
+    assert await other.list_open(limit=25) == ([], 0)

@@ -323,8 +323,7 @@ class DbDeps:
         arithmetic and locale formatting stay out of the data layer.
         """
         repo = DetectionRepository(self._session, guild_id)
-        rows = await repo.list_open(limit=limit)
-        total = await repo.count_open()
+        rows, total = await repo.list_open(limit=limit)
         now = datetime.now(UTC)
         return {
             "total": total,

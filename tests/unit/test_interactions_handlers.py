@@ -14,9 +14,11 @@ from optimus.services.interactions.attachment_hash import (
 from optimus.services.interactions.handlers import (
     _CONFIG_VIEW_ORDER,
     _HASH_LIST_PREVIEW_LIMIT,
+    DISCORD_MESSAGE_LIMIT,
     QUEUE_PAGE_SIZE,
     DetectionFacts,
     InteractionContext,
+    _format_age,
     handle_command,
     handle_component,
     handle_review_button,
@@ -1980,3 +1982,69 @@ async def test_queue_caps_the_listing_and_says_how_many_are_hidden() -> None:
     # The count stays honest even though the listing is truncated.
     assert resp.params["count"] == QUEUE_PAGE_SIZE + 10
     assert "10" in resp.params["truncated"]
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (0.0, "0m"),
+        (59.0, "0m"),
+        (60.0, "1m"),
+        (3599.0, "59m"),
+        (3600.0, "1h"),  # boundary: switches to hours exactly at an hour
+        (86399.0, "23h"),
+        (86400.0, "1d"),  # boundary: switches to days exactly at a day
+        (86400.0 * 42, "42d"),  # a long-neglected card still reads sensibly
+    ],
+)
+def test_format_age_unit_boundaries(seconds: float, expected: str) -> None:
+    assert _format_age(seconds) == expected
+
+
+@pytest.mark.asyncio
+async def test_queue_stays_inside_discords_message_limit() -> None:
+    """The row cap alone cannot bound the message: every line carries two
+    snowflakes and a jump URL, so a full page of maximum-width IDs can exceed
+    2000 characters before the header is even added."""
+    big = 10**19 - 1  # a maximum-width snowflake
+    rows = [
+        _queue_row(
+            big - i,
+            float(i),
+            channel_id=big,
+            message_id=big,
+            uploader_id=big,
+            verdict="ambiguous",
+        )
+        for i in range(QUEUE_PAGE_SIZE)
+    ]
+    deps = FakeDeps(queue={"total": len(rows), "rows": rows})
+    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+
+    assert len(render(resp, "en")) <= DISCORD_MESSAGE_LIMIT
+    # It had to drop rows to fit, and it says so rather than silently hiding them.
+    shown = len(resp.params["listing"].splitlines())
+    assert shown < QUEUE_PAGE_SIZE
+    assert str(QUEUE_PAGE_SIZE - shown) in resp.params["truncated"]
+
+
+@pytest.mark.asyncio
+async def test_queue_budget_fits_both_locales() -> None:
+    """The budget is measured per locale, so a longer template cannot overflow."""
+    big = 10**19 - 1
+    rows = [
+        _queue_row(big - i, float(i), channel_id=big, message_id=big, uploader_id=big)
+        for i in range(QUEUE_PAGE_SIZE)
+    ]
+    deps = FakeDeps(queue={"total": 500, "rows": rows})
+    for locale in ("en", "sr"):
+        ctx = InteractionContext(
+            guild_id=1,
+            user_id=99,
+            member_permissions=MANAGE,
+            command="queue",
+            options={},
+            locale=locale,
+        )
+        resp = await handle_command(ctx, deps)
+        assert len(render(resp, locale)) <= DISCORD_MESSAGE_LIMIT, locale

@@ -833,10 +833,17 @@ async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> Interac
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
-#: How many open cards ``/queue`` renders before falling back to a count.
-#: Matches the ``/setup`` replay's "show some, count the rest" convention and
-#: keeps the rendered response inside Discord's 2000-character message limit.
+#: How many open cards ``/queue`` *fetches*, following the ``/setup`` replay's
+#: "show some, count the rest" convention. This bounds the query, not the
+#: message: the character budget below decides how many of these actually
+#: render, which at ordinary snowflake widths is around half of them.
 QUEUE_PAGE_SIZE = 25
+#: Discord's hard ceiling on message content. Each row carries two snowflakes
+#: and a jump URL, so a full page renders past 3000 characters at ordinary ID
+#: widths -- the row cap alone cannot keep the response sendable, and a
+#: rejected message would make ``/queue`` fail exactly when the backlog is
+#: worst. The budget is measured against the rendered template per locale.
+DISCORD_MESSAGE_LIMIT = 2000
 
 
 def _format_age(seconds: float) -> str:
@@ -867,24 +874,47 @@ async def _cmd_queue(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     if total == 0:
         return InteractionResponse("command.queue_empty")
     rows: list[dict[str, Any]] = list(summary["rows"])
+    oldest = _format_age(float(rows[0]["age_seconds"]))
+
+    # The row cap bounds how many lines we build; this bounds how long the
+    # rendered message may get, which the row cap cannot -- every line carries
+    # two snowflakes and a jump URL, so 25 rows can exceed Discord's limit on
+    # their own. Measure the surrounding template in this locale instead of
+    # guessing at it, and reserve the worst-case "N more" trailer (``more`` can
+    # never exceed ``total``) so adding it later cannot push us over.
+    frame = translate(
+        "command.queue", ctx.locale, count=total, oldest=oldest, listing="", truncated=""
+    )
+    reserve = translate("command.queue_truncated", ctx.locale, more=total)
+    budget = DISCORD_MESSAGE_LIMIT - len(frame) - len(reserve)
+
     lines: list[str] = []
+    used = 0
     for row in rows:
         url = jump_url(ctx.guild_id, int(row["channel_id"]), int(row["message_id"]))
         age = _format_age(float(row["age_seconds"]))
-        lines.append(
+        line = (
             f"\u2022 [#{row['detection_id']}]({url}) \u2014 {row['verdict']}, "
             f"<@{row['uploader_id']}>, {age} old"
         )
+        cost = len(line) + (1 if lines else 0)  # the "\n" join adds one each
+        # Always emit the oldest row: a listing of nothing under a header that
+        # says "N waiting" would read as a bug rather than as truncation.
+        if lines and used + cost > budget:
+            break
+        lines.append(line)
+        used += cost
+
     truncated = ""
-    if total > len(rows):
-        truncated = translate("command.queue_truncated", ctx.locale, more=total - len(rows))
+    if total > len(lines):
+        truncated = translate("command.queue_truncated", ctx.locale, more=total - len(lines))
     return InteractionResponse(
         "command.queue",
         {
             "count": total,
             "listing": "\n".join(lines),
             "truncated": truncated,
-            "oldest": _format_age(float(rows[0]["age_seconds"])),
+            "oldest": oldest,
         },
     )
 

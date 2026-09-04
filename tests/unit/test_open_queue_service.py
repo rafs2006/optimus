@@ -79,6 +79,7 @@ async def test_open_queue_total_counts_beyond_the_page(session: AsyncSession) ->
 
     summary = await _make_deps(session).open_queue(GUILD_ID, limit=2)
 
+    # The window count sees every qualifying row even though LIMIT cut the page.
     assert summary["total"] == 4
     assert len(summary["rows"]) == 2
     # Oldest first survives the service layer, not just the repository.
