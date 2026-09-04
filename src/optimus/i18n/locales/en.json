@@ -94,8 +94,7 @@
     "reviewmsg_result_blocked": "Added {added} hash(es) ({failed} failed). Recorded the scam and requested {action} against <@{author_id}>'s message, but the bot cannot carry it out yet: {problem}",
     "setup_replay_summary": "Posted {shown} scam detection(s) that were caught in the last {days} day(s) before this channel was linked.{truncated}",
     "setup_replay_truncated": " ({more} older detection(s) not shown.)",
-    "setup_pending_scan": "Pending: this server was joined before a review channel was linked. Detections have been queued and will be reviewed on /setup.",
-    "join_dm": "Thanks for adding the bot to **{guild_name}**. Run `/setup` in that server to pick a review channel — scam image detections will not fire until one is linked."
+    "setup_pending_scan": "Pending: this server was joined before a review channel was linked. Detections have been queued and will be reviewed on /setup."
   },
   "button": {
     "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",
