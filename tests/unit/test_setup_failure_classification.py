@@ -18,8 +18,10 @@ from __future__ import annotations
 import http
 
 import hikari
+import hikari.errors
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.testing import capture_logs
 
 from optimus.core.config import get_settings
 from optimus.core.ratelimit import RateLimit
@@ -193,3 +195,43 @@ async def test_unexpected_exception_falls_back_to_generic_advice(
     )
     assert result.channel_id is None
     assert result.failure is SetupFailure.UNKNOWN
+
+
+def test_rate_limit_too_long_is_the_only_rate_limit_exception() -> None:
+    """Pin the reason only one rate-limit class is caught.
+
+    hikari's own docstrings in ``hikari/api/rest.py`` reference
+    ``hikari.errors.RateLimitedError`` as a short-retry variant, but no such
+    class exists -- catching it would raise ``AttributeError`` on the very
+    failure path it was meant to improve. hikari instead sleeps through any
+    429 that fits inside ``max_rate_limit`` and raises only past it, so
+    ``RateLimitTooLongError`` is the only one that can surface.
+
+    If a future hikari really adds the class, this test fails and tells the
+    next person to handle it rather than re-litigating the review comment.
+    """
+    assert not hasattr(hikari, "RateLimitedError")
+    assert not hasattr(hikari.errors, "RateLimitedError")
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_type"),
+    [
+        (_client_error(hikari.BadRequestError, 50035), "BadRequestError"),
+        (RuntimeError("socket exploded"), "RuntimeError"),
+    ],
+)
+async def test_failure_logs_name_the_raw_exception_class(
+    session: AsyncSession,
+    exc: Exception,
+    expected_type: str,
+) -> None:
+    """The UNKNOWN bucket is only actionable if the log says what arrived."""
+    with capture_logs() as logs:
+        result = await _make_deps(session, _RaisingRest(exc)).rest_create_review_channel(
+            GUILD_ID, name="optimus-review", mod_role_ids=[]
+        )
+    assert result.failure is SetupFailure.UNKNOWN
+    entry = next(e for e in logs if e["event"] == "rest_create_review_channel_failed")
+    assert entry["error_type"] == expected_type
+    assert entry["failure"] == SetupFailure.UNKNOWN.value

@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import hikari
 from sqlalchemy.exc import OperationalError
 
 from optimus.contracts.events import Action, Verdict, VerdictEvent
@@ -118,8 +119,6 @@ def _classify_channel_error(exc: Any) -> SetupFailure:
     does *not* become a permission complaint: telling moderators to grant
     Manage Channels when the request was malformed is what this replaces.
     """
-    import hikari
-
     mapped = _CHANNEL_ERROR_CODES.get(exc.code)
     if mapped is not None:
         return mapped
@@ -531,8 +530,6 @@ class DbDeps:
         The JSON error code on the response is the reliable discriminator;
         the HTTP status alone is not, since 403 covers both 50013 and 50001.
         """
-        import hikari
-
         if self._rest is None:
             return ChannelCreation.failed(SetupFailure.UNAVAILABLE)
         try:
@@ -540,6 +537,14 @@ class DbDeps:
                 guild_id, name=name, mod_role_ids=mod_role_ids
             )
         except hikari.RateLimitTooLongError as exc:
+            # The only rate-limit exception that can reach us. hikari sleeps
+            # through and retries any 429 whose wait fits inside its
+            # ``max_rate_limit`` (300s by default) and only raises when the
+            # wait exceeds it (impl/rest.py), so there is no short-retry
+            # variant to catch -- ``hikari.errors.RateLimitedError`` appears in
+            # hikari's own docstrings but does not exist in 2.5.0, and naming
+            # it here would raise AttributeError on the failure path.
+            #
             # ``retry_after``, not ``remaining`` -- the latter is the number of
             # requests left in the window and is hardcoded to 0, so using it
             # would render "try again in 1 minute" for every rate limit.
@@ -547,6 +552,7 @@ class DbDeps:
                 "rest_create_review_channel_failed",
                 guild_id=guild_id,
                 failure=SetupFailure.RATE_LIMITED.value,
+                error_type=type(exc).__name__,
                 retry_after=exc.retry_after,
             )
             return ChannelCreation.failed(
@@ -558,16 +564,20 @@ class DbDeps:
                 "rest_create_review_channel_failed",
                 guild_id=guild_id,
                 failure=failure.value,
+                # The class name keeps the UNKNOWN bucket readable: an unmapped
+                # code is only actionable if the log says what actually arrived.
+                error_type=type(exc).__name__,
                 status=int(exc.status),
                 code=exc.code,
                 exc_info=True,
             )
             return ChannelCreation.failed(failure)
-        except Exception:
+        except Exception as exc:
             _log.warning(
                 "rest_create_review_channel_failed",
                 guild_id=guild_id,
                 failure=SetupFailure.UNKNOWN.value,
+                error_type=type(exc).__name__,
                 exc_info=True,
             )
             return ChannelCreation.failed(SetupFailure.UNKNOWN)
@@ -1181,8 +1191,6 @@ async def _resolve_message_target_options(
     try:
         message = await rest.fetch_message(channel_id, message_id)
     except Exception as exc:
-        import hikari
-
         if isinstance(exc, hikari.NotFoundError):
             raise InteractionRejected(CommandError.MESSAGE_NOT_FOUND) from exc
         raise InteractionRejected(CommandError.FETCH_FAILED) from exc
@@ -1211,8 +1219,6 @@ def to_context(interaction: Any) -> InteractionContext:
     (context-menu) interactions are delegated to :func:`_context_menu_context`,
     which has an entirely different resolved-data shape from a SLASH command.
     """
-    import hikari
-
     if getattr(interaction, "command_type", hikari.CommandType.SLASH) == hikari.CommandType.MESSAGE:
         return _context_menu_context(interaction)
 
@@ -1258,8 +1264,6 @@ async def run_interaction(  # pragma: no cover - hikari glue
     card itself so every moderator in the shared review channel sees who
     handled the report (the ephemeral reply is visible only to the clicker).
     """
-    import hikari
-
     with correlation_context():
         try:
             if isinstance(interaction, hikari.CommandInteraction):
@@ -1295,8 +1299,6 @@ async def run_interaction(  # pragma: no cover - hikari glue
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
     """Defer an interaction before dispatch, then edit in the rendered result."""
-    import hikari
-
     log_context = {
         "interaction_id": str(interaction.id),
         "command_name": getattr(interaction, "command_name", None),
@@ -1400,8 +1402,6 @@ def _open_redis(settings: Settings) -> object | None:  # pragma: no cover - boot
 
 
 async def _amain() -> None:  # pragma: no cover - runtime entrypoint
-    import hikari
-
     from optimus.core.config import get_settings
     from optimus.core.health import HealthServer
     from optimus.core.logging import configure_logging
