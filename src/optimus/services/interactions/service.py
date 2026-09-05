@@ -57,10 +57,12 @@ from optimus.services.interactions.attachment_hash import (
 )
 from optimus.services.interactions.commands import is_enabled
 from optimus.services.interactions.handlers import (
+    ChannelCreation,
     DetectionFacts,
     InteractionContext,
     InteractionResponse,
     ModerationRest,
+    SetupFailure,
     handle_command,
     handle_component,
     handle_review_button,
@@ -94,6 +96,38 @@ _log = get_logger(__name__)
 #: ``app/discord`` uses it to replay backlogged detections and to run the
 #: deferred join backfill. ``None`` in unit-test paths where neither runs.
 type ReviewChannelLinkedHook = Callable[[int], Awaitable[None]]
+
+#: Discord JSON error codes that decide what ``/setup`` tells the moderator.
+#: Documented at
+#: https://discord.com/developers/docs/topics/opcodes-and-status-codes
+_CHANNEL_ERROR_CODES: dict[int, SetupFailure] = {
+    30013: SetupFailure.CHANNEL_LIMIT,  # Maximum number of guild channels (500)
+    30060: SetupFailure.OVERWRITE_LIMIT,  # Maximum channel permission overwrites (1000)
+    50001: SetupFailure.NO_PERMISSION,  # Missing access
+    50013: SetupFailure.NO_PERMISSION,  # Missing permissions
+}
+
+
+def _classify_channel_error(exc: Any) -> SetupFailure:
+    """Map a Discord HTTP failure onto the advice a moderator needs.
+
+    The JSON error code is checked first because it is the only signal that
+    separates "you are at the 500-channel cap" (30013) from "your mod_role
+    blew the overwrite cap" (30060) -- both arrive as a plain 400. Status is
+    the fallback for responses that carry no code, and a bare 400 deliberately
+    does *not* become a permission complaint: telling moderators to grant
+    Manage Channels when the request was malformed is what this replaces.
+    """
+    import hikari
+
+    mapped = _CHANNEL_ERROR_CODES.get(exc.code)
+    if mapped is not None:
+        return mapped
+    if isinstance(exc, hikari.ForbiddenError | hikari.UnauthorizedError):
+        return SetupFailure.NO_PERMISSION
+    if isinstance(exc, hikari.InternalServerError):
+        return SetupFailure.DISCORD_DOWN
+    return SetupFailure.UNKNOWN
 
 
 def _default_fetch(settings: Settings) -> FetchFn:
@@ -487,22 +521,57 @@ class DbDeps:
 
     async def rest_create_review_channel(
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
-    ) -> int | None:
-        """Create the private review channel; ``None`` when REST refuses.
+    ) -> ChannelCreation:
+        """Create the private review channel, or classify why Discord refused.
 
-        A refusal is almost always the bot missing the Manage Channels
-        permission -- surfaced to the moderator as ``command.setup_failed``
-        rather than an unhandled interaction error.
+        Every refusal used to collapse into "grant Manage Channels", which is
+        the wrong instruction for most of them: a guild at Discord's channel
+        cap, an overwrite cap tripped by the ``mod_role``, a rate limit, and a
+        Discord outage all need different -- sometimes opposite -- responses.
+        The JSON error code on the response is the reliable discriminator;
+        the HTTP status alone is not, since 403 covers both 50013 and 50001.
         """
+        import hikari
+
         if self._rest is None:
-            return None
+            return ChannelCreation.failed(SetupFailure.UNAVAILABLE)
         try:
-            return await self._rest.create_review_channel(
+            channel_id = await self._rest.create_review_channel(
                 guild_id, name=name, mod_role_ids=mod_role_ids
             )
+        except hikari.RateLimitTooLongError as exc:
+            # ``retry_after``, not ``remaining`` -- the latter is the number of
+            # requests left in the window and is hardcoded to 0, so using it
+            # would render "try again in 1 minute" for every rate limit.
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=SetupFailure.RATE_LIMITED.value,
+                retry_after=exc.retry_after,
+            )
+            return ChannelCreation.failed(
+                SetupFailure.RATE_LIMITED, retry_seconds=int(exc.retry_after)
+            )
+        except hikari.HTTPResponseError as exc:
+            failure = _classify_channel_error(exc)
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=failure.value,
+                status=int(exc.status),
+                code=exc.code,
+                exc_info=True,
+            )
+            return ChannelCreation.failed(failure)
         except Exception:
-            _log.warning("rest_create_review_channel_failed", guild_id=guild_id)
-            return None
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=SetupFailure.UNKNOWN.value,
+                exc_info=True,
+            )
+            return ChannelCreation.failed(SetupFailure.UNKNOWN)
+        return ChannelCreation.created(channel_id)
 
     async def disable_safe_mode(self, guild_id: int) -> None:
         await GuildRepository(self._session).set_safe_mode(guild_id, False)
