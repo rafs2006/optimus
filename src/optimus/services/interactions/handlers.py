@@ -15,8 +15,10 @@ wiring that produces an :class:`InteractionContext` and renders an
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol
 
 from optimus.core.logging import get_logger
@@ -86,6 +88,65 @@ class InteractionResponse:
     #: ephemeral reply above is visible only to the clicker.
     card_note_key: str | None = None
     card_note_params: dict[str, Any] = field(default_factory=dict)
+
+
+class SetupFailure(StrEnum):
+    """Why ``/setup`` could not create the review channel.
+
+    Discord refuses channel creation for reasons that need opposite fixes --
+    granting a permission, deleting a channel, dropping the ``mod_role``,
+    or simply waiting -- and the single "grant Manage Channels" reply sent
+    moderators to fix a permission that was usually not the problem.
+
+    Kept free of hikari types so the handler layer stays transport-agnostic;
+    :class:`~optimus.services.interactions.service.DbDeps` owns the mapping
+    from Discord's exceptions and JSON error codes onto these.
+    """
+
+    NO_PERMISSION = "no_permission"
+    CHANNEL_LIMIT = "channel_limit"
+    OVERWRITE_LIMIT = "overwrite_limit"
+    RATE_LIMITED = "rate_limited"
+    DISCORD_DOWN = "discord_down"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelCreation:
+    """The outcome of one review-channel creation attempt.
+
+    Exactly one of ``channel_id`` / ``failure`` is set. ``retry_seconds`` is
+    populated only for :attr:`SetupFailure.RATE_LIMITED`, where telling the
+    moderator *how long* is the whole difference between actionable advice
+    and "try again" -- which they just did.
+    """
+
+    channel_id: int | None = None
+    failure: SetupFailure | None = None
+    retry_seconds: int | None = None
+
+    @classmethod
+    def created(cls, channel_id: int) -> ChannelCreation:
+        return cls(channel_id=channel_id)
+
+    @classmethod
+    def failed(cls, failure: SetupFailure, *, retry_seconds: int | None = None) -> ChannelCreation:
+        return cls(failure=failure, retry_seconds=retry_seconds)
+
+
+#: Which reply each failure earns. Every one of these strings ends by pointing
+#: at ``/setup channel:``, the escape hatch that needs no Manage Channels at
+#: all -- so a moderator is never left with only a fix they cannot apply.
+SETUP_FAILURE_KEYS: dict[SetupFailure, str] = {
+    SetupFailure.NO_PERMISSION: "command.setup_failed_permission",
+    SetupFailure.CHANNEL_LIMIT: "command.setup_failed_channel_limit",
+    SetupFailure.OVERWRITE_LIMIT: "command.setup_failed_overwrite_limit",
+    SetupFailure.RATE_LIMITED: "command.setup_failed_rate_limited",
+    SetupFailure.DISCORD_DOWN: "command.setup_failed_discord_down",
+    SetupFailure.UNAVAILABLE: "command.setup_failed_unavailable",
+    SetupFailure.UNKNOWN: "command.setup_failed",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,8 +248,8 @@ class InteractionDeps(Protocol):
     ) -> str | None: ...
     async def rest_create_review_channel(
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
-    ) -> int | None:
-        """Create the private review channel; ``None`` when REST is unavailable/refused."""
+    ) -> ChannelCreation:
+        """Create the private review channel, or say why Discord refused."""
         ...
 
     async def disable_safe_mode(self, guild_id: int) -> None: ...
@@ -733,12 +794,28 @@ async def _cmd_setup(ctx: InteractionContext, deps: InteractionDeps) -> Interact
         name=REVIEW_CHANNEL_NAME,
         mod_role_ids=[int(mod_role)] if mod_role is not None else [],
     )
-    if created is None:
-        return InteractionResponse("command.setup_failed")
-    await deps.set_config_field(ctx.guild_id, "review_channel", created)
-    await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(created))
+    if created.channel_id is None:
+        return _setup_failure_response(created)
+    channel_id = created.channel_id
+    await deps.set_config_field(ctx.guild_id, "review_channel", channel_id)
+    await deps.audit(ctx.guild_id, ctx.user_id, "setup.review_channel", target=str(channel_id))
     key = "command.setup_created" if mod_role is not None else "command.setup_created_no_role"
-    return InteractionResponse(key, {"channel_id": created})
+    return InteractionResponse(key, {"channel_id": channel_id})
+
+
+def _setup_failure_response(created: ChannelCreation) -> InteractionResponse:
+    """Turn a refused creation into advice the moderator can actually act on.
+
+    Falls back to the generic key when the failure is unset or unmapped, so a
+    future enum member can never surface a raw ``KeyError`` to a moderator.
+    """
+    failure = created.failure or SetupFailure.UNKNOWN
+    key = SETUP_FAILURE_KEYS.get(failure, "command.setup_failed")
+    if failure is SetupFailure.RATE_LIMITED:
+        # Round up: "retry in 0 minutes" is worse than no number at all.
+        seconds = created.retry_seconds or 0
+        return InteractionResponse(key, {"minutes": max(1, math.ceil(seconds / 60))})
+    return InteractionResponse(key)
 
 
 def _stats_load_block(summary: dict[str, Any], locale: str) -> str:

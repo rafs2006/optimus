@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import hikari
 from sqlalchemy.exc import OperationalError
 
 from optimus.contracts.events import Action, Verdict, VerdictEvent
@@ -57,10 +58,12 @@ from optimus.services.interactions.attachment_hash import (
 )
 from optimus.services.interactions.commands import is_enabled
 from optimus.services.interactions.handlers import (
+    ChannelCreation,
     DetectionFacts,
     InteractionContext,
     InteractionResponse,
     ModerationRest,
+    SetupFailure,
     handle_command,
     handle_component,
     handle_review_button,
@@ -94,6 +97,36 @@ _log = get_logger(__name__)
 #: ``app/discord`` uses it to replay backlogged detections and to run the
 #: deferred join backfill. ``None`` in unit-test paths where neither runs.
 type ReviewChannelLinkedHook = Callable[[int], Awaitable[None]]
+
+#: Discord JSON error codes that decide what ``/setup`` tells the moderator.
+#: Documented at
+#: https://discord.com/developers/docs/topics/opcodes-and-status-codes
+_CHANNEL_ERROR_CODES: dict[int, SetupFailure] = {
+    30013: SetupFailure.CHANNEL_LIMIT,  # Maximum number of guild channels (500)
+    30060: SetupFailure.OVERWRITE_LIMIT,  # Maximum channel permission overwrites (1000)
+    50001: SetupFailure.NO_PERMISSION,  # Missing access
+    50013: SetupFailure.NO_PERMISSION,  # Missing permissions
+}
+
+
+def _classify_channel_error(exc: Any) -> SetupFailure:
+    """Map a Discord HTTP failure onto the advice a moderator needs.
+
+    The JSON error code is checked first because it is the only signal that
+    separates "you are at the 500-channel cap" (30013) from "your mod_role
+    blew the overwrite cap" (30060) -- both arrive as a plain 400. Status is
+    the fallback for responses that carry no code, and a bare 400 deliberately
+    does *not* become a permission complaint: telling moderators to grant
+    Manage Channels when the request was malformed is what this replaces.
+    """
+    mapped = _CHANNEL_ERROR_CODES.get(exc.code)
+    if mapped is not None:
+        return mapped
+    if isinstance(exc, hikari.ForbiddenError | hikari.UnauthorizedError):
+        return SetupFailure.NO_PERMISSION
+    if isinstance(exc, hikari.InternalServerError):
+        return SetupFailure.DISCORD_DOWN
+    return SetupFailure.UNKNOWN
 
 
 def _default_fetch(settings: Settings) -> FetchFn:
@@ -487,22 +520,68 @@ class DbDeps:
 
     async def rest_create_review_channel(
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
-    ) -> int | None:
-        """Create the private review channel; ``None`` when REST refuses.
+    ) -> ChannelCreation:
+        """Create the private review channel, or classify why Discord refused.
 
-        A refusal is almost always the bot missing the Manage Channels
-        permission -- surfaced to the moderator as ``command.setup_failed``
-        rather than an unhandled interaction error.
+        Every refusal used to collapse into "grant Manage Channels", which is
+        the wrong instruction for most of them: a guild at Discord's channel
+        cap, an overwrite cap tripped by the ``mod_role``, a rate limit, and a
+        Discord outage all need different -- sometimes opposite -- responses.
+        The JSON error code on the response is the reliable discriminator;
+        the HTTP status alone is not, since 403 covers both 50013 and 50001.
         """
         if self._rest is None:
-            return None
+            return ChannelCreation.failed(SetupFailure.UNAVAILABLE)
         try:
-            return await self._rest.create_review_channel(
+            channel_id = await self._rest.create_review_channel(
                 guild_id, name=name, mod_role_ids=mod_role_ids
             )
-        except Exception:
-            _log.warning("rest_create_review_channel_failed", guild_id=guild_id)
-            return None
+        except hikari.RateLimitTooLongError as exc:
+            # The only rate-limit exception that can reach us. hikari sleeps
+            # through and retries any 429 whose wait fits inside its
+            # ``max_rate_limit`` (300s by default) and only raises when the
+            # wait exceeds it (impl/rest.py), so there is no short-retry
+            # variant to catch -- ``hikari.errors.RateLimitedError`` appears in
+            # hikari's own docstrings but does not exist in 2.5.0, and naming
+            # it here would raise AttributeError on the failure path.
+            #
+            # ``retry_after``, not ``remaining`` -- the latter is the number of
+            # requests left in the window and is hardcoded to 0, so using it
+            # would render "try again in 1 minute" for every rate limit.
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=SetupFailure.RATE_LIMITED.value,
+                error_type=type(exc).__name__,
+                retry_after=exc.retry_after,
+            )
+            return ChannelCreation.failed(
+                SetupFailure.RATE_LIMITED, retry_seconds=int(exc.retry_after)
+            )
+        except hikari.HTTPResponseError as exc:
+            failure = _classify_channel_error(exc)
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=failure.value,
+                # The class name keeps the UNKNOWN bucket readable: an unmapped
+                # code is only actionable if the log says what actually arrived.
+                error_type=type(exc).__name__,
+                status=int(exc.status),
+                code=exc.code,
+                exc_info=True,
+            )
+            return ChannelCreation.failed(failure)
+        except Exception as exc:
+            _log.warning(
+                "rest_create_review_channel_failed",
+                guild_id=guild_id,
+                failure=SetupFailure.UNKNOWN.value,
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
+            return ChannelCreation.failed(SetupFailure.UNKNOWN)
+        return ChannelCreation.created(channel_id)
 
     async def disable_safe_mode(self, guild_id: int) -> None:
         await GuildRepository(self._session).set_safe_mode(guild_id, False)
@@ -1112,8 +1191,6 @@ async def _resolve_message_target_options(
     try:
         message = await rest.fetch_message(channel_id, message_id)
     except Exception as exc:
-        import hikari
-
         if isinstance(exc, hikari.NotFoundError):
             raise InteractionRejected(CommandError.MESSAGE_NOT_FOUND) from exc
         raise InteractionRejected(CommandError.FETCH_FAILED) from exc
@@ -1142,8 +1219,6 @@ def to_context(interaction: Any) -> InteractionContext:
     (context-menu) interactions are delegated to :func:`_context_menu_context`,
     which has an entirely different resolved-data shape from a SLASH command.
     """
-    import hikari
-
     if getattr(interaction, "command_type", hikari.CommandType.SLASH) == hikari.CommandType.MESSAGE:
         return _context_menu_context(interaction)
 
@@ -1189,8 +1264,6 @@ async def run_interaction(  # pragma: no cover - hikari glue
     card itself so every moderator in the shared review channel sees who
     handled the report (the ephemeral reply is visible only to the clicker).
     """
-    import hikari
-
     with correlation_context():
         try:
             if isinstance(interaction, hikari.CommandInteraction):
@@ -1226,8 +1299,6 @@ async def run_interaction(  # pragma: no cover - hikari glue
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
     """Defer an interaction before dispatch, then edit in the rendered result."""
-    import hikari
-
     log_context = {
         "interaction_id": str(interaction.id),
         "command_name": getattr(interaction, "command_name", None),
@@ -1331,8 +1402,6 @@ def _open_redis(settings: Settings) -> object | None:  # pragma: no cover - boot
 
 
 async def _amain() -> None:  # pragma: no cover - runtime entrypoint
-    import hikari
-
     from optimus.core.config import get_settings
     from optimus.core.health import HealthServer
     from optimus.core.logging import configure_logging
