@@ -16,8 +16,11 @@ from optimus.services.interactions.handlers import (
     _HASH_LIST_PREVIEW_LIMIT,
     DISCORD_MESSAGE_LIMIT,
     QUEUE_PAGE_SIZE,
+    SETUP_FAILURE_KEYS,
+    ChannelCreation,
     DetectionFacts,
     InteractionContext,
+    SetupFailure,
     _format_age,
     handle_command,
     handle_component,
@@ -96,9 +99,11 @@ class FakeDeps:
         self._attachment_url = flags.get("attachment_url", "https://cdn/att.png")
         self._rest_ban_ok = flags.get("rest_ban_ok", True)
         self._rest_unban_ok = flags.get("rest_unban_ok", True)
-        #: id the fake provisioner returns; ``None`` models a REST refusal
-        #: (bot missing Manage Channels).
+        #: id the fake provisioner returns; ``None`` models a REST refusal,
+        #: whose reason is then taken from ``setup_failure``.
         self._created_channel_id = flags.get("created_channel_id", 555)
+        self._setup_failure: SetupFailure = flags.get("setup_failure", SetupFailure.UNKNOWN)
+        self._setup_retry_seconds: int | None = flags.get("setup_retry_seconds")
         self.created_channels: list[dict[str, Any]] = []
         self.deleted_messages: list[tuple[int, int]] = []
         self.bans: list[dict[str, Any]] = []
@@ -326,13 +331,15 @@ class FakeDeps:
 
     async def rest_create_review_channel(
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
-    ) -> int | None:
+    ) -> ChannelCreation:
         if self._created_channel_id is None:
-            return None
+            return ChannelCreation.failed(
+                self._setup_failure, retry_seconds=self._setup_retry_seconds
+            )
         self.created_channels.append(
             {"guild_id": guild_id, "name": name, "mod_role_ids": mod_role_ids}
         )
-        return self._created_channel_id
+        return ChannelCreation.created(self._created_channel_id)
 
     async def submit_confirmed_scam(
         self,
@@ -1186,6 +1193,62 @@ async def test_setup_rest_refusal_reports_failure_without_writes() -> None:
     assert resp.i18n_key == "command.setup_failed"
     assert not deps.config_set
     assert not deps.audits
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_key"),
+    [
+        (SetupFailure.NO_PERMISSION, "command.setup_failed_permission"),
+        (SetupFailure.CHANNEL_LIMIT, "command.setup_failed_channel_limit"),
+        (SetupFailure.OVERWRITE_LIMIT, "command.setup_failed_overwrite_limit"),
+        (SetupFailure.DISCORD_DOWN, "command.setup_failed_discord_down"),
+        (SetupFailure.UNAVAILABLE, "command.setup_failed_unavailable"),
+        (SetupFailure.UNKNOWN, "command.setup_failed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_setup_failure_maps_to_its_own_advice(
+    failure: SetupFailure, expected_key: str
+) -> None:
+    """Each refusal earns distinct advice -- the whole point of the split."""
+    deps = FakeDeps(created_channel_id=None, setup_failure=failure)
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == expected_key
+    assert not deps.config_set
+    assert not deps.audits
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected_minutes"),
+    # Rounded up, and never zero: "try again in 0 minutes" is worse than silence.
+    [(0, 1), (1, 1), (59, 1), (60, 1), (61, 2), (600, 10), (601, 11)],
+)
+@pytest.mark.asyncio
+async def test_setup_rate_limited_reports_whole_minutes(
+    seconds: int, expected_minutes: int
+) -> None:
+    deps = FakeDeps(
+        created_channel_id=None,
+        setup_failure=SetupFailure.RATE_LIMITED,
+        setup_retry_seconds=seconds,
+    )
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.i18n_key == "command.setup_failed_rate_limited"
+    assert resp.params == {"minutes": expected_minutes}
+
+
+@pytest.mark.asyncio
+async def test_setup_rate_limited_without_retry_seconds_still_renders() -> None:
+    """A missing retry hint must not produce a placeholder-less template."""
+    deps = FakeDeps(created_channel_id=None, setup_failure=SetupFailure.RATE_LIMITED)
+    resp = await handle_command(_ctx("setup"), deps)
+    assert resp.params == {"minutes": 1}
+
+
+def test_every_setup_failure_has_a_distinct_locale_key() -> None:
+    """A new enum member without a string would silently reuse generic advice."""
+    assert set(SETUP_FAILURE_KEYS) == set(SetupFailure)
+    assert len(set(SETUP_FAILURE_KEYS.values())) == len(SetupFailure)
 
 
 @pytest.mark.asyncio
