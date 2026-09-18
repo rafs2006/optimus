@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the validated member-command registration and dispatch gate; the opt-out behavior introduced here was subsequently removed by #51 and appeals by #50 ([#49](https://github.com/rafs2006/optimus/pull/49), @rafs2006) <!-- pr-log:rafs2006/optimus#49 -->
+
 - Standardize moderation audit reasons under `Scam image`, include available evidence, and forward bounded reasons to timeout actions ([#48](https://github.com/rafs2006/optimus/pull/48), @rafs2006) <!-- pr-log:rafs2006/optimus#48 -->
 
 - Add PR lifecycle email notifications for review and documentation-sync consumers ([#47](https://github.com/rafs2006/optimus/pull/47), @rafs2006) <!-- pr-log:rafs2006/optimus#47 -->

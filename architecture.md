@@ -79,6 +79,22 @@ not a current member surface.
 
 ## Improvement plan — near term
 
+### Current member-command boundary
+
+`OPTIMUS_MEMBER_COMMANDS` narrows only permissionless commands, currently
+`report` and `help`. Unset exposes both; unknown or moderator-command names
+fail startup. Hidden commands are omitted from registration and rejected at
+dispatch before entering a database scope, including interactions from cached
+client command lists. The report context menu and moderator commands are not
+controlled by this setting. See [#49](https://github.com/rafs2006/optimus/pull/49)
+and the [operator guide](docs/running-optimus.md#narrowing-what-members-can-run).
+
+The opt-out and appeal surfaces discussed in #49 are historical: #50 removed
+appeals and #51 removed self-service scanning opt-out. This gate does not
+restore either feature.
+
+### Proposed improvements
+
 The seven items below are the plan against the head of `main` as of
 `2026-08-27`. They are recorded here (rather than only in a review issue) so
 the plan is versioned with the code.
@@ -158,3 +174,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#55 --> Applied: review lifecycle grows a `dismissed` no-op terminal state alongside confirm/false-positive (no hash/whitelist/ban side-effects; audits `review.dismiss`), and a new MANAGE_GUILD-gated `/queue` command surface lists open cards via `DetectionRepository.list_open` (excludes unposted and already-actioned rows, oldest-first, capped at 25) so a neglected server can drain the backlog — from #55
 
 <!-- decision:rafs2006/optimus#48 --> Applied: centralize evidence-bearing, encoded-length-bounded audit reasons across moderation actions - from #48.
+
+<!-- decision:rafs2006/optimus#49 --> Applied: gate permissionless command registration and dispatch while retaining subsequent removal of appeals and self-service opt-out - from #49.
