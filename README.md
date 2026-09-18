@@ -1,5 +1,11 @@
 # Optimus
 
+PR lifecycle emails are configured in [notify-pr.yml](.github/workflows/notify-pr.yml),
+introduced in [#47](https://github.com/rafs2006/optimus/pull/47). Merge subjects use
+`[owner/repo] Merged #N <title>`. The notifier requires Actions secrets
+`RESEND_API_KEY` and `MAIL_FROM`, never tracked values; it is not a test or proof
+of successful delivery or deployment.
+
 [![CI](https://github.com/rafs2006/optimus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rafs2006/optimus/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
