@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Standardize moderation audit reasons under `Scam image`, include available evidence, and forward bounded reasons to timeout actions ([#48](https://github.com/rafs2006/optimus/pull/48), @rafs2006) <!-- pr-log:rafs2006/optimus#48 -->
+
 - Add PR lifecycle email notifications for review and documentation-sync consumers ([#47](https://github.com/rafs2006/optimus/pull/47), @rafs2006) <!-- pr-log:rafs2006/optimus#47 -->
 
 - Tell moderators why `/setup` could not create the review channel: classify hikari failures by Discord's JSON error code (50013/50001, 30013, 30060, rate limit, 5xx) into a typed `SetupFailure`, replace the one-size "grant Manage Channels" reply with seven distinct localised (`en`/`sr`) responses (all pointing at `/setup channel:` as the always-available path), and log the failure with `exc_info=True`, `status`, `code`, and the classified failure (#56, @rafs2006) <!-- pr-log:rafs2006/optimus#56 -->

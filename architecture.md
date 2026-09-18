@@ -65,6 +65,18 @@ Authoritative version with tables, subjects, and stream config lives at
 - **Discord-side controls** live in `moderation`: circuit breaker, per-guild
   rate limiter, cooldown, safe mode.
 
+## Moderation audit contract
+
+All enforcement and reversal reasons share the `Scam image` prefix and are built
+in `services/moderation/reasons.py`. Reasons are bounded to 512 characters after
+URL encoding; the timeout adapter carries the same reason contract as bans and
+kicks. Automated actions identify available confidence, fingerprint, source, and
+message evidence, not an invented detection ID: that row is created later.
+Moderator actions can reference an existing detection. See
+[PR #48](https://github.com/rafs2006/optimus/pull/48) and the
+[moderator guide](docs/moderator-guide.md). Removed appeal commands are historical,
+not a current member surface.
+
 ## Improvement plan — near term
 
 The seven items below are the plan against the head of `main` as of
@@ -144,3 +156,5 @@ the plan is versioned with the code.
 - Core resilience (circuit, ratelimit, idempotency, readiness): [`src/optimus/core/`](src/optimus/core/)
 - Detection quality harness: [`benchmarks/`](benchmarks/) → [`docs/detection-eval.md`](docs/detection-eval.md)
 <!-- decision:rafs2006/optimus#55 --> Applied: review lifecycle grows a `dismissed` no-op terminal state alongside confirm/false-positive (no hash/whitelist/ban side-effects; audits `review.dismiss`), and a new MANAGE_GUILD-gated `/queue` command surface lists open cards via `DetectionRepository.list_open` (excludes unposted and already-actioned rows, oldest-first, capped at 25) so a neglected server can drain the backlog — from #55
+
+<!-- decision:rafs2006/optimus#48 --> Applied: centralize evidence-bearing, encoded-length-bounded audit reasons across moderation actions - from #48.
