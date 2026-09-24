@@ -47,8 +47,9 @@ channel with the evidence and five buttons.
 The card's **Message** field is a jump link straight to the offending message,
 and when the message still exists the image itself is shown on the card — so a
 member report can be judged without leaving the review channel. Once the message
-has been deleted the image is omitted rather than shown broken; recovering it
-after the fact requires `optin_evidence_storage`.
+has been deleted the image is omitted rather than shown broken. The bot does
+not keep its own copy of flagged images, so once Discord deletes the original
+the image is gone — screenshot it first if you need to keep it.
 
 | Button | What it actually does |
 | --- | --- |
@@ -269,14 +270,13 @@ community can ever cause action on your server**:
 | --- | --- | --- | --- |
 | `sensitivity` | `strict` / `balanced` / `permissive` | `balanced` | How close an image must be to a blocked hash to count as a match. `strict` catches more variants at a slightly higher false-positive risk. |
 | `action_policy` | `report_only` / `delete` / `delete_timeout` / `delete_ban` | `report_only` | What happens automatically on a confident match. `report_only` never touches messages. |
-| `mod_queue_threshold` | `0.0`–`1.0` | `0.5` | Minimum confidence for a detection to be posted for review. |
+| `mod_queue_threshold` | `0.0`–the deployment's auto-action threshold (`0.85` by default) | `0.5` | Minimum confidence for a detection to be posted for review; anything below is ignored. It cannot be set above the confidence at which automatic action starts — `/config set` refuses and names the limit. |
 | `retention_days` | `1`–`365` | `30` | How long detection records are kept. |
 | `ban_purge_hours` | `0`–`168` | `24` | How much of a banned user's message history is purged (Discord caps at 7 days; `0` disables). |
 | `locale` | `en` / `sr` | `en` | Language for the bot's replies. |
 | `review_channel` | `#channel` or `none` | unset | Where review cards post. `/setup` manages this for you. |
 | `optin_global_db` | `true` / `false` | `false` | Also match against the shared cross-server scam database. Global matches only ever create review cards — they never auto-act. |
 | `optin_scan_bots` | `true` / `false` | `false` | Also scan images posted by bots and webhooks. Off by default; turn on if scam posts arrive via webhooks. |
-| `optin_evidence_storage` | `true` / `false` | `false` | Keep evidence copies of detected images. |
 | `safe_mode` | `true` / `false` | `false` | Circuit breaker: detections still post for review, but nothing is auto-deleted or auto-banned. The bot may enable this itself after repeated failures; a button on the notice turns it off. |
 
 ## Good to know

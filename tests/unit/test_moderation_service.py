@@ -241,3 +241,27 @@ def test_action_idempotency_guard_acquires_once() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
+
+
+async def test_stored_threshold_above_auto_act_is_clamped_not_fatal(
+    scope: SessionScope,
+) -> None:
+    """A row written before /config set refused it -- or left above the bar
+    after the deployment lowered OPTIMUS_MOD_AUTO_ACT_THRESHOLD -- used to make
+    the policy engine raise on every image in that server, silently switching
+    detection off. The builder now clamps it to the auto-act bar.
+    """
+    async with scope() as s:
+        s.add(Guild(guild_id=7, action_policy="report_only", mod_queue_threshold=0.95))
+
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    coordinator, _dispatcher = build_coordinator(
+        get_settings(), scope, rest=object(), redis=redis, bot_user_id=999
+    )
+    # 0.9 is below the stored 0.95 but above the 0.85 auto-act bar: with the
+    # clamp it clears the (effective) queue bar and is reported, not dropped.
+    verdict = _verdict().model_copy(update={"confidence": 0.9})
+    result = await coordinator.handle_verdict(verdict)
+    assert result.action is Action.REPORT_ONLY
+    assert result.detail == "queued"
+    await redis.aclose()

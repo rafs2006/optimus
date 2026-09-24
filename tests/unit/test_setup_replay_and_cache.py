@@ -88,7 +88,6 @@ async def _persist_detection(session: AsyncSession, *, created_at: datetime, key
         ("retention_days", 14, False),
         ("locale", "sr", False),
         ("optin_global_db", True, False),
-        ("optin_evidence_storage", True, False),
         ("action_policy", "delete_ban", False),
         ("ban_purge_hours", 24, False),
     ],

@@ -257,6 +257,15 @@ class InteractionDeps(Protocol):
     async def list_guild_hashes(self, guild_id: int) -> list[GuildHash]: ...
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist: ...
     async def get_config(self, guild_id: int) -> dict[str, Any]: ...
+
+    def auto_act_threshold(self) -> float:
+        """The deployment-wide confidence at which automatic action starts.
+
+        ``mod_queue_threshold`` may not exceed it: the policy engine requires
+        review to start at or below the point where action does.
+        """
+        ...
+
     async def set_config_field(self, guild_id: int, field: str, value: Any) -> None: ...
     async def stats_summary(self, guild_id: int) -> dict[str, Any]: ...
     async def open_queue(self, guild_id: int, *, limit: int) -> dict[str, Any]: ...
@@ -720,6 +729,17 @@ async def _cmd_config(ctx: InteractionContext, deps: InteractionDeps) -> Interac
             "command.permissions_report", {"report": explain_access_report(report, locale)}
         )
     change = validate_config_set(str(ctx.options["field"]), str(ctx.options["value"]))
+    if change.field == "mod_queue_threshold":
+        ceiling = deps.auto_act_threshold()
+        if change.value > ceiling:
+            # Above the auto-act bar the policy engine has no valid ordering and
+            # used to raise on every image, silently switching detection off for
+            # the whole server. Refuse it here, naming the limit, so a cautious
+            # moderator gets an answer instead of an outage.
+            return InteractionResponse(
+                "command.config_threshold_too_high",
+                {"value": f"{change.value:g}", "max": f"{ceiling:g}"},
+            )
     await deps.set_config_field(ctx.guild_id, change.field, change.value)
     await deps.audit(ctx.guild_id, ctx.user_id, "config.set", target=change.field)
     return InteractionResponse(
@@ -745,7 +765,6 @@ _CONFIG_VIEW_ORDER = (
     "locale",
     "optin_global_db",
     "optin_scan_bots",
-    "optin_evidence_storage",
 )
 
 

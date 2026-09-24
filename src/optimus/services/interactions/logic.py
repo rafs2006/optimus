@@ -207,9 +207,12 @@ class ConfigChange:
 
 
 #: Config fields settable via ``/config set`` and their value type.
-_BOOL_FIELDS = frozenset(
-    {"optin_global_db", "optin_scan_bots", "optin_evidence_storage", "safe_mode"}
-)
+#:
+#: ``optin_evidence_storage`` is deliberately absent. The ``Guild`` column still
+#: exists, but nothing in the pipeline ever stores an image or reads the flag,
+#: so offering it promised moderators a recovery path that does not exist.
+#: It returns here once evidence storage is actually built.
+_BOOL_FIELDS = frozenset({"optin_global_db", "optin_scan_bots", "safe_mode"})
 _ACTION_POLICIES = frozenset({"report_only", "delete", "delete_timeout", "delete_ban"})
 
 #: Every field ``validate_config_set`` accepts, in the order shown to users as
@@ -225,7 +228,6 @@ CONFIG_FIELDS: tuple[str, ...] = (
     "review_channel",
     "optin_global_db",
     "optin_scan_bots",
-    "optin_evidence_storage",
     "safe_mode",
 )
 
