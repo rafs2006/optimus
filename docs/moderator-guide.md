@@ -69,8 +69,23 @@ Notes on cards:
   `✅ <action> — handled by @moderator` line, so with several mods watching
   one channel nobody double-handles a report. Detailed results are shown
   only to the clicking moderator.
-- Buttons require the **Manage Server** permission; ordinary members can see
+- Each button needs the Discord permission that matches what it does, so
+  the moderators you already trust with that power can use it — no Manage
+  Server needed:
+
+  | Button | Needs |
+  | --- | --- |
+  | Confirm scam · False positive · Dismiss · Whitelist image | **Manage Messages** |
+  | Ban uploader · Unban | **Ban Members** |
+
+  Administrators can press everything. *Confirm scam* then applies your
+  `action_policy`, which may ban: that is the standing decision your admins
+  set, so it rides on Manage Messages. *Ban uploader* is the discretionary
+  ban, and that is the one reserved for Ban Members. Ordinary members see
   nothing in the private channel anyway.
+- If a moderator gets "you don't have permission" on a button, give their
+  role the permission above — adding them to `mod_role` only lets them *see*
+  the channel.
 - **False positives are cheap, misses are not.** When in doubt, Confirm — the
   card keeps an **Unban** button, so a wrong call is one press away from being
   undone. Members who need to contest a call reach you directly.
@@ -169,7 +184,8 @@ decision, deliberately not a member one.
 
 ## Commands
 
-Moderator commands (require **Manage Server**):
+Moderator commands (require **Manage Server**, except `/queue`, which needs
+**Manage Messages** so the moderators working the backlog can see it):
 
 | Command | What it does |
 | --- | --- |

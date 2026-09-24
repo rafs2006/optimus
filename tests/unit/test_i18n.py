@@ -62,3 +62,9 @@ def test_sr_placeholders_match_en() -> None:
 @pytest.mark.parametrize("locale", ["en", "sr"])
 def test_known_keys_render(locale: str) -> None:
     assert translate("dm.warning", locale, guild="G").strip()
+
+
+@pytest.mark.parametrize("locale", sorted(available_locales()))
+def test_help_fits_in_one_discord_message(locale: str) -> None:
+    """/help is sent as a single reply; past 2000 chars Discord rejects it."""
+    assert len(translate("command.help", locale)) <= 2000

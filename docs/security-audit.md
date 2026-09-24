@@ -73,7 +73,10 @@ tests in `tests/unit/test_interactions_handlers.py` and
 - **Permissions** (`interactions/`): `default_member_permissions` is only a
   client hint. Every state-changing command and button re-checks the invoker's
   *effective* permissions server-side (`has_permission`), with `ADMINISTRATOR`
-  implying all. Report buttons require `MANAGE_GUILD` on *this* click; the GDPR
+  implying all and no other permission implying any other. Report buttons
+  require the permission matching the action on *this* click
+  (`REVIEW_ACTION_PERMISSIONS`: `BAN_MEMBERS` for Ban/Unban, `MANAGE_MESSAGES`
+  for the rest; unmapped actions fail closed to `MANAGE_GUILD`); the GDPR
   purge requires `ADMINISTRATOR`. `member.permissions` is resolved by Discord.
 - **Import validation** (`interactions/logic.py`): byte cap before parse, strict
   schema (version pin, unknown-key rejection, type/range checks, note length,

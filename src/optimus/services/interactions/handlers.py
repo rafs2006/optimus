@@ -149,6 +149,43 @@ SETUP_FAILURE_KEYS: dict[SetupFailure, str] = {
 }
 
 
+#: The Discord permission each review-card button requires of the clicker.
+#:
+#: Keyed to what the button *does*, so the moderators a server already trusts
+#: with that power can use it. The old blanket ``MANAGE_GUILD`` got this wrong
+#: in both directions: most servers' mods hold Ban/Manage Messages but not
+#: Manage Server, so they saw every card and could press nothing; while a
+#: Manage Server holder who was deliberately denied Ban Members could ban
+#: through the bot anyway.
+#:
+#: ``CONFIRM_SCAM`` deletes the message and then applies the server's
+#: ``action_policy``, which may ban. That ban is still Manage Messages, on
+#: purpose: the policy is the admins' standing decision about what a confirmed
+#: match gets, the same one the automatic pipeline enforces with no human in
+#: the loop at all. Confirm asserts "this is a match"; ``BAN_UPLOADER`` is the
+#: discretionary ban, and that is the one gated on Ban Members.
+REVIEW_ACTION_PERMISSIONS: dict[ReviewAction, Permission] = {
+    ReviewAction.CONFIRM_SCAM: Permission.MANAGE_MESSAGES,
+    ReviewAction.FALSE_POSITIVE: Permission.MANAGE_MESSAGES,
+    ReviewAction.DISMISS: Permission.MANAGE_MESSAGES,
+    ReviewAction.WHITELIST_IMAGE: Permission.MANAGE_MESSAGES,
+    ReviewAction.BAN_UPLOADER: Permission.BAN_MEMBERS,
+    ReviewAction.UNBAN: Permission.BAN_MEMBERS,
+    # Retired: the handler only answers that the button is gone. Still gated so
+    # a stale card left in an old review channel stays mod-only like the rest.
+    ReviewAction.SUBMIT_GLOBAL: Permission.MANAGE_MESSAGES,
+}
+
+
+def review_action_permission(action: ReviewAction) -> Permission:
+    """The permission ``action`` requires; unmapped actions fail closed.
+
+    An action missing from :data:`REVIEW_ACTION_PERMISSIONS` falls back to
+    ``MANAGE_GUILD`` -- the strictest non-admin bar -- rather than to no check.
+    """
+    return REVIEW_ACTION_PERMISSIONS.get(action, Permission.MANAGE_GUILD)
+
+
 @dataclass(frozen=True, slots=True)
 class DetectionFacts:
     """The stored facts a review button needs about one detection."""
@@ -1156,13 +1193,13 @@ async def handle_review_button(
 ) -> InteractionResponse:
     """Handle a report button after re-checking the clicker's permission.
 
-    Every report action is a state change requiring ``MANAGE_GUILD``; the check
-    runs on *this* click's member permissions, never the message's original
-    author or any cached value. The detection lookup is guild-scoped, so a
-    forged ``custom_id`` carrying another guild's detection id resolves to
+    Each action requires the permission in :data:`REVIEW_ACTION_PERMISSIONS`;
+    the check runs on *this* click's member permissions, never the message's
+    original author or any cached value. The detection lookup is guild-scoped,
+    so a forged ``custom_id`` carrying another guild's detection id resolves to
     nothing here.
     """
-    _require(ctx, Permission.MANAGE_GUILD)
+    _require(ctx, review_action_permission(parsed.action))
     assert ctx.guild_id is not None
     action = parsed.action
     detection_id = parsed.detection_id

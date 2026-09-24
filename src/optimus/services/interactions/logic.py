@@ -41,19 +41,29 @@ class Permission(IntFlag):
     from an interaction can be checked directly.
     """
 
-    MANAGE_GUILD = 1 << 5
+    BAN_MEMBERS = 1 << 2
     ADMINISTRATOR = 1 << 3
+    MANAGE_GUILD = 1 << 5
+    MANAGE_MESSAGES = 1 << 13
+
+
+#: Every bit :class:`Permission` models. Derived from the enum rather than
+#: hand-listed so adding a member can never leave it silently masked off --
+#: which is exactly how a new permission would fail closed for everyone.
+_ENFORCED_BITS = sum(p.value for p in Permission)
 
 
 def has_permission(member_permissions: int, required: Permission) -> bool:
     """Whether ``member_permissions`` satisfies ``required``.
 
-    ``ADMINISTRATOR`` implies every other permission, matching Discord. The
-    integer is the member's *effective* permission set as resolved by the
-    gateway/REST layer (role permissions OR'd together, owner short-circuited),
-    never the command's ``default_member_permissions`` hint.
+    ``ADMINISTRATOR`` implies every other permission, matching Discord. No
+    other permission implies another: ``MANAGE_GUILD`` does not grant
+    ``BAN_MEMBERS``, just as it does not in Discord itself. The integer is the
+    member's *effective* permission set as resolved by the gateway/REST layer
+    (role permissions OR'd together, owner short-circuited), never the
+    command's ``default_member_permissions`` hint.
     """
-    perms = Permission(member_permissions & (Permission.MANAGE_GUILD | Permission.ADMINISTRATOR))
+    perms = Permission(member_permissions & _ENFORCED_BITS)
     if Permission.ADMINISTRATOR in perms:
         return True
     return required in perms

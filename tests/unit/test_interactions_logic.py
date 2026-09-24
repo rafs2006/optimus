@@ -397,3 +397,17 @@ def test_report_context_menu_builder_has_no_permission_gate() -> None:
     # No default_member_permissions -> visible to every member.
     assert report.default_member_permissions in (hikari.UNDEFINED, None)
     assert isinstance(report, hikari_api.ContextMenuCommandBuilder)
+
+
+@pytest.mark.parametrize("required", [Permission.BAN_MEMBERS, Permission.MANAGE_MESSAGES])
+def test_manage_guild_does_not_imply_moderation_powers(required: Permission) -> None:
+    """Manage Server is not Ban Members or Manage Messages -- in Discord or here."""
+    assert has_permission(int(Permission.MANAGE_GUILD), required) is False
+    assert has_permission(int(required), required) is True
+    assert has_permission(int(Permission.ADMINISTRATOR), required) is True
+
+
+def test_every_modelled_permission_survives_the_mask() -> None:
+    """A new enum member must not be silently masked off and fail closed."""
+    for perm in Permission:
+        assert has_permission(int(perm), perm) is True, perm
