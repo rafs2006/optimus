@@ -194,7 +194,10 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="queue",
         description="List scam reports still waiting for a moderator decision.",
-        required_permission=Permission.MANAGE_GUILD,
+        # The backlog is worked by whoever presses the review buttons, so it
+        # takes the same bar they do -- not Manage Server, which most servers'
+        # moderators do not hold.
+        required_permission=Permission.MANAGE_MESSAGES,
     ),
     Command(
         name="global",

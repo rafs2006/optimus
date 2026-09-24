@@ -206,3 +206,7 @@ def test_member_commands_error_explains_the_moderator_split() -> None:
     assert "is not a member-facing command" in typo_message
     # A typo is not a permission problem, so it must not claim to be one.
     assert "moderator command" not in typo_message
+
+
+def test_queue_is_gated_on_manage_messages_like_the_buttons() -> None:
+    assert required_permission("queue") is Permission.MANAGE_MESSAGES

@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from optimus.db.models import GuildHash, GuildWhitelist
+from optimus.i18n import translate
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
@@ -16,6 +17,7 @@ from optimus.services.interactions.handlers import (
     _HASH_LIST_PREVIEW_LIMIT,
     DISCORD_MESSAGE_LIMIT,
     QUEUE_PAGE_SIZE,
+    REVIEW_ACTION_PERMISSIONS,
     SETUP_FAILURE_KEYS,
     ChannelCreation,
     DetectionFacts,
@@ -25,6 +27,7 @@ from optimus.services.interactions.handlers import (
     handle_command,
     handle_component,
     handle_review_button,
+    review_action_permission,
 )
 from optimus.services.interactions.logic import (
     CommandError,
@@ -43,6 +46,8 @@ from optimus.services.moderation.review import ParsedCustomId, ReviewAction
 
 ADMIN = int(Permission.ADMINISTRATOR)
 MANAGE = int(Permission.MANAGE_GUILD)
+#: A typical Discord moderator: can delete and ban, but is not a server manager.
+MOD = int(Permission.MANAGE_MESSAGES | Permission.BAN_MEMBERS)
 NONE = 0
 
 
@@ -531,6 +536,68 @@ async def test_config_set_review_channel_clear_renders_as_none() -> None:
 # --- review button auth --------------------------------------------------------
 
 
+BAN = int(Permission.BAN_MEMBERS)
+MANAGE_MSGS = int(Permission.MANAGE_MESSAGES)
+
+#: Button -> (a permission set that must be let through, sets that must not).
+#: Manage Server alone is refused everywhere: it is not a moderation power in
+#: Discord, and treating it as one was the bug.
+_BUTTON_MATRIX = [
+    (ReviewAction.CONFIRM_SCAM, MANAGE_MSGS, [NONE, MANAGE, BAN]),
+    (ReviewAction.FALSE_POSITIVE, MANAGE_MSGS, [NONE, MANAGE, BAN]),
+    (ReviewAction.DISMISS, MANAGE_MSGS, [NONE, MANAGE, BAN]),
+    (ReviewAction.WHITELIST_IMAGE, MANAGE_MSGS, [NONE, MANAGE, BAN]),
+    (ReviewAction.BAN_UPLOADER, BAN, [NONE, MANAGE, MANAGE_MSGS]),
+    (ReviewAction.UNBAN, BAN, [NONE, MANAGE, MANAGE_MSGS]),
+    (ReviewAction.SUBMIT_GLOBAL, MANAGE_MSGS, [NONE, MANAGE, BAN]),
+]
+
+
+def test_every_review_action_has_an_explicit_permission() -> None:
+    """A new button must pick its bar deliberately, not inherit the fallback."""
+    assert set(REVIEW_ACTION_PERMISSIONS) == set(ReviewAction)
+    assert {row[0] for row in _BUTTON_MATRIX} == set(ReviewAction)
+
+
+def test_unmapped_review_action_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(REVIEW_ACTION_PERMISSIONS, ReviewAction.DISMISS)
+    assert review_action_permission(ReviewAction.DISMISS) is Permission.MANAGE_GUILD
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("action", "allowed", "refused"), _BUTTON_MATRIX)
+async def test_review_button_requires_the_permission_matching_its_action(
+    action: ReviewAction, allowed: int, refused: list[int]
+) -> None:
+    parsed = ParsedCustomId(action=action, detection_id=5)
+    for perms in refused:
+        with pytest.raises(InteractionRejected) as exc:
+            await handle_review_button(_ctx("", perms=perms), parsed, FakeDeps())
+        assert exc.value.reason is CommandError.NO_PERMISSION, (action, perms)
+    # The matching permission alone -- no Manage Server -- gets through the gate.
+    await handle_review_button(_ctx("", perms=allowed), parsed, FakeDeps())
+    # Administrator implies everything, as in Discord.
+    await handle_review_button(_ctx("", perms=ADMIN), parsed, FakeDeps())
+
+
+@pytest.mark.asyncio
+async def test_manage_messages_mod_cannot_ban_through_the_bot() -> None:
+    """The escalation this closes, stated as the scenario a reviewer would ask."""
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
+    with pytest.raises(InteractionRejected):
+        await handle_review_button(_ctx("", perms=MANAGE | MANAGE_MSGS), parsed, deps)
+    assert deps.bans == []
+
+
+@pytest.mark.asyncio
+async def test_queue_is_open_to_moderators_without_manage_server() -> None:
+    await handle_command(_ctx("queue", perms=MANAGE_MSGS), FakeDeps())
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(_ctx("queue", perms=BAN), FakeDeps())
+    assert exc.value.reason is CommandError.NO_PERMISSION
+
+
 @pytest.mark.asyncio
 async def test_review_button_denied_without_manage_guild() -> None:
     ctx = _ctx("", perms=NONE)
@@ -545,7 +612,7 @@ async def test_review_button_unknown_detection_reports_missing() -> None:
     """A forged/cross-guild detection id resolves to nothing and does nothing."""
     deps = FakeDeps(detection_missing=True)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.detection_missing"
     assert not deps.hashes
     assert not deps.deleted_messages
@@ -555,7 +622,7 @@ async def test_review_button_unknown_detection_reports_missing() -> None:
 @pytest.mark.asyncio
 async def test_false_positive_whitelists_unbans_reverses_and_audits() -> None:
     deps = FakeDeps()
-    ctx = _ctx("", perms=MANAGE)
+    ctx = _ctx("", perms=MOD)
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
     resp = await handle_review_button(ctx, parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive"
@@ -572,7 +639,7 @@ async def test_false_positive_whitelists_unbans_reverses_and_audits() -> None:
 async def test_false_positive_without_image_still_reverses() -> None:
     deps = FakeDeps(stored_hashes=None, attachment_url=None)
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive_no_hash"
     assert deps.reversed == [5]
     assert not deps.whitelisted
@@ -581,7 +648,7 @@ async def test_false_positive_without_image_still_reverses() -> None:
 @pytest.mark.asyncio
 async def test_confirm_scam_blocklists_stored_hashes_and_deletes() -> None:
     deps = FakeDeps()
-    ctx = _ctx("", perms=MANAGE)
+    ctx = _ctx("", perms=MOD)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
     resp = await handle_review_button(ctx, parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
@@ -602,7 +669,7 @@ async def test_confirm_scam_on_member_report_refetches_and_backfills() -> None:
     """Member reports carry no hashes; Confirm re-fetches, hashes, backfills."""
     deps = FakeDeps(stored_hashes=None)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
     # FakeDeps.compute_attachment_hashes derives phash from attachment id 1.
     assert f"{1:016x}" in deps.hashes
@@ -615,7 +682,7 @@ async def test_confirm_scam_on_member_report_refetches_and_backfills() -> None:
 async def test_confirm_scam_with_image_gone_still_confirms() -> None:
     deps = FakeDeps(stored_hashes=None, attachment_url=None)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=9)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_no_hash"
     assert not deps.hashes
     assert deps.deleted_messages == [(111, 222)]
@@ -626,7 +693,7 @@ async def test_confirm_scam_with_image_gone_still_confirms() -> None:
 async def test_ban_uploader_bans_with_configured_purge() -> None:
     deps = FakeDeps(config={"ban_purge_hours": 48})
     parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.uploader_banned"
     assert deps.bans == [
         {
@@ -644,7 +711,7 @@ async def test_ban_uploader_bans_with_configured_purge() -> None:
 async def test_ban_uploader_purge_capped_at_discord_limit() -> None:
     deps = FakeDeps(config={"ban_purge_hours": 9999})
     parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
-    await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert deps.bans[0]["purge"] == 168 * 3600  # 7 days
 
 
@@ -653,7 +720,7 @@ async def test_ban_uploader_rest_refusal_reports_failure() -> None:
     """Role hierarchy / missing perm -> tell the mod, change no state."""
     deps = FakeDeps(rest_ban_ok=False)
     parsed = ParsedCustomId(action=ReviewAction.BAN_UPLOADER, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.action_failed"
     assert not deps.detection_actions
     assert not deps.audits
@@ -663,7 +730,7 @@ async def test_ban_uploader_rest_refusal_reports_failure() -> None:
 async def test_unban_unbans_and_audits() -> None:
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.UNBAN, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.uploader_unbanned"
     assert deps.unbans == [(1, 333)]
     assert deps.audits[0][2] == "review.unban"
@@ -673,7 +740,7 @@ async def test_unban_unbans_and_audits() -> None:
 async def test_unban_rest_refusal_reports_failure() -> None:
     deps = FakeDeps(rest_unban_ok=False)
     parsed = ParsedCustomId(action=ReviewAction.UNBAN, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.action_failed"
     assert not deps.audits
 
@@ -682,7 +749,7 @@ async def test_unban_rest_refusal_reports_failure() -> None:
 async def test_whitelist_image_adds_whitelist_entry() -> None:
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.WHITELIST_IMAGE, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.image_whitelisted"
     assert [w.phash for w in deps.whitelisted] == [0xABC]
     assert deps.whitelisted[0].added_by == 99
@@ -693,7 +760,7 @@ async def test_whitelist_image_adds_whitelist_entry() -> None:
 async def test_whitelist_image_gone_reports_no_image() -> None:
     deps = FakeDeps(stored_hashes=None, attachment_url=None)
     parsed = ParsedCustomId(action=ReviewAction.WHITELIST_IMAGE, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.no_image"
     assert not deps.whitelisted
     assert not deps.audits
@@ -704,7 +771,7 @@ async def test_legacy_submit_global_button_explains_removal() -> None:
     """Clicks on cards rendered before the redesign get a self-explaining reply."""
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.SUBMIT_GLOBAL, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.submit_global_removed"
     assert not deps.global_votes
 
@@ -716,7 +783,7 @@ async def test_legacy_submit_global_button_explains_removal() -> None:
 async def test_confirm_votes_globally_on_trusted_opted_in_server() -> None:
     deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True})
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam_voted"
     assert deps.global_votes == [
         {
@@ -738,7 +805,7 @@ async def test_confirm_votes_globally_on_trusted_opted_in_server() -> None:
 async def test_confirm_reports_promotion_when_second_server_agrees() -> None:
     deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True}, vote_result="promoted")
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam_promoted"
 
 
@@ -747,7 +814,7 @@ async def test_confirm_stays_local_on_untrusted_server() -> None:
     """Opted-in but NOT allowlisted: the anti-poisoning gate."""
     deps = FakeDeps(config={"optin_global_db": True})
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
     assert not deps.global_votes
 
@@ -756,7 +823,7 @@ async def test_confirm_stays_local_on_untrusted_server() -> None:
 async def test_confirm_stays_local_when_not_opted_in() -> None:
     deps = FakeDeps(trusted_guilds={1})  # allowlisted but optin_global_db is off
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
     assert not deps.global_votes
 
@@ -766,7 +833,7 @@ async def test_confirm_vote_refusal_keeps_local_confirm() -> None:
     """A refused vote (rate limit / revoked hash) must not fail the confirm."""
     deps = FakeDeps(trusted_guilds={1}, config={"optin_global_db": True}, vote_result=None)
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.confirmed_scam"
     assert deps.global_votes  # attempted
     assert not any(a[2] == "global.vote" for a in deps.audits)  # but not recorded
@@ -774,9 +841,11 @@ async def test_confirm_vote_refusal_keeps_local_confirm() -> None:
 
 @pytest.mark.asyncio
 async def test_false_positive_revokes_global_entry() -> None:
-    deps = FakeDeps(global_hashes={f"{0xABC:016x}"})
+    deps = FakeDeps(
+        global_hashes={f"{0xABC:016x}"}, trusted_guilds={1}, config={"optin_global_db": True}
+    )
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive_global_revoked"
     assert deps.global_disputes == [f"{0xABC:016x}"]
     assert (1, 99, "global.dispute", f"{0xABC:016x}") in deps.audits
@@ -786,9 +855,68 @@ async def test_false_positive_revokes_global_entry() -> None:
 async def test_false_positive_without_global_entry_stays_local() -> None:
     deps = FakeDeps()  # no global entry for this hash
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive"
     assert not any(a[2] == "global.dispute" for a in deps.audits)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trusted", "opted_in"),
+    [(False, True), (True, False), (False, False)],
+    ids=["opted_in_not_approved", "approved_not_opted_in", "neither"],
+)
+async def test_false_positive_cannot_revoke_global_entry_from_a_non_participant(
+    trusted: bool, opted_in: bool
+) -> None:
+    """The attack: stand up a server, post your own scam image, report it,
+    press False positive -- and pull it off the shared list for every server.
+
+    Revoking needs the same standing as voting: opted in *and* owner-approved.
+    Anywhere else the verdict stays local, and the local whitelist still
+    applies so this server stops flagging the image.
+    """
+    deps = FakeDeps(
+        global_hashes={f"{0xABC:016x}"},
+        trusted_guilds={1} if trusted else set(),
+        config={"optin_global_db": opted_in},
+    )
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
+    assert resp.i18n_key == "button.marked_false_positive"
+    assert deps.global_disputes == []
+    assert not any(a[2] == "global.dispute" for a in deps.audits)
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+
+
+@pytest.mark.asyncio
+async def test_false_positive_without_ban_members_leaves_the_ban_and_says_so() -> None:
+    """Manage Messages can correct the call but must not be a route to unban."""
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE_MSGS), parsed, deps)
+    assert deps.unbans == []
+    # Everything that is not an unban still happens.
+    assert resp.i18n_key == "button.marked_false_positive"
+    assert deps.reversed == [5]
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+    assert deps.audits[0][2] == "review.false_positive"
+    # The card -- seen by every mod in the channel -- points at who can finish it.
+    assert resp.card_note_key == "card.handled_ban_kept"
+    for locale in ("en", "sr"):
+        note = translate(resp.card_note_key, locale, **resp.card_note_params)
+        assert "Ban Members" in note
+        assert "Unban" in note  # the button's real label; card buttons are not localized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("perms", [MOD, ADMIN], ids=["ban_members", "administrator"])
+async def test_false_positive_with_ban_power_still_unbans(perms: int) -> None:
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=perms), parsed, deps)
+    assert deps.unbans == [(1, 333)]
+    assert resp.card_note_key == "card.handled"
 
 
 # --- appeal lifecycle ----------------------------------------------------------
@@ -1857,7 +1985,7 @@ async def test_confirm_scam_button_runs_the_moderation_pipeline() -> None:
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.CONFIRM_SCAM, detection_id=5)
 
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
 
     assert resp.i18n_key == "button.confirmed_scam"
     assert len(deps.confirmed_scams) == 1
@@ -1947,7 +2075,7 @@ async def test_dismiss_closes_the_card_without_touching_any_list() -> None:
     """
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
 
     assert resp.i18n_key == "button.dismissed"
     assert resp.card_note_key == "card.handled"
@@ -1965,7 +2093,7 @@ async def test_dismiss_closes_the_card_without_touching_any_list() -> None:
 async def test_dismiss_is_audited() -> None:
     deps = FakeDeps()
     parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
-    await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert deps.audits[0][2] == "review.dismiss"
 
 
@@ -1982,7 +2110,7 @@ async def test_dismiss_rejects_a_detection_from_another_guild() -> None:
     """Custom ids are guessable, so the guild-scoped lookup is the real gate."""
     deps = FakeDeps(detection_missing=True)
     parsed = ParsedCustomId(action=ReviewAction.DISMISS, detection_id=5)
-    resp = await handle_review_button(_ctx("", perms=MANAGE), parsed, deps)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.detection_missing"
     assert deps.detection_actions == []
 
@@ -2012,7 +2140,7 @@ async def test_queue_requires_manage_guild() -> None:
 
 @pytest.mark.asyncio
 async def test_queue_reports_an_empty_backlog_distinctly() -> None:
-    resp = await handle_command(_ctx("queue", perms=MANAGE), FakeDeps())
+    resp = await handle_command(_ctx("queue", perms=MOD), FakeDeps())
     assert resp.i18n_key == "command.queue_empty"
 
 
@@ -2020,7 +2148,7 @@ async def test_queue_reports_an_empty_backlog_distinctly() -> None:
 async def test_queue_lists_rows_with_jump_links_oldest_first() -> None:
     rows = [_queue_row(7, 200_000.0), _queue_row(8, 7_200.0), _queue_row(9, 120.0)]
     deps = FakeDeps(queue={"total": 3, "rows": rows})
-    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+    resp = await handle_command(_ctx("queue", perms=MOD), deps)
 
     assert resp.i18n_key == "command.queue"
     assert resp.params["count"] == 3
@@ -2039,7 +2167,7 @@ async def test_queue_caps_the_listing_and_says_how_many_are_hidden() -> None:
     """A long backlog must not blow past Discord's message limit silently."""
     rows = [_queue_row(i, float(i)) for i in range(QUEUE_PAGE_SIZE + 10)]
     deps = FakeDeps(queue={"total": len(rows), "rows": rows})
-    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+    resp = await handle_command(_ctx("queue", perms=MOD), deps)
 
     assert len(resp.params["listing"].splitlines()) == QUEUE_PAGE_SIZE
     # The count stays honest even though the listing is truncated.
@@ -2082,7 +2210,7 @@ async def test_queue_stays_inside_discords_message_limit() -> None:
         for i in range(QUEUE_PAGE_SIZE)
     ]
     deps = FakeDeps(queue={"total": len(rows), "rows": rows})
-    resp = await handle_command(_ctx("queue", perms=MANAGE), deps)
+    resp = await handle_command(_ctx("queue", perms=MOD), deps)
 
     assert len(render(resp, "en")) <= DISCORD_MESSAGE_LIMIT
     # It had to drop rows to fit, and it says so rather than silently hiding them.
@@ -2104,7 +2232,7 @@ async def test_queue_budget_fits_both_locales() -> None:
         ctx = InteractionContext(
             guild_id=1,
             user_id=99,
-            member_permissions=MANAGE,
+            member_permissions=MOD,
             command="queue",
             options={},
             locale=locale,
