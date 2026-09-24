@@ -180,6 +180,10 @@ never appears in the picker, and it is also refused server-side — a client
 holding a cached command list can still send the interaction, and the invoker
 gets "That command is not available on this server."
 
+Commands are re-registered on every startup, so a change to a command's
+permissions — or to `member_commands` — reaches Discord on the next restart,
+with no manual step.
+
 Note that `/help` is the only place the bot surfaces its privacy policy link, so
 if you hide it, make sure the policy is reachable some other way — Discord's
 developer terms expect it to be

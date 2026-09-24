@@ -158,6 +158,10 @@ SETUP_FAILURE_KEYS: dict[SetupFailure, str] = {
 #: Manage Server holder who was deliberately denied Ban Members could ban
 #: through the bot anyway.
 #:
+#: ``FALSE_POSITIVE`` can lift a ban, but only for a clicker who also holds
+#: Ban Members -- the handler checks that itself -- so it stays on Manage
+#: Messages and every moderator can still correct a wrong call.
+#:
 #: ``CONFIRM_SCAM`` deletes the message and then applies the server's
 #: ``action_policy``, which may ban. That ban is still Manage Messages, on
 #: purpose: the policy is the admins' standing decision about what a confirmed
@@ -1114,12 +1118,28 @@ async def _import_hashes(
 # --- component (button) handlers -------------------------------------------------
 
 
-def _card_note(action: ReviewAction, user_id: int) -> dict[str, Any]:
+def _card_note(action: ReviewAction, user_id: int, *, key: str = "card.handled") -> dict[str, Any]:
     """The ``card_note_*`` kwargs marking a card as handled by ``user_id``."""
     return {
-        "card_note_key": "card.handled",
+        "card_note_key": key,
         "card_note_params": {"action": BUTTON_LABELS[action], "user_id": user_id},
     }
+
+
+async def _is_global_participant(deps: InteractionDeps, guild_id: int) -> bool:
+    """Whether this server's verdicts may touch the shared scam list.
+
+    Both halves are required, and the same pair gates voting an entry *in* and
+    revoking one *out*: the server opted in (``optin_global_db``) and the bot
+    owner approved it for contribution. Without the check on revocation, any
+    server -- including one a scammer set up for the purpose -- could post
+    their own image, report it, press False positive, and pull it off the list
+    for every server at once.
+    """
+    config = await deps.get_config(guild_id)
+    if not bool(config.get("optin_global_db", False)):
+        return False
+    return await deps.is_trusted_guild(guild_id)
 
 
 async def _resolve_image_hashes(deps: InteractionDeps, det: DetectionFacts) -> ImageHashes | None:
@@ -1249,31 +1269,27 @@ async def handle_review_button(
         # the owner approved AND that opted in. Everyone else's confirm stays
         # purely local; the vote can also be refused (rate limit/reputation)
         # without affecting the local confirm, which already happened above.
-        if hashes is not None:
-            config = await deps.get_config(ctx.guild_id)
-            if bool(config.get("optin_global_db", False)) and await deps.is_trusted_guild(
-                ctx.guild_id
-            ):
-                vote = await deps.global_vote(
-                    hash_id=f"{hashes.phash:016x}",
-                    phash=hashes.phash,
-                    dhash=hashes.dhash,
-                    whash=hashes.whash,
-                    voter_user_id=ctx.user_id,
-                    voter_guild_id=ctx.guild_id,
+        if hashes is not None and await _is_global_participant(deps, ctx.guild_id):
+            vote = await deps.global_vote(
+                hash_id=f"{hashes.phash:016x}",
+                phash=hashes.phash,
+                dhash=hashes.dhash,
+                whash=hashes.whash,
+                voter_user_id=ctx.user_id,
+                voter_guild_id=ctx.guild_id,
+            )
+            if vote is not None:
+                await deps.audit(
+                    ctx.guild_id,
+                    ctx.user_id,
+                    "global.vote",
+                    target=f"{hashes.phash:016x}",
                 )
-                if vote is not None:
-                    await deps.audit(
-                        ctx.guild_id,
-                        ctx.user_id,
-                        "global.vote",
-                        target=f"{hashes.phash:016x}",
-                    )
-                    key = (
-                        "button.confirmed_scam_promoted"
-                        if vote == "promoted"
-                        else "button.confirmed_scam_voted"
-                    )
+                key = (
+                    "button.confirmed_scam_promoted"
+                    if vote == "promoted"
+                    else "button.confirmed_scam_voted"
+                )
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
@@ -1281,12 +1297,19 @@ async def handle_review_button(
     if action is ReviewAction.FALSE_POSITIVE:
         hashes = await _resolve_image_hashes(deps, det)
         # If enforcement already banned the uploader, a false positive must
-        # actually free them -- best-effort, before the first DB write.
-        await deps.rest_unban(
-            ctx.guild_id,
-            det.uploader_id,
-            reason=reasons.false_positive_reason(detection_id),
-        )
+        # actually free them -- best-effort, before the first DB write. But an
+        # unban is a Ban Members power: False positive is on Manage Messages so
+        # every moderator can correct a wrong call, and without this check it
+        # would be a second, ungated route around the Unban button. A mod
+        # without Ban Members still marks the call; the ban is left for someone
+        # who holds it, and the card says so to everyone watching.
+        can_unban = has_permission(ctx.member_permissions, Permission.BAN_MEMBERS)
+        if can_unban:
+            await deps.rest_unban(
+                ctx.guild_id,
+                det.uploader_id,
+                reason=reasons.false_positive_reason(detection_id),
+            )
         if hashes is not None:
             await deps.add_whitelist(
                 ctx.guild_id,
@@ -1307,16 +1330,23 @@ async def handle_review_button(
             if hashes is not None
             else "button.marked_false_positive_no_hash"
         )
-        # A false positive anywhere kills the global entry: revoke immediately
-        # and dock the submitter's reputation. One bad community poisoning the
-        # shared set costs it credibility; a legitimate mistake self-corrects.
-        if hashes is not None and await deps.global_dispute(f"{hashes.phash:016x}"):
+        # A false positive from a participating server kills the global entry:
+        # revoke immediately and dock the submitter's reputation. One bad
+        # community poisoning the shared set costs it credibility; a legitimate
+        # mistake self-corrects. Anywhere else the verdict stays local -- the
+        # whitelist above still keeps this server from flagging the image.
+        if (
+            hashes is not None
+            and await _is_global_participant(deps, ctx.guild_id)
+            and await deps.global_dispute(f"{hashes.phash:016x}")
+        ):
             await deps.audit(
                 ctx.guild_id, ctx.user_id, "global.dispute", target=f"{hashes.phash:016x}"
             )
             key = "button.marked_false_positive_global_revoked"
+        note_key = "card.handled" if can_unban else "card.handled_ban_kept"
         return InteractionResponse(
-            key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
+            key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id, key=note_key)
         )
 
     if action is ReviewAction.DISMISS:

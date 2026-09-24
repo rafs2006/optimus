@@ -53,15 +53,16 @@ after the fact requires `optin_evidence_storage`.
 | Button | What it actually does |
 | --- | --- |
 | **Confirm scam** | Adds the image's hash to this server's blocklist (future reposts are caught automatically), deletes the offending message, and marks the detection confirmed. Works even for member reports, which are filed without hashes: the bot re-fetches the image, hashes it, and stores it. |
-| **False positive** | Whitelists the image so it is never flagged again, reverses the recorded action, and — if the uploader was banned — unbans them. |
+| **False positive** | Whitelists the image so it is never flagged again, reverses the recorded action, and — if the uploader was banned and you have **Ban Members** — unbans them. Without Ban Members the ban stays, and the card says so, so someone who has it can press **Unban**. |
 | **Dismiss** | Closes the card and teaches the detector nothing: no hash blocked, no image whitelisted, no action taken or reversed. Use it for a mistaken member report — the one case where you want the report gone but do not want the image made permanently exempt. |
 | **Ban uploader** | Bans the uploader and purges their recent messages (`ban_purge_hours`, default 24h, Discord cap 7 days). If Discord refuses (role hierarchy, missing Ban Members), you get an explicit error — never a silent failure. |
 | **Unban** | Lifts the uploader's ban. |
 | **Whitelist image** | Whitelists the image without touching the detection or the uploader. |
 
-On servers approved for global contribution (see below), **Confirm scam** and
-**False positive** additionally vote in the shared global database — no extra
-button or command needed.
+On servers that opted in (`optin_global_db`) **and** are approved for global
+contribution (see below), **Confirm scam** and **False positive** also act on
+the shared global database — no extra button or command needed. Everywhere
+else both stay local to your server.
 
 Notes on cards:
 
@@ -78,7 +79,11 @@ Notes on cards:
   | Confirm scam · False positive · Dismiss · Whitelist image | **Manage Messages** |
   | Ban uploader · Unban | **Ban Members** |
 
-  Administrators can press everything. *Confirm scam* then applies your
+  Administrators can press everything. *False positive* can also lift a ban,
+  so it only does that for someone who holds Ban Members too. *Confirm scam*
+  and *False positive* can also touch the shared list, which is fine on
+  Manage Messages: only opted-in, owner-approved servers take part, and a
+  hash needs two such servers to go live. *Confirm scam* then applies your
   `action_policy`, which may ban: that is the standing decision your admins
   set, so it rides on Manage Messages. *Ban uploader* is the discretionary
   ban, and that is the one reserved for Ban Members. Ordinary members see
@@ -249,9 +254,12 @@ community can ever cause action on your server**:
   moderators on **two different approved servers** independently confirm it.
   This is the anti-poisoning gate: throwaway servers and colluding accounts
   outside the allowlist have zero influence.
-- **False positives self-heal.** If any server marks a globally-matched image
-  as a false positive, the hash is revoked from the global list for everyone
-  and the submitter's reputation is docked.
+- **False positives self-heal.** If an opted-in, approved server marks a
+  globally-matched image as a false positive, the hash is revoked from the
+  global list for everyone and the submitter's reputation is docked. Any other
+  server's False positive only whitelists the image locally — otherwise a
+  scammer could set up a server, report their own image, and pull it off the
+  list for everyone.
 - Promoted hashes are cryptographically signed; rate limits and reputation
   scores throttle even approved contributors.
 

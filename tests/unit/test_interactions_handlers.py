@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from optimus.db.models import GuildHash, GuildWhitelist
+from optimus.i18n import translate
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
@@ -840,7 +841,9 @@ async def test_confirm_vote_refusal_keeps_local_confirm() -> None:
 
 @pytest.mark.asyncio
 async def test_false_positive_revokes_global_entry() -> None:
-    deps = FakeDeps(global_hashes={f"{0xABC:016x}"})
+    deps = FakeDeps(
+        global_hashes={f"{0xABC:016x}"}, trusted_guilds={1}, config={"optin_global_db": True}
+    )
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
     resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive_global_revoked"
@@ -855,6 +858,65 @@ async def test_false_positive_without_global_entry_stays_local() -> None:
     resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive"
     assert not any(a[2] == "global.dispute" for a in deps.audits)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trusted", "opted_in"),
+    [(False, True), (True, False), (False, False)],
+    ids=["opted_in_not_approved", "approved_not_opted_in", "neither"],
+)
+async def test_false_positive_cannot_revoke_global_entry_from_a_non_participant(
+    trusted: bool, opted_in: bool
+) -> None:
+    """The attack: stand up a server, post your own scam image, report it,
+    press False positive -- and pull it off the shared list for every server.
+
+    Revoking needs the same standing as voting: opted in *and* owner-approved.
+    Anywhere else the verdict stays local, and the local whitelist still
+    applies so this server stops flagging the image.
+    """
+    deps = FakeDeps(
+        global_hashes={f"{0xABC:016x}"},
+        trusted_guilds={1} if trusted else set(),
+        config={"optin_global_db": opted_in},
+    )
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MOD), parsed, deps)
+    assert resp.i18n_key == "button.marked_false_positive"
+    assert deps.global_disputes == []
+    assert not any(a[2] == "global.dispute" for a in deps.audits)
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+
+
+@pytest.mark.asyncio
+async def test_false_positive_without_ban_members_leaves_the_ban_and_says_so() -> None:
+    """Manage Messages can correct the call but must not be a route to unban."""
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=MANAGE_MSGS), parsed, deps)
+    assert deps.unbans == []
+    # Everything that is not an unban still happens.
+    assert resp.i18n_key == "button.marked_false_positive"
+    assert deps.reversed == [5]
+    assert [w.phash for w in deps.whitelisted] == [0xABC]
+    assert deps.audits[0][2] == "review.false_positive"
+    # The card -- seen by every mod in the channel -- points at who can finish it.
+    assert resp.card_note_key == "card.handled_ban_kept"
+    for locale in ("en", "sr"):
+        note = translate(resp.card_note_key, locale, **resp.card_note_params)
+        assert "Ban Members" in note
+        assert "Unban" in note  # the button's real label; card buttons are not localized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("perms", [MOD, ADMIN], ids=["ban_members", "administrator"])
+async def test_false_positive_with_ban_power_still_unbans(perms: int) -> None:
+    deps = FakeDeps()
+    parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
+    resp = await handle_review_button(_ctx("", perms=perms), parsed, deps)
+    assert deps.unbans == [(1, 333)]
+    assert resp.card_note_key == "card.handled"
 
 
 # --- appeal lifecycle ----------------------------------------------------------

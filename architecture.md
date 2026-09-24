@@ -171,7 +171,7 @@ the plan is versioned with the code.
 - Services: [`src/optimus/services/`](src/optimus/services/)
 - Core resilience (circuit, ratelimit, idempotency, readiness): [`src/optimus/core/`](src/optimus/core/)
 - Detection quality harness: [`benchmarks/`](benchmarks/) → [`docs/detection-eval.md`](docs/detection-eval.md)
-<!-- decision:rafs2006/optimus#55 --> Applied: review lifecycle grows a `dismissed` no-op terminal state alongside confirm/false-positive (no hash/whitelist/ban side-effects; audits `review.dismiss`), and a new MANAGE_GUILD-gated `/queue` command surface lists open cards via `DetectionRepository.list_open` (excludes unposted and already-actioned rows, oldest-first, capped at 25) so a neglected server can drain the backlog — from #55
+<!-- decision:rafs2006/optimus#55 --> Applied: review lifecycle grows a `dismissed` no-op terminal state alongside confirm/false-positive (no hash/whitelist/ban side-effects; audits `review.dismiss`), and a new MANAGE_GUILD-gated `/queue` command surface lists open cards via `DetectionRepository.list_open` (excludes unposted and already-actioned rows, oldest-first, capped at 25) so a neglected server can drain the backlog — from #55 _(Since #57, `/queue` requires MANAGE_MESSAGES, the same bar as the review buttons.)_
 
 <!-- decision:rafs2006/optimus#48 --> Applied: centralize evidence-bearing, encoded-length-bounded audit reasons across moderation actions - from #48.
 
