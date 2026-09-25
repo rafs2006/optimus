@@ -49,7 +49,6 @@ def _make_deps(session: AsyncSession) -> DbDeps:
         ("safe_mode", True, "safe_mode", True),
         ("optin_global_db", True, "optin_global_db", True),
         ("optin_scan_bots", True, "optin_scan_bots", True),
-        ("optin_evidence_storage", True, "optin_evidence_storage", True),
         # The regression case: command field name "review_channel" differs
         # from the mapped column "review_channel_id".
         ("review_channel", TEST_CHANNEL_ID, "review_channel_id", TEST_CHANNEL_ID),

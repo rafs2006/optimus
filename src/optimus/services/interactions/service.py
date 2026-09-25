@@ -264,6 +264,9 @@ class DbDeps:
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist:
         return await WhitelistRepository(self._session, guild_id).add(entry)
 
+    def auto_act_threshold(self) -> float:
+        return self._settings.mod_auto_act_threshold
+
     async def get_config(self, guild_id: int) -> dict[str, Any]:
         guild = await GuildRepository(self._session).get(guild_id)
         if guild is None:
@@ -283,7 +286,6 @@ class DbDeps:
             "ban_purge_hours": guild.ban_purge_hours,
             "optin_global_db": guild.optin_global_db,
             "optin_scan_bots": guild.optin_scan_bots,
-            "optin_evidence_storage": guild.optin_evidence_storage,
         }
 
     #: Maps a /config set field name to the Guild ORM attribute it actually

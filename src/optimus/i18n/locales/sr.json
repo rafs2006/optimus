@@ -66,6 +66,7 @@
     "access_regained": "Pristup kanalu {channels} je ponovo dobijen; ponovo je pregledano {messages} nedavnih poruka zbog slika prevara objavljenih dok je bot bio blokiran.",
     "config_unknown_field": "Nepoznato polje konfiguracije `{field}`.",
     "config_invalid_value": "Nevažeća vrednost za **{field}**: {reason}",
+    "config_threshold_too_high": "**mod_queue_threshold** ovde može biti najviše **{max}**: to je pouzdanost od koje počinje automatska radnja, a pregled mora početi na toj vrednosti ili ispod nje. Tražili ste {value}; ništa nije promenjeno.",
     "setup_created": "Napravljen je <#{channel_id}> i povezan kao kanal za pregled. Privatan je: vide ga izabrana moderatorska uloga, administratori servera i bot. Otkrivanja se sada objavljuju tamo na odobrenje.",
     "setup_created_no_role": "Napravljen je <#{channel_id}> i povezan kao kanal za pregled. Privatan je: vide ga samo administratori servera i bot — dodelite moderatorskoj ulozi pristup, ili ponovo pokrenite /setup sa mod_role opcijom nakon brisanja kanala. Otkrivanja se sada objavljuju tamo na odobrenje.",
     "setup_linked": "Kanal <#{channel_id}> je povezan kao kanal za pregled. Otkrivanja se sada objavljuju tamo na odobrenje. Bot ne menja dozvole tog kanala — proverite da ga vide samo moderatori.",
@@ -130,15 +131,14 @@
   "config_help": {
     "sensitivity": "Koliko slika mora da liči na poznatu prevaru da bi se poklopila: lenient = samo skoro identične, strict = hvata više izmena ali rizikuje više lažnih uzbuna. Podrazumevano: balanced.",
     "action_policy": "Šta se dešava pri sigurnom poklapanju: none = samo beleženje, report_only = kartica za pregled, delete = i brisanje poruke, delete_ban = i ban pošiljaoca. Podrazumevano: report_only.",
-    "mod_queue_threshold": "Poklapanja sa pouzdanošću ispod ovog broja (0–1) idu u kanal za pregled umesto automatske radnje. Podrazumevano: 0.5.",
+    "mod_queue_threshold": "Poklapanja sa pouzdanošću jednakom ili većom od ovog broja (0–1) postaju kartice za pregled; sve ispod se zanemaruje. Automatska radnja traži veću pouzdanost, podešenu za celu instalaciju. Podrazumevano: 0.5.",
     "review_channel": "Gde se objavljuju kartice za pregled. Podešava se sa /setup. Podrazumevano: nije podešeno (kartice ne mogu da se isporuče).",
     "ban_purge_hours": "Pri banu, koliko sati nedavnih poruka korisnika se briše (najviše 168). Podrazumevano: 24.",
     "safe_mode": "true pauzira svako automatsko sprovođenje (samo prijave) — korisno odmah posle podešavanja ili tokom incidenta. Podrazumevano: false.",
     "retention_days": "Koliko dugo se čuvaju zapisi detekcija pre automatskog brisanja. Podrazumevano: 30.",
     "locale": "Jezik odgovora i kartica za pregled (en, sr). Podrazumevano: en.",
     "optin_global_db": "true poredi slike sa deljenom međuserverskom listom prevara. Globalna poklapanja prave samo kartice za pregled — nikada automatski ne brišu niti banuju. Podrazumevano: false.",
-    "optin_scan_bots": "true skenira i slike koje objavljuju drugi botovi i webhook-ovi. Podrazumevano: false.",
-    "optin_evidence_storage": "true čuva šifrovanu kopiju označenih slika da kartice za pregled prikažu dokaz i nakon što Discord obriše original. Podrazumevano: false."
+    "optin_scan_bots": "true skenira i slike koje objavljuju drugi botovi i webhook-ovi. Podrazumevano: false."
   },
   "card": {
     "handled": "✅ **{action}** — obradio/la <@{user_id}>",

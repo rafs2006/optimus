@@ -56,6 +56,7 @@ class FakeDeps:
 
     def __init__(self, **flags: Any) -> None:
         self.audits: list[tuple[int, int, str, str | None]] = []
+        self._auto_act_threshold = flags.get("auto_act_threshold", 0.85)
         self.hashes: dict[str, GuildHash] = {}
         self.appeals: dict[int, dict[str, Any]] = {}
         self.reversed: list[int] = []
@@ -132,6 +133,9 @@ class FakeDeps:
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist:
         self.whitelisted.append(entry)
         return entry
+
+    def auto_act_threshold(self) -> float:
+        return float(self._auto_act_threshold)
 
     async def get_config(self, guild_id: int) -> dict[str, Any]:
         return dict(self.config)
@@ -1211,7 +1215,6 @@ def test_every_config_view_field_is_settable_under_the_same_name(field: str) -> 
         "locale": "en",
         "optin_global_db": "false",
         "optin_scan_bots": "false",
-        "optin_evidence_storage": "false",
     }
     assert field in sample_values, f"add a sample value for new config field {field!r}"
     # Must not raise InteractionRejected(UNKNOWN_FIELD) -- i.e. the name itself
@@ -1956,7 +1959,6 @@ async def test_config_view_explains_every_field() -> None:
         "locale": "en",
         "optin_global_db": False,
         "optin_scan_bots": False,
-        "optin_evidence_storage": False,
     }
     assert set(full_config) == set(_CONFIG_VIEW_ORDER)
     resp = await handle_command(_ctx("config", subcommand="view"), FakeDeps(config=full_config))
@@ -2239,3 +2241,57 @@ async def test_queue_budget_fits_both_locales() -> None:
         )
         resp = await handle_command(ctx, deps)
         assert len(render(resp, locale)) <= DISCORD_MESSAGE_LIMIT, locale
+
+
+# --- mod_queue_threshold ceiling -------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["0.86", "0.9", "1", "1.0"])
+async def test_threshold_above_auto_act_is_refused_and_names_the_limit(value: str) -> None:
+    """Above the auto-act bar every image in the server used to raise."""
+    deps = FakeDeps()
+    resp = await handle_command(
+        _ctx("config", subcommand="set", field="mod_queue_threshold", value=value), deps
+    )
+    assert resp.i18n_key == "command.config_threshold_too_high"
+    assert resp.params["max"] == "0.85"
+    assert resp.params["value"] == f"{float(value):g}"
+    # Nothing written, nothing audited.
+    assert not any(a[2] == "config.set" for a in deps.audits)
+    for locale in ("en", "sr"):
+        text = translate(resp.i18n_key, locale, **resp.params)
+        assert "0.85" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["0", "0.5", "0.85"])
+async def test_threshold_at_or_below_auto_act_is_accepted(value: str) -> None:
+    deps = FakeDeps()
+    resp = await handle_command(
+        _ctx("config", subcommand="set", field="mod_queue_threshold", value=value), deps
+    )
+    assert resp.i18n_key == "command.config_set_ok"
+    assert any(a[2] == "config.set" for a in deps.audits)
+
+
+@pytest.mark.asyncio
+async def test_threshold_ceiling_follows_the_deployment_setting() -> None:
+    deps = FakeDeps(auto_act_threshold=0.7)
+    resp = await handle_command(
+        _ctx("config", subcommand="set", field="mod_queue_threshold", value="0.75"), deps
+    )
+    assert resp.i18n_key == "command.config_threshold_too_high"
+    assert resp.params["max"] == "0.7"
+
+
+@pytest.mark.asyncio
+async def test_evidence_storage_is_no_longer_a_config_field() -> None:
+    """It stored nothing; offering it promised a recovery path that did not exist."""
+    with pytest.raises(InteractionRejected) as exc:
+        await handle_command(
+            _ctx("config", subcommand="set", field="optin_evidence_storage", value="true"),
+            FakeDeps(),
+        )
+    assert exc.value.reason is CommandError.UNKNOWN_FIELD
+    assert "optin_evidence_storage" not in _CONFIG_VIEW_ORDER

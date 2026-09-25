@@ -66,6 +66,7 @@
     "access_regained": "Regained access to {channels} and rescanned {messages} recent message(s) for scam images posted while the bot was blocked.",
     "config_unknown_field": "Unknown configuration field `{field}`.",
     "config_invalid_value": "Invalid value for **{field}**: {reason}",
+    "config_threshold_too_high": "**mod_queue_threshold** can be at most **{max}** here: that is the confidence at which automatic action starts, and review has to start at or below it. You asked for {value}; nothing was changed.",
     "setup_created": "Created <#{channel_id}> and linked it as the review channel. It is private: visible to the moderator role you picked, server admins, and the bot. Detections now post there for approval.",
     "setup_created_no_role": "Created <#{channel_id}> and linked it as the review channel. It is private: only server admins and the bot can see it — grant a moderator role access with /setup channel, or re-run /setup after deleting it with a mod_role. Detections now post there for approval.",
     "setup_linked": "Linked <#{channel_id}> as the review channel. Detections now post there for approval. The bot does not change that channel's permissions — make sure only moderators can see it.",
@@ -130,15 +131,14 @@
   "config_help": {
     "sensitivity": "How close an image must be to a known scam to match: lenient = near-exact only, strict = catches more edits but risks more false positives. Default: balanced.",
     "action_policy": "What happens on a confident match: none = log only, report_only = post a review card, delete = also delete the message, delete_ban = also ban the uploader. Default: report_only.",
-    "mod_queue_threshold": "Matches with confidence below this number (0–1) go to the review channel instead of auto-action. Default: 0.5.",
+    "mod_queue_threshold": "Matches at or above this confidence (0–1) become review cards; anything below it is ignored. Automatic action needs a higher confidence, set for the whole deployment. Default: 0.5.",
     "review_channel": "Where review cards are posted. Set it with /setup. Default: not set (cards cannot be delivered).",
     "ban_purge_hours": "When a ban is issued, how many hours of the user's recent messages to purge (max 168). Default: 24.",
     "safe_mode": "true pauses all automatic enforcement (report-only) — useful right after setup or during an incident. Default: false.",
     "retention_days": "How long detection records are kept before automatic deletion. Default: 30.",
     "locale": "Language for replies and review cards (en, sr). Default: en.",
     "optin_global_db": "true checks images against the shared cross-server scam list. Global matches only ever create review cards — they never auto-delete or auto-ban. Default: false.",
-    "optin_scan_bots": "true also scans images posted by other bots and webhooks. Default: false.",
-    "optin_evidence_storage": "true stores an encrypted copy of flagged images so review cards still show evidence after Discord deletes the original. Default: false."
+    "optin_scan_bots": "true also scans images posted by other bots and webhooks. Default: false."
   },
   "card": {
     "handled": "✅ **{action}** — handled by <@{user_id}>",

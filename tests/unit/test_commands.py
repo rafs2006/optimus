@@ -78,7 +78,6 @@ def test_config_field_choices_match_the_validator() -> None:
         "review_channel": "<#123>",
         "optin_global_db": "true",
         "optin_scan_bots": "false",
-        "optin_evidence_storage": "yes",
         "safe_mode": "off",
     }
     assert set(samples) == set(CONFIG_FIELDS)

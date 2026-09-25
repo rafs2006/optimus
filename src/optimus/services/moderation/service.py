@@ -188,8 +188,18 @@ def build_coordinator(
             return GuildModConfig(
                 guild_id=guild_id,
                 configured_action=action,
-                mod_queue_threshold=(
-                    guild.mod_queue_threshold if guild is not None else settings.mod_queue_threshold
+                # Clamped to the auto-act bar: /config set now refuses a higher
+                # value, but a row written before that check -- or one left
+                # above the bar when the deployment lowers
+                # OPTIMUS_MOD_AUTO_ACT_THRESHOLD -- would otherwise make the
+                # policy engine raise on every image in that server.
+                mod_queue_threshold=min(
+                    (
+                        guild.mod_queue_threshold
+                        if guild is not None
+                        else settings.mod_queue_threshold
+                    ),
+                    settings.mod_auto_act_threshold,
                 ),
                 auto_act_threshold=settings.mod_auto_act_threshold,
                 safe_mode=guild.safe_mode if guild is not None else False,
