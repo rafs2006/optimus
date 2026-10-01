@@ -79,9 +79,9 @@ turned evil — reporting it fast is how its owner gets it back.
   grant yourself immunity before posting a scam. Only a server's own moderators
   can exempt someone, by marking them as trusted.
 - **To ask what is held about you, or to request erasure**, email
-  [optimus.privacy@proton.me](mailto:optimus.privacy@proton.me) with your
-  Discord user ID. See the [privacy policy](privacy-policy.md) for the full
-  detail. Note that records are deleted automatically within 30 days anyway.
+  [alexr@perplexity.ai](mailto:alexr@perplexity.ai) with your Discord
+  username. See the [privacy policy](https://alexr-pplx.github.io/optimus/privacy)
+  for the full detail. Note that records are deleted automatically within 30 days anyway.
 - If a server has a privacy policy from its host, it will say more about how
   they run the bot.
 
