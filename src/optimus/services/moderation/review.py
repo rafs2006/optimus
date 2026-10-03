@@ -109,6 +109,9 @@ class ReportData:
     #: Set when a moderator already confirmed this (Confirm scam, "Review as
     #: scam"): the card is rendered folded -- outcome only, no buttons.
     decided_by: int | None = None
+    #: Later posts by the confirmed uploader removed without a card of their
+    #: own; counted on the confirmed card.
+    followups_removed: int = 0
 
 
 def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
@@ -197,6 +200,7 @@ def merge_reports(items: Sequence[ReportData]) -> ReportData:
         partial=any(i.partial for i in items),
         image_count=len(items),
         decided_by=next((i.decided_by for i in items if i.decided_by), None),
+        followups_removed=max(i.followups_removed for i in items),
     )
 
 
@@ -353,6 +357,8 @@ def decided_note(data: ReportData) -> str:
     ]
     if data.problem:
         lines.append(data.problem)
+    if data.followups_removed:
+        lines.append(translate("card.followups_removed", loc, count=data.followups_removed))
     return "\n".join(lines)
 
 

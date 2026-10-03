@@ -110,12 +110,44 @@ ReportUpdater = Callable[[int, int, Sequence[ReportData]], Awaitable[None]]
 #: links the row to its card: (guild, detection, card message id or None).
 ReportedStamper = Callable[[int, int, int | None], Awaitable[None]]
 
+
+@dataclass(frozen=True, slots=True)
+class CardCleanup:
+    """What closing a confirmed uploader's other open cards accomplished."""
+
+    #: Open reports (detections) marked confirmed.
+    closed: int = 0
+    #: Their review cards deleted from the review channel.
+    cards_deleted: int = 0
+    #: The scanned messages those reports were about.
+    message_ids: tuple[int, ...] = ()
+
+
+#: Closes every other open card of a confirmed uploader:
+#: (guild, uploader, message already handled, moderator, review channel).
+CardCloser = Callable[[int, int, int, int, int | None], Awaitable[CardCleanup]]
+
+#: A second confirmed verdict for the same uploader within this many seconds
+#: (the other images of the pressed card) does not run the sweep again.
+SWEEP_DEDUPE_SECONDS = 120
+
 #: How long a message's card stays open for further images of that message.
 #: Images of one post are scanned within seconds of each other; the window
 #: only bounds memory, it is not a moderation timeout.
 OPEN_CARD_TTL_SECONDS = 15 * 60
 #: Upper bound on remembered open cards (oldest evicted first).
 OPEN_CARD_LIMIT = 512
+
+
+@dataclass(slots=True)
+class _Campaign:
+    """A confirmed uploader whose later blocklisted posts are removed quietly."""
+
+    channel_id: int
+    card_id: int
+    items: list[ReportData]
+    expires_at: float
+    removed: int = 0
 
 
 @dataclass(slots=True)
@@ -156,6 +188,8 @@ class ModerationCoordinator:
         sweep: Sweeper | None = None,
         mark_reported: ReportedStamper | None = None,
         update_report: ReportUpdater | None = None,
+        close_cards: CardCloser | None = None,
+        campaign_window_seconds: int = 24 * 3600,
     ) -> None:
         self._config = config
         self._target = target
@@ -174,6 +208,13 @@ class ModerationCoordinator:
         #: (guild, message, decided).
         self._open_cards: OrderedDict[tuple[int, int, bool], _OpenCard] = OrderedDict()
         self._card_locks: dict[tuple[int, int], _KeyedLock] = {}
+        # After a moderator confirms an uploader, their other open cards are
+        # closed and their later blocklisted posts are deleted without a card
+        # of their own (counted on the confirmed card instead).
+        self._close_cards = close_cards
+        self._campaign_window = campaign_window_seconds
+        self._campaigns: OrderedDict[tuple[int, int], _Campaign] = OrderedDict()
+        self._recent_sweeps: dict[tuple[int, int], float] = {}
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -186,6 +227,9 @@ class ModerationCoordinator:
     async def handle_verdict(self, event: VerdictEvent) -> ActionResult:
         """Process one verdict end-to-end and return the action outcome."""
         cfg = await self._config(event.guild_id)
+        followup = await self._remove_followup(event, cfg)
+        if followup is not None:
+            return followup
         outcome = decide(
             PolicyInput(
                 verdict=event.verdict,
@@ -221,17 +265,35 @@ class ModerationCoordinator:
         # every other copy standing. That failure mode is precisely what made
         # a delete_ban policy behave like "deleted one message".
         swept = await self._sweep_campaign(event, decision, action)
+        cleanup = await self._close_uploader_cards(event, cfg) if swept is not None else None
         detection_id = await self._audit(event, action.value, result)
-        await self._post_report(event, cfg, action, detection_id, result, swept)
+        await self._post_report(event, cfg, action, detection_id, result, swept, cleanup)
         return result
 
     async def _sweep_campaign(
         self, event: VerdictEvent, decision: Decision, action: Action
     ) -> SweepOutcome | None:
-        """Purge the uploader's other posts, when this verdict warranted action."""
-        if self._sweep is None or decision is not Decision.AUTO_ACT:
+        """Purge the uploader's other posts, when this verdict warranted action.
+
+        A moderator's confirmation (Confirm scam, "Review as scam") always
+        sweeps, whatever the server's ``action_policy``: the policy governs what
+        the bot does on its own, and here a moderator already made the call.
+        The other images of the same card arrive as their own confirmed
+        verdicts moments later; they do not sweep the same uploader again.
+        """
+        if self._sweep is None:
             return None
-        if action in (Action.NONE, Action.REPORT_ONLY):
+        if event.confirmed_by is not None:
+            key = (event.guild_id, event.uploader_id)
+            now = time.monotonic()
+            last = self._recent_sweeps.get(key)
+            if last is not None and now - last < SWEEP_DEDUPE_SECONDS:
+                return None
+            self._recent_sweeps = {
+                k: t for k, t in self._recent_sweeps.items() if now - t < SWEEP_DEDUPE_SECONDS
+            }
+            self._recent_sweeps[key] = now
+        elif decision is not Decision.AUTO_ACT or action in (Action.NONE, Action.REPORT_ONLY):
             return None
         try:
             return await self._sweep(event)
@@ -326,6 +388,7 @@ class ModerationCoordinator:
         detection_id: int | None,
         result: ActionResult,
         swept: SweepOutcome | None = None,
+        cleanup: CardCleanup | None = None,
     ) -> None:
         if cfg.review_channel_id is None or detection_id is None:
             return
@@ -349,6 +412,10 @@ class ModerationCoordinator:
             if swept.harvested:
                 extra += f", +{len(swept.harvested)} hashes blocklisted"
             action_taken = f"{action_taken} — {extra}"
+        if cleanup is not None and cleanup.closed:
+            action_taken = (
+                f"{action_taken} — cleared {cleanup.closed} other report(s) from this uploader"
+            )
         data = ReportData(
             detection_id=detection_id,
             guild_id=event.guild_id,
@@ -388,6 +455,10 @@ class ModerationCoordinator:
                         channel_id=cfg.review_channel_id, card_id=event.review_card_id, items=[]
                     )
             if await self._join_open_card(card_key, cfg.review_channel_id, data, detection_id):
+                if decided:
+                    self._start_campaign(
+                        event, cfg.review_channel_id, self._open_cards[card_key].card_id
+                    )
                 return
             try:
                 card_id = await self._report(cfg.review_channel_id, data)
@@ -423,6 +494,8 @@ class ModerationCoordinator:
             # correctness problem.
             if card_id is not None:
                 self._remember_card(card_key, cfg.review_channel_id, card_id, data)
+                if decided:
+                    self._start_campaign(event, cfg.review_channel_id, card_id)
             if self._mark_reported is not None:
                 with contextlib.suppress(Exception):
                     await self._mark_reported(event.guild_id, detection_id, card_id)
@@ -494,3 +567,94 @@ class ModerationCoordinator:
             with contextlib.suppress(Exception):
                 await self._mark_reported(key[0], detection_id, card.card_id)
         return True
+
+    async def _close_uploader_cards(
+        self, event: VerdictEvent, cfg: GuildModConfig
+    ) -> CardCleanup | None:
+        """After a moderator confirmed, close and remove the uploader's other cards.
+
+        One confirmation settles the whole campaign, so the other cards that
+        account produced (one per message, across channels) are marked
+        confirmed and deleted from the review channel rather than left for a
+        moderator to click through one by one. Best-effort: a failure leaves
+        the cards open, which is safe.
+        """
+        if event.confirmed_by is None or self._close_cards is None:
+            return None
+        try:
+            cleanup = await self._close_cards(
+                event.guild_id,
+                event.uploader_id,
+                event.message_id,
+                event.confirmed_by,
+                cfg.review_channel_id,
+            )
+        except Exception:
+            _log.error(
+                "campaign_card_close_failed",
+                guild_id=event.guild_id,
+                uploader_id=event.uploader_id,
+                exc_info=True,
+            )
+            return None
+        # Those messages' cards are gone: a late image must not try to join one.
+        for message_id in cleanup.message_ids:
+            self._open_cards.pop((event.guild_id, message_id, False), None)
+        return cleanup
+
+    def _start_campaign(self, event: VerdictEvent, channel_id: int, card_id: int) -> None:
+        """Remember a confirmed uploader so their later reposts do not get cards."""
+        key = (event.guild_id, event.uploader_id)
+        card = self._open_cards.get((event.guild_id, event.message_id, True))
+        items = list(card.items) if card is not None else []
+        current = self._campaigns.get(key)
+        if current is not None and current.card_id == card_id:
+            current.items = items or current.items
+            return
+        self._campaigns[key] = _Campaign(
+            channel_id=channel_id,
+            card_id=card_id,
+            items=items,
+            expires_at=time.monotonic() + self._campaign_window,
+        )
+        self._campaigns.move_to_end(key)
+        while len(self._campaigns) > OPEN_CARD_LIMIT:
+            self._campaigns.popitem(last=False)
+
+    async def _remove_followup(
+        self, event: VerdictEvent, cfg: GuildModConfig
+    ) -> ActionResult | None:
+        """Quietly delete a confirmed uploader's later blocklisted repost.
+
+        Within the campaign window after a moderator confirmed an uploader, a
+        new post of theirs that matches this server's blocklist is deleted
+        without a card of its own; the confirmed card counts it instead
+        ("+N later posts removed"). Anything else -- another account, a risk
+        scan without a hash match, a global-only match, safe mode -- takes the
+        normal path, and so does a delete Discord refuses, so a failure is
+        always visible on a card.
+        """
+        key = (event.guild_id, event.uploader_id)
+        campaign = self._campaigns.get(key)
+        if campaign is None or event.confirmed_by is not None:
+            return None
+        if time.monotonic() > campaign.expires_at:
+            del self._campaigns[key]
+            return None
+        if cfg.safe_mode or event.matched_source != "guild" or not event.matched_hash_id:
+            return None
+        result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
+        if not result.success:
+            return None
+        detection_id = await self._audit(event, Action.DELETE.value, result)
+        campaign.removed += 1
+        if self._update_report is not None and campaign.items:
+            items = [replace(i, followups_removed=campaign.removed) for i in campaign.items]
+            with contextlib.suppress(Exception):
+                await self._update_report(campaign.channel_id, campaign.card_id, items)
+        if self._mark_reported is not None and detection_id is not None:
+            # Stamped onto the confirmed card, so the /setup replay never
+            # resurfaces it as a card of its own.
+            with contextlib.suppress(Exception):
+                await self._mark_reported(event.guild_id, detection_id, campaign.card_id)
+        return result

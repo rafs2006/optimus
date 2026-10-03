@@ -84,6 +84,22 @@ Notes on cards:
 - After **Confirm scam**, the folded card also shows what enforcement did
   (`Action: …`). Cards from `/scamhash review` are posted already folded,
   since a moderator already made the call.
+- **One confirmation settles the whole campaign.** A scammer usually pastes
+  the same picture into many channels, which gives one card per message.
+  **Confirm scam** (or *Review as scam*) on any one of them, whatever your
+  `action_policy`:
+  - deletes that uploader's other image posts from the last 24 hours in every
+    channel and adds their images to the blocklist;
+  - closes that uploader's other open cards and deletes them from the review
+    channel (`Action: … — cleared N other report(s) from this uploader`);
+  - for the next 24 hours, deletes their reposts of blocklisted images
+    without a new card; the confirmed card counts them instead
+    ("Removed N later post(s) from this uploader."). A repost Discord refuses
+    to delete, a new image that only looks risky, or anything in safe mode
+    still gets a normal card. This memory resets when the bot restarts.
+
+  Cards from before this change don't record which card they are, so they
+  are closed but stay in the channel for you to delete.
 - **Fixing a misclick:** `/queue detection:<number>` posts that report again
   as a full card with fresh buttons, covering every image of the message. Press
   the right decision there; the old folded card stays as the record of the
