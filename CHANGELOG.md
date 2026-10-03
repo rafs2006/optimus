@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refuse a `mod_queue_threshold` above the deployment auto-act threshold and clamp stored values so a cautious setting can no longer disable detection, correct the setting's description, and remove the non-functional `optin_evidence_storage` switch from `/config` ([#58](https://github.com/rafs2006/optimus/pull/58), @rafs2006) <!-- pr-log:rafs2006/optimus#58 -->
+
 - Gate each review action on the Discord permission matching its effect (Ban Members for ban/unban; Manage Messages for confirm, false positive, dismiss, whitelist, and `/queue`) instead of Manage Server, derive the permission mask from the enum, and fail an unmapped action to Manage Server rather than no check ([#57](https://github.com/rafs2006/optimus/pull/57), @rafs2006) <!-- pr-log:rafs2006/optimus#57 -->
 
 - Add the validated member-command registration and dispatch gate; the opt-out behavior introduced here was subsequently removed by #51 and appeals by #50 ([#49](https://github.com/rafs2006/optimus/pull/49), @rafs2006) <!-- pr-log:rafs2006/optimus#49 -->
