@@ -1098,7 +1098,8 @@ def _hashes_to_guild_hash(hashes: AttachmentHashes, added_by: int) -> GuildHash:
     """Build a :class:`GuildHash` from a freshly hashed ``/scamhash add`` image.
 
     ``hash_id`` is derived deterministically from the perceptual hash so
-    re-adding the same image is idempotent (the upsert replaces the row).
+    re-adding the same image is idempotent: the server's existing row is kept,
+    with its original attribution (see ``DbDeps.add_guild_hash``).
     """
     return GuildHash(
         hash_id=f"{hashes.phash:016x}",
@@ -1119,7 +1120,10 @@ async def _import_hashes(
     deps: InteractionDeps, guild_id: int, entries: list[_ImportHash], *, added_by: int
 ) -> int:
     added = 0
-    seen: set[str] = set()
+    # Hashes this server already lists count as skipped, so re-importing a
+    # file (or importing one that overlaps) reports "0 added" rather than
+    # failing. Duplicates within the file are skipped the same way.
+    seen: set[str] = {row.hash_id for row in await deps.list_guild_hashes(guild_id)}
     for entry in entries:
         hash_id = f"{entry.phash:016x}"
         if hash_id in seen:

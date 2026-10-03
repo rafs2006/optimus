@@ -125,12 +125,21 @@ class GuildTrustedUser(Base):
 
 
 class GuildHash(Base):
-    """A per-guild known scam-image hash."""
+    """A per-guild known scam-image hash.
+
+    Keyed by ``(guild_id, hash_id)``: ``hash_id`` comes from the image's
+    perceptual hash, so the same scam image has the same id on every server
+    and is only unique within one (migration 0011).
+    """
 
     __tablename__ = "guild_hashes"
 
     guild_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("guilds.guild_id", ondelete="CASCADE"), nullable=False, index=True
+        BigInteger,
+        ForeignKey("guilds.guild_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
     )
     hash_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     phash: Mapped[int] = mapped_column(Uint64, nullable=False)
