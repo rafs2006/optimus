@@ -134,7 +134,9 @@ match** get a second look: an **OCR + QR risk scan** reads the text out of the
 image (Tesseract), decodes QR codes (decode only — payloads are never fetched),
 repairs defanged URLs (`hxxps://`, `perplexity[.]com`), flags lookalikes of
 official AI-company domains, and scores phishing signals (credential harvesting,
-wallet connect prompts, crypto addresses, urgency language). High/critical
+wallet connect prompts, crypto addresses, urgency language). Weak marketing
+words beside a link, and links to official domains, are kept below the bar so
+ordinary screenshots don't fill the queue. High/critical
 findings go to the **mod queue as ambiguous** with the evidence on the review
 card — this lane never deletes, bans, or stores a hash on its own. Disable with
 `OPTIMUS_DETECTION_OCR_RISK_SCAN=false` if you'd rather run hashes alone.

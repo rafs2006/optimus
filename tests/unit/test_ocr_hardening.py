@@ -13,9 +13,11 @@ def test_repair_urls_defanged():
 
 
 def test_repair_urls_spaces_in_domain():
-    text = "Go to open ai . com / login"
-    repaired = _repair_urls(text)
-    assert "openai.com" in repaired
+    # OCR splitting a domain puts space before the dot. A split *inside* a
+    # label ("open ai") is no longer rejoined: that needed deleting every
+    # space, which glued ordinary sentences into URLs.
+    text = "Go to openai . com / login"
+    assert "openai.com/login" in _repair_urls(text)
 
 
 def test_repair_urls_dot_parentheses():
@@ -30,7 +32,7 @@ def test_repair_urls_dot_word():
 
 def test_repair_urls_plain_text_unchanged():
     text = "This is normal text without urls"
-    assert _repair_urls(text) == "Thisisnormaltextwithouturls"
+    assert _repair_urls(text) == text
 
 
 def test_phishing_signals_free_offer():

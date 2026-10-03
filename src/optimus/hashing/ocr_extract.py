@@ -107,22 +107,61 @@ _RISK_THRESHOLDS: tuple[tuple[int, str], ...] = (
     (1, "low"),
 )
 
+# Domain endings a scheme-less address must end in to count as a URL. OCR'd
+# prose is full of "word.word" (a missed space after a full stop, "e.g",
+# file names); requiring a real ending keeps those from scoring as links.
+# Covers the common generic endings, the country codes scam links lean on, and
+# the cheap endings phishing kits favour. Addresses with http(s):// or www.
+# match whatever their ending.
+_URL_TLDS = (
+    "com|net|org|edu|gov|info|biz|io|ai|co|me|gg|app|dev|xyz|top|site|online|"
+    "shop|store|live|link|click|lol|fun|vip|pro|club|tech|space|website|icu|"
+    "buzz|rest|cfd|sbs|monster|cyou|bond|life|world|today|news|support|help|"
+    "gift|gifts|money|finance|digital|network|cloud|tk|ml|ga|cf|gq|cc|ws|to|"
+    "ly|sh|so|tv|us|uk|ru|cn|in|de|fr|br|ua|pl|nl|eu|ca|au|jp|kr|ir|tr|vn|id"
+)
+
 _URL_RE = re.compile(
     r"https?://[^\s<>'\"]+"
     r"|www\.[^\s<>'\"]+"
-    r"|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,}(?:/[^\s<>'\"]*)?",
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _URL_TLDS + r")\b(?:/[^\s<>'\"]*)?",
     re.IGNORECASE,
 )
 
-# OCR defang patterns — scammers break URLs to evade detection.
+# OCR defang patterns — scammers break URLs to evade detection. Only explicit
+# tricks are rejoined. A spaced-out dot is closed only when a real domain
+# ending follows ("openai . com"); text is never otherwise collapsed --
+# deleting every space turned "Thanks for the help. Our team is on it" into a
+# "URL" and sent ordinary screenshots to the mod queue.
 _DEFANG_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"hxxps?://", re.I), "https://"),
     (re.compile(r"\s*\[\.\]\s*"), "."),
     (re.compile(r"\s*\(\.\)\s*"), "."),
-    (re.compile(r"\s+dot\s+", re.I), "."),
-    (re.compile(r"\s*\.\s*"), "."),
-    (re.compile(r"\s+"), ""),
+    (re.compile(r"\s*[\[(]dot[\])]\s*", re.I), "."),
+    (re.compile(r"\s+dot\s+(?=(?:" + _URL_TLDS + r")\b)", re.I), "."),
+    # Space *before* the dot is an OCR split ("openai . com"); a dot followed
+    # only by a space is a sentence end ("Thanks. Support is ...") and is kept.
+    (re.compile(r"\s+\.\s*(?=(?:" + _URL_TLDS + r")\b)", re.I), "."),
+    # "openai.com / login" -> "openai.com/login", only right after an ending.
+    (re.compile(r"\b(" + _URL_TLDS + r")\s+/\s*", re.I), r"\1/"),
 )
+
+# Domains whose appearance in a screenshot is not, by itself, a reason for
+# suspicion: the official AI domains (which the lookalike check protects) plus
+# Discord's own web addresses, which appear in nearly every screenshot of a
+# server. A URL on these earns no co-occurrence bonus. Lookalikes of the AI
+# domains are still scored, through the separate lookalike bonus. discord.gg
+# invite links are not here: an invite next to "free Nitro" is a classic lure.
+_NO_BONUS_DOMAINS: frozenset[str] = OFFICIAL_AI_DOMAINS | {"discord.com", "discordapp.com"}
+
+# Signals strong enough that a link beside them is a real scam pattern. Weak
+# marketing words (free, team, support, limited) next to a link are how
+# ordinary screenshots look, so on their own they earn only a small bonus.
+_STRONG_FOR_URL: frozenset[str] = frozenset(
+    {"claim", "credentials", "wallet", "scam_phrase", "crypto_address"}
+)
+_URL_BONUS_STRONG = 3
+_URL_BONUS_WEAK = 1
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +347,9 @@ def extract_text(image_bytes: bytes, *, timeout: float | None = None) -> str:
 def _repair_urls(text: str) -> str:
     """Repair common OCR artifacts in URLs that scammers use to evade detection.
 
-    Handles: hxxps://, [.] , (.), dot, and stray spaces in domains.
+    Handles: hxxps://, [.], (.), [dot], " dot " and spaces around a dot when a
+    real domain ending follows ("openai . com"). Everything else is left
+    as-is: ordinary sentences must not be glued into URL-shaped strings.
     """
     result = text
     for pattern, replacement in _DEFANG_REPLACEMENTS:
@@ -331,7 +372,12 @@ def find_phishing_signals(
     - 2 pts per medium signal (claim, ai_community)
     - 3 pts per strong signal (credentials, wallet, scam_phrase)
     - 4 pts for crypto addresses
-    - +3 if signals co-occur with a URL (scam text + link = high risk)
+    - +3 if a strong signal (claim, credentials, wallet, scam_phrase,
+      crypto_address) co-occurs with a URL: scam text + link = high risk
+    - +1 if only weak/medium signals co-occur with a URL, so "team" or
+      "free" beside a link cannot reach "high" on its own
+    - URLs on official domains (perplexity.ai, discord.com, ...) earn no URL
+      bonus at all; lookalikes of them are scored by the next rule
     - +3 if signals co-occur with a lookalike domain
     """
     if not text:
@@ -353,9 +399,10 @@ def find_phishing_signals(
             matched.append(category)
             score += weight
 
-    # URL-signal correlation: scam text + URL = much higher risk.
-    if matched and urls:
-        score += 3
+    # URL-signal correlation: scam text + an unfamiliar link = higher risk,
+    # by how strong the text is.
+    if matched and _has_untrusted_url(urls):
+        score += _URL_BONUS_STRONG if seen & _STRONG_FOR_URL else _URL_BONUS_WEAK
     if matched and lookalikes:
         score += 3
 
@@ -371,6 +418,23 @@ def find_phishing_signals(
 # ---------------------------------------------------------------------------
 # URL extraction and domain analysis
 # ---------------------------------------------------------------------------
+
+
+def _is_no_bonus_domain(domain: str) -> bool:
+    return any(domain == d or domain.endswith("." + d) for d in _NO_BONUS_DOMAINS)
+
+
+def _has_untrusted_url(urls: list[str] | None) -> bool:
+    """Whether any URL points somewhere other than a known official domain.
+
+    A URL whose domain cannot be parsed counts as untrusted (fail toward
+    scoring it, as before).
+    """
+    for url in urls or ():
+        domain = normalize_domain(url)
+        if not domain or not _is_no_bonus_domain(domain):
+            return True
+    return False
 
 
 def extract_urls(text: str) -> list[str]:
