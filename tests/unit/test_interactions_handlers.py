@@ -121,8 +121,8 @@ class FakeDeps:
         self._queue = flags.get("queue", {"total": 0, "rows": []})
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
-        self.hashes[gh.hash_id] = gh
-        return gh
+        # Mirrors DbDeps: an id this server already lists keeps its row.
+        return self.hashes.setdefault(gh.hash_id, gh)
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
         return 1 if self.hashes.pop(hash_id, None) is not None else 0

@@ -265,7 +265,15 @@ class DbDeps:
         self.pending_review_channel_linked: set[int] = set()
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
-        stored = await GuildHashRepository(self._session, guild_id).add(gh)
+        # Idempotent per server: the id is derived from the image, so adding an
+        # image this server already lists (/scamhash add twice, Confirm scam on
+        # a known image, a re-import) returns the existing row -- keeping its
+        # original attribution -- instead of failing the insert.
+        repo = GuildHashRepository(self._session, guild_id)
+        existing = await repo.get(gh.hash_id)
+        if existing is not None:
+            return existing
+        stored = await repo.add(gh)
         self.pending_index_invalidations.add(guild_id)
         return stored
 
