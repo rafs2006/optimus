@@ -18,7 +18,7 @@ handler failure rolls back cleanly and never leaks a half-applied state change.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -50,7 +50,7 @@ from optimus.db.repositories import (
 )
 from optimus.globaldb.service import GlobalHashService, SubmissionDenied
 from optimus.i18n import translate
-from optimus.ingest.fetcher import FetchedImage, fetch_image
+from optimus.ingest.fetcher import FetchedImage, FetchError, SSRFError, fetch_image, fetch_text
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashes,
     FetchFn,
@@ -69,6 +69,8 @@ from optimus.services.interactions.handlers import (
     handle_review_button,
 )
 from optimus.services.interactions.logic import (
+    MAX_IMPORT_BYTES,
+    MAX_IMPORT_HASHES,
     CommandError,
     InteractionRejected,
     decode_component_id,
@@ -165,7 +167,12 @@ _ERROR_KEYS: dict[CommandError, str] = {
     CommandError.RATE_LIMITED: "command.rate_limited",
     CommandError.INVALID_HEX: "command.hash_invalid_hex",
     CommandError.IMPORT_INVALID: "command.import_invalid",
+    CommandError.IMPORT_NOT_JSON: "command.import_not_json",
+    CommandError.IMPORT_EMPTY: "command.import_empty",
+    CommandError.IMPORT_BAD_ENTRY: "command.import_bad_entry",
     CommandError.IMPORT_TOO_LARGE: "command.import_too_large",
+    CommandError.IMPORT_FILE_TOO_BIG: "command.import_file_too_big",
+    CommandError.IMPORT_DOWNLOAD_FAILED: "command.import_download_failed",
     CommandError.UNKNOWN_FIELD: "command.config_unknown_field",
     CommandError.INVALID_VALUE: "command.config_invalid_value",
     CommandError.MESSAGE_NOT_FOUND: "command.reviewmsg_not_found",
@@ -173,17 +180,27 @@ _ERROR_KEYS: dict[CommandError, str] = {
 }
 
 
-def error_message(reason: CommandError, locale: str) -> str:
-    """Localize a rejection reason for display to the invoker."""
+def error_message(
+    reason: CommandError, locale: str, params: Mapping[str, Any] | None = None
+) -> str:
+    """Localize a rejection reason for display to the invoker.
+
+    ``params`` are the details the rejection carried (``InteractionRejected.params``,
+    e.g. which import entry was malformed); they override the fallbacks below.
+    """
     key = _ERROR_KEYS[reason]
-    params: dict[str, Any] = {}
-    if reason in (CommandError.IMPORT_INVALID, CommandError.INVALID_VALUE):
-        params["reason"] = reason.value
+    defaults: dict[str, Any] = {}
+    if reason is CommandError.INVALID_VALUE:
+        defaults["reason"] = reason.value
     if reason is CommandError.UNKNOWN_FIELD:
-        params["field"] = "?"
+        defaults["field"] = "?"
     if reason is CommandError.IMPORT_TOO_LARGE:
-        params["limit"] = 1000
-    return translate(key, locale, **params)
+        defaults["limit"] = MAX_IMPORT_HASHES
+    if reason is CommandError.IMPORT_FILE_TOO_BIG:
+        defaults["limit_kb"] = MAX_IMPORT_BYTES // 1024
+    if reason is CommandError.IMPORT_BAD_ENTRY:
+        defaults["entry"] = "?"
+    return translate(key, locale, **{**defaults, **(params or {})})
 
 
 class DbDeps:
@@ -867,11 +884,13 @@ class InteractionService:
         inventory: ChannelInventory | None = None,
         config_cache: GuildConfigCache | None = None,
         on_review_channel_linked: ReviewChannelLinkedHook | None = None,
+        fetch_import: ImportFetchFn | None = None,
     ) -> None:
         self._scope = scope
         self._rl = rate_limiter
         self._settings = settings
         self._fetch = fetch
+        self._fetch_import = fetch_import
         self._detection = detection
         self._rest = rest
         self._probe = probe
@@ -884,6 +903,16 @@ class InteractionService:
         #: the first review channel for a guild triggers the backlog replay
         #: and the deferred join backfill via this callback after commit.
         self._on_review_channel_linked = on_review_channel_linked
+
+    def import_fetcher(self) -> ImportFetchFn:
+        """The downloader for ``/scamhash import`` uploads (injectable for tests)."""
+        if self._fetch_import is not None:
+            return self._fetch_import
+        return partial(
+            fetch_text,
+            max_bytes=MAX_IMPORT_BYTES,
+            max_redirects=self._settings.ingest_max_redirects,
+        )
 
     async def dispatch_command(self, ctx: InteractionContext) -> InteractionResponse:
         """Run a slash command within a fresh transactional session scope.
@@ -1166,6 +1195,61 @@ def _resolve_add_options(ctx: InteractionContext, interaction: Any) -> Interacti
     )
 
 
+#: Downloads an uploaded import file's bytes; see :func:`_resolve_import_options`.
+ImportFetchFn = Callable[[str], Awaitable[bytes]]
+
+
+async def _resolve_import_options(
+    ctx: InteractionContext, interaction: Any, *, fetch: ImportFetchFn
+) -> InteractionContext:
+    """Resolve ``/scamhash import file:<attachment>`` into the file's bytes.
+
+    Like ``/scamhash add``, Discord sends the ATTACHMENT option's value as a
+    bare snowflake id, with the attachment object (size, CDN url) on
+    ``interaction.resolved.attachments``. Without this step the handler was
+    handed that id: ``json.loads`` reads a bare number as valid JSON, so every
+    upload, however correct, was rejected as an invalid import.
+
+    The declared size is checked before anything is downloaded, and the
+    download itself goes through the same SSRF guard and byte cap as image
+    fetches. The returned context carries ``file`` as raw bytes.
+    """
+    resolved_attachments = getattr(getattr(interaction, "resolved", None), "attachments", None)
+    raw = ctx.options.get("file")
+    attachment = None
+    if raw is not None and resolved_attachments:
+        for snowflake, candidate in resolved_attachments.items():
+            if int(snowflake) == int(raw):
+                attachment = candidate
+                break
+    if attachment is None:
+        raise InteractionRejected(CommandError.IMPORT_DOWNLOAD_FAILED)
+    size = getattr(attachment, "size", None)
+    if isinstance(size, int) and size > MAX_IMPORT_BYTES:
+        raise InteractionRejected(
+            CommandError.IMPORT_FILE_TOO_BIG, limit_kb=MAX_IMPORT_BYTES // 1024
+        )
+    try:
+        data = await fetch(str(attachment.url))
+    except (FetchError, SSRFError) as exc:
+        _log.warning(
+            "scamhash_import_download_failed",
+            guild_id=ctx.guild_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise InteractionRejected(CommandError.IMPORT_DOWNLOAD_FAILED) from exc
+    return InteractionContext(
+        guild_id=ctx.guild_id,
+        user_id=ctx.user_id,
+        member_permissions=ctx.member_permissions,
+        command=ctx.command,
+        subcommand=ctx.subcommand,
+        options={"file": data},
+        locale=ctx.locale,
+    )
+
+
 async def _resolve_message_target_options(
     ctx: InteractionContext, interaction: Any, *, rest: Any
 ) -> InteractionContext:
@@ -1279,6 +1363,10 @@ async def run_interaction(  # pragma: no cover - hikari glue
                     )
                 elif ctx.command == "scamhash" and ctx.subcommand == "add":
                     ctx = _resolve_add_options(ctx, interaction)
+                elif ctx.command == "scamhash" and ctx.subcommand == "import":
+                    ctx = await _resolve_import_options(
+                        ctx, interaction, fetch=service.import_fetcher()
+                    )
                 response = await service.dispatch_command(ctx)
             elif isinstance(interaction, hikari.ComponentInteraction):
                 ctx = _component_context(interaction)
@@ -1287,7 +1375,7 @@ async def run_interaction(  # pragma: no cover - hikari glue
             else:
                 return "", None, None
         except InteractionRejected as rejected:
-            return error_message(rejected.reason, locale), None, None
+            return error_message(rejected.reason, locale, rejected.params), None, None
         except Exception:
             _log.exception("interaction_failed")
             return translate("button.expired", locale), None, None

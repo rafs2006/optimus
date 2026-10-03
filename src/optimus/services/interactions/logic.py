@@ -81,8 +81,17 @@ class CommandError(StrEnum):
     GUILD_ONLY = "guild_only"
     RATE_LIMITED = "rate_limited"
     INVALID_HEX = "invalid_hex"
+    #: Valid JSON, but not the shape ``/scamhash export`` writes.
     IMPORT_INVALID = "import_invalid"
+    IMPORT_NOT_JSON = "import_not_json"
+    IMPORT_EMPTY = "import_empty"
+    #: One entry is malformed; carries ``entry`` (1-based).
+    IMPORT_BAD_ENTRY = "import_bad_entry"
+    #: Too many entries; carries ``limit``.
     IMPORT_TOO_LARGE = "import_too_large"
+    #: The file itself is over the byte cap; carries ``limit_kb``.
+    IMPORT_FILE_TOO_BIG = "import_file_too_big"
+    IMPORT_DOWNLOAD_FAILED = "import_download_failed"
     UNKNOWN_FIELD = "config_unknown_field"
     INVALID_VALUE = "config_invalid_value"
     MESSAGE_NOT_FOUND = "reviewmsg_not_found"
@@ -92,9 +101,13 @@ class CommandError(StrEnum):
 class InteractionRejected(Exception):  # noqa: N818 - control-flow signal, not an error
     """Raised by pure validators when an interaction must be refused."""
 
-    def __init__(self, reason: CommandError) -> None:
+    def __init__(self, reason: CommandError, **params: Any) -> None:
         super().__init__(reason.value)
         self.reason = reason
+        #: Placeholders for the localized message (e.g. which import entry
+        #: was malformed), so the invoker is told what was wrong rather
+        #: than shown the bare reason code.
+        self.params: dict[str, Any] = params
 
 
 def parse_hash_hex(raw: str) -> int:
@@ -144,11 +157,14 @@ def validate_import(raw: str | bytes) -> list[ImportHash]:
     """
     blob = raw.encode("utf-8") if isinstance(raw, str) else raw
     if len(blob) > MAX_IMPORT_BYTES:
-        raise InteractionRejected(CommandError.IMPORT_TOO_LARGE)
+        raise InteractionRejected(
+            CommandError.IMPORT_FILE_TOO_BIG, limit_kb=MAX_IMPORT_BYTES // 1024
+        )
     try:
+        # Bytes, not str: json.loads then accepts UTF-8 with a byte-order mark.
         doc = json.loads(blob)
     except (json.JSONDecodeError, ValueError) as exc:
-        raise InteractionRejected(CommandError.IMPORT_INVALID) from exc
+        raise InteractionRejected(CommandError.IMPORT_NOT_JSON) from exc
     if not isinstance(doc, dict):
         raise InteractionRejected(CommandError.IMPORT_INVALID)
     if set(doc) - {"version", "hashes"}:
@@ -156,31 +172,39 @@ def validate_import(raw: str | bytes) -> list[ImportHash]:
     if doc.get("version") != IMPORT_SCHEMA_VERSION:
         raise InteractionRejected(CommandError.IMPORT_INVALID)
     entries = doc.get("hashes")
-    if not isinstance(entries, list) or not entries:
+    if not isinstance(entries, list):
         raise InteractionRejected(CommandError.IMPORT_INVALID)
+    if not entries:
+        raise InteractionRejected(CommandError.IMPORT_EMPTY)
     if len(entries) > MAX_IMPORT_HASHES:
-        raise InteractionRejected(CommandError.IMPORT_TOO_LARGE)
+        raise InteractionRejected(CommandError.IMPORT_TOO_LARGE, limit=MAX_IMPORT_HASHES)
 
     parsed: list[ImportHash] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise InteractionRejected(CommandError.IMPORT_INVALID)
-        if set(entry) - {"phash", "dhash", "whash", "note"}:
-            raise InteractionRejected(CommandError.IMPORT_INVALID)
-        if not {"phash", "dhash", "whash"} <= set(entry):
-            raise InteractionRejected(CommandError.IMPORT_INVALID)
-        note = entry.get("note")
-        if note is not None and (not isinstance(note, str) or len(note) > 256):
-            raise InteractionRejected(CommandError.IMPORT_INVALID)
-        parsed.append(
-            ImportHash(
-                phash=_coerce_uint64(entry["phash"]),
-                dhash=_coerce_uint64(entry["dhash"]),
-                whash=_coerce_uint64(entry["whash"]),
-                note=note,
-            )
-        )
+    for number, entry in enumerate(entries, start=1):
+        try:
+            parsed.append(_parse_entry(entry))
+        except InteractionRejected as exc:
+            raise InteractionRejected(CommandError.IMPORT_BAD_ENTRY, entry=number) from exc
     return parsed
+
+
+def _parse_entry(entry: Any) -> ImportHash:
+    """Validate one ``hashes`` item; any problem raises ``IMPORT_INVALID``."""
+    if not isinstance(entry, dict):
+        raise InteractionRejected(CommandError.IMPORT_INVALID)
+    if set(entry) - {"phash", "dhash", "whash", "note"}:
+        raise InteractionRejected(CommandError.IMPORT_INVALID)
+    if not {"phash", "dhash", "whash"} <= set(entry):
+        raise InteractionRejected(CommandError.IMPORT_INVALID)
+    note = entry.get("note")
+    if note is not None and (not isinstance(note, str) or len(note) > 256):
+        raise InteractionRejected(CommandError.IMPORT_INVALID)
+    return ImportHash(
+        phash=_coerce_uint64(entry["phash"]),
+        dhash=_coerce_uint64(entry["dhash"]),
+        whash=_coerce_uint64(entry["whash"]),
+        note=note,
+    )
 
 
 def build_export(entries: list[ImportHash]) -> str:

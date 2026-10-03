@@ -16,7 +16,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from optimus.ingest import fetcher
-from optimus.ingest.fetcher import FetchError, fetch_image, sniff_content_type
+from optimus.ingest.fetcher import FetchError, fetch_image, fetch_text, sniff_content_type
 from optimus.ingest.ssrf import PinnedTarget, SSRFError
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -242,6 +242,61 @@ async def test_fetch_unexpected_status_errors() -> None:
     try:
         with pytest.raises(FetchError, match="unexpected status 404"):
             await fetch_image(f"{base}/missing", max_bytes=1_000_000)
+    finally:
+        with pytest.raises(StopAsyncIteration):
+            await anext(gen)
+
+
+# --- fetch_text (/scamhash import uploads) ---------------------------------------
+
+EXPORT_BYTES = b'{"hashes":[{"dhash":2,"note":null,"phash":1,"whash":3}],"version":1}'
+
+
+async def _serve_one(body: bytes, content_type: str | None) -> AsyncIterator[str]:
+    async def handler(_req: web.Request) -> web.Response:
+        headers = {"Content-Type": content_type} if content_type else {}
+        return web.Response(body=body, headers=headers)
+
+    app = web.Application()
+    app.router.add_get("/f", handler)
+    async for base in _serve(app):
+        yield f"{base}/f"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "text/plain",
+        "application/octet-stream",
+    ],
+)
+async def test_fetch_text_returns_the_document(content_type: str) -> None:
+    gen = _serve_one(EXPORT_BYTES, content_type)
+    url = await anext(gen)
+    try:
+        assert await fetch_text(url, max_bytes=1_000_000) == EXPORT_BYTES
+    finally:
+        with pytest.raises(StopAsyncIteration):
+            await anext(gen)
+
+
+@pytest.mark.parametrize(
+    ("body", "content_type", "why"),
+    [
+        (b"<html>login</html>", "text/html", "disallowed content type"),
+        (PNG_BYTES, "image/png", "disallowed content type"),
+        (PNG_BYTES, "application/octet-stream", "got an image"),
+        (EXPORT_BYTES * 100, "application/json", "exceeds"),
+    ],
+)
+async def test_fetch_text_refuses_non_documents(body: bytes, content_type: str, why: str) -> None:
+    gen = _serve_one(body, content_type)
+    url = await anext(gen)
+    try:
+        with pytest.raises(FetchError, match=why):
+            await fetch_text(url, max_bytes=len(EXPORT_BYTES) * 10)
     finally:
         with pytest.raises(StopAsyncIteration):
             await anext(gen)

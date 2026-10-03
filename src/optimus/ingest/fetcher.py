@@ -11,7 +11,9 @@ in memory. Raw bytes are returned to the caller and never written to disk.
 from __future__ import annotations
 
 import ssl
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 
 import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
@@ -96,18 +98,19 @@ class _StaticResolver(AbstractResolver):
         return None
 
 
-async def fetch_image(
+async def _fetch_bounded[T](
     url: str,
     *,
-    max_bytes: int,
-    max_redirects: int = 3,
-    total_timeout: float = 15.0,
-) -> FetchedImage:
-    """Fetch and validate the image at ``url``.
+    accept: str,
+    read: Callable[[aiohttp.ClientResponse], Awaitable[T]],
+    max_redirects: int,
+    total_timeout: float,
+) -> T:
+    """Shared SSRF-guarded GET: pinned IP, manual re-validated redirects.
 
-    Raises :class:`FetchError` (or :class:`SSRFError`) on any policy violation:
-    blocked address, disallowed scheme, too many redirects, oversize body, or a
-    content type that fails either the header allowlist or magic-byte sniff.
+    ``read`` consumes the final 200 response and owns every body check (size
+    cap, content type), so each public fetcher keeps its own acceptance rules
+    while the connection/redirect policy stays in exactly one place.
     """
     timeout = aiohttp.ClientTimeout(total=total_timeout)
     current = url
@@ -125,7 +128,7 @@ async def fetch_image(
                     current,
                     allow_redirects=False,
                     ssl=ssl_ctx,
-                    headers={"Accept": "image/*"},
+                    headers={"Accept": accept},
                 ) as resp,
             ):
                 if resp.status in (301, 302, 303, 307, 308):
@@ -139,17 +142,64 @@ async def fetch_image(
                     continue
                 if resp.status != 200:
                     raise FetchError(f"unexpected status {resp.status}")
-                return await _read_validated(resp, max_bytes=max_bytes)
+                return await read(resp)
         except aiohttp.ClientError as exc:
             raise FetchError(f"transport error: {exc}") from exc
 
 
-async def _read_validated(resp: aiohttp.ClientResponse, *, max_bytes: int) -> FetchedImage:
-    """Stream the body under a hard size cap and validate the content type."""
-    header_ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-    if header_ct and header_ct not in ALLOWED_CONTENT_TYPES:
-        raise FetchError(f"disallowed content type: {header_ct!r}")
+async def fetch_image(
+    url: str,
+    *,
+    max_bytes: int,
+    max_redirects: int = 3,
+    total_timeout: float = 15.0,
+) -> FetchedImage:
+    """Fetch and validate the image at ``url``.
 
+    Raises :class:`FetchError` (or :class:`SSRFError`) on any policy violation:
+    blocked address, disallowed scheme, too many redirects, oversize body, or a
+    content type that fails either the header allowlist or magic-byte sniff.
+    """
+    return await _fetch_bounded(
+        url,
+        accept="image/*",
+        read=partial(_read_validated, max_bytes=max_bytes),
+        max_redirects=max_redirects,
+        total_timeout=total_timeout,
+    )
+
+
+#: Content types a ``/scamhash import`` upload may arrive with. Discord labels
+#: a ``.json`` upload ``application/json``; a renamed or hand-saved file can
+#: come through as plain text or a generic binary type. An empty header is
+#: also accepted -- the JSON parser is the real gate, this only turns away
+#: things that are plainly not a document (an HTML page, an image).
+TEXT_CONTENT_TYPES = frozenset({"application/json", "text/plain", "application/octet-stream"})
+
+
+async def fetch_text(
+    url: str,
+    *,
+    max_bytes: int,
+    max_redirects: int = 3,
+    total_timeout: float = 15.0,
+) -> bytes:
+    """Fetch a small text document (an import file) under the same guards.
+
+    Returns the raw bytes, undecoded: ``json.loads`` on bytes detects UTF-8
+    with or without a byte-order mark, which a Windows editor may add.
+    """
+    return await _fetch_bounded(
+        url,
+        accept="application/json, text/plain",
+        read=partial(_read_text, max_bytes=max_bytes),
+        max_redirects=max_redirects,
+        total_timeout=total_timeout,
+    )
+
+
+async def _read_capped(resp: aiohttp.ClientResponse, *, max_bytes: int) -> bytes:
+    """Stream the body under a hard size cap, aborting the moment it is exceeded."""
     declared = resp.headers.get("Content-Length")
     if declared is not None:
         try:
@@ -166,12 +216,41 @@ async def _read_validated(resp: aiohttp.ClientResponse, *, max_bytes: int) -> Fe
             resp.close()  # abort mid-stream; do not buffer the rest
             raise FetchError("body exceeds size cap")
         chunks.append(chunk)
-    data = b"".join(chunks)
+    return b"".join(chunks)
 
+
+def _header_content_type(resp: aiohttp.ClientResponse) -> str:
+    return (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+
+
+async def _read_text(resp: aiohttp.ClientResponse, *, max_bytes: int) -> bytes:
+    header_ct = _header_content_type(resp)
+    if header_ct and header_ct not in TEXT_CONTENT_TYPES:
+        raise FetchError(f"disallowed content type: {header_ct!r}")
+    data = await _read_capped(resp, max_bytes=max_bytes)
+    if sniff_content_type(data) is not None:
+        raise FetchError("expected a text document, got an image")
+    return data
+
+
+async def _read_validated(resp: aiohttp.ClientResponse, *, max_bytes: int) -> FetchedImage:
+    """Stream the body under a hard size cap and validate the content type."""
+    header_ct = _header_content_type(resp)
+    if header_ct and header_ct not in ALLOWED_CONTENT_TYPES:
+        raise FetchError(f"disallowed content type: {header_ct!r}")
+    data = await _read_capped(resp, max_bytes=max_bytes)
     sniffed = sniff_content_type(data)
     if sniffed is None:
         raise FetchError("content failed magic-byte validation")
     return FetchedImage(data=data, content_type=sniffed, final_url=str(resp.url))
 
 
-__all__ = ["FetchError", "FetchedImage", "SSRFError", "fetch_image", "sniff_content_type"]
+__all__ = [
+    "TEXT_CONTENT_TYPES",
+    "FetchError",
+    "FetchedImage",
+    "SSRFError",
+    "fetch_image",
+    "fetch_text",
+    "sniff_content_type",
+]
