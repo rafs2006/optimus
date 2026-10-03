@@ -198,6 +198,13 @@ COMMANDS: tuple[Command, ...] = (
         # takes the same bar they do -- not Manage Server, which most servers'
         # moderators do not hold.
         required_permission=Permission.MANAGE_MESSAGES,
+        options=(
+            Option(
+                "detection",
+                "Reopen this report number as a full card with buttons (to fix a misclick).",
+                OPT_INTEGER,
+            ),
+        ),
     ),
     Command(
         name="global",

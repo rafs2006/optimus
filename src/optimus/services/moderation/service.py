@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 
@@ -215,6 +216,11 @@ def build_coordinator(
     async def report(channel_id: int, data: ReportData) -> int | None:  # pragma: no cover
         return await _post_report(rest, channel_id, data)
 
+    async def update_report(  # pragma: no cover
+        channel_id: int, card_message_id: int, items: Sequence[ReportData]
+    ) -> None:
+        await _edit_report(rest, channel_id, card_message_id, items)
+
     async def audit(event: VerdictEvent, action: str, result: ActionResult) -> int | None:
         async with scope() as session:
             det_repo = DetectionRepository(session, event.guild_id)
@@ -277,7 +283,9 @@ def build_coordinator(
                 )
         return outcome
 
-    async def mark_reported(guild_id: int, detection_id: int) -> None:
+    async def mark_reported(
+        guild_id: int, detection_id: int, card_message_id: int | None = None
+    ) -> None:
         """Stamp ``detections.reported_at`` for the row a card was just posted for.
 
         Runs in its own scope: the coordinator's other closures already do
@@ -288,7 +296,7 @@ def build_coordinator(
         """
         async with scope() as session:
             await DetectionRepository(session, guild_id).set_reported_at(
-                detection_id, datetime.now(UTC)
+                detection_id, datetime.now(UTC), review_message_id=card_message_id
             )
 
     coordinator = ModerationCoordinator(
@@ -296,6 +304,7 @@ def build_coordinator(
         target=target,
         executor=executor,
         report=report,
+        update_report=update_report,
         audit=audit,
         dispatcher=dispatcher,
         sweep=sweep,
@@ -363,16 +372,28 @@ async def _resolve_target(  # pragma: no cover - requires live REST
 
 
 async def _post_report(  # pragma: no cover
-    rest: object, channel_id: int, data: ReportData
+    rest: object, channel_id: int, data: ReportData | Sequence[ReportData]
 ) -> int | None:
-    from optimus.services.moderation.review import build_action_rows, build_embed
+    """Post one review card -- for one image, or merged for every image of a message."""
+    from optimus.services.moderation.review import build_card
 
+    embeds, components = build_card([data] if isinstance(data, ReportData) else list(data))
     message = await rest.create_message(  # type: ignore[attr-defined]
-        channel_id,
-        embed=build_embed(data),
-        components=build_action_rows(data.detection_id),
+        channel_id, embeds=embeds, components=components
     )
     return int(message.id)
+
+
+async def _edit_report(  # pragma: no cover
+    rest: object, channel_id: int, card_message_id: int, items: Sequence[ReportData]
+) -> None:
+    """Re-render a card in place: another image joined it, or it was confirmed."""
+    from optimus.services.moderation.review import build_card
+
+    embeds, components = build_card(list(items))
+    await rest.edit_message(  # type: ignore[attr-defined]
+        channel_id, card_message_id, content=None, embeds=embeds, components=components
+    )
 
 
 async def _amain() -> None:  # pragma: no cover - runtime entrypoint

@@ -346,8 +346,8 @@ class DetectionRepository:
         )
         return (await self._session.execute(stmt)).scalars().all()
 
-    async def list_open(self, *, limit: int) -> tuple[Sequence[Detection], int]:
-        """Open detections (capped) plus the true total, from one query.
+    async def list_open(self, *, limit: int) -> tuple[list[dict[str, Any]], int]:
+        """Open review cards (capped), one row per message, plus the true total.
 
         "Open" is deliberately narrow: ``reported_at IS NOT NULL`` (a card
         actually reached the review channel) *and* ``action_taken = 'none'``
@@ -355,36 +355,52 @@ class DetectionRepository:
         are the ``/setup`` replay's business, not the queue's -- surfacing
         them here would double-report them once the replay runs.
 
+        Images from one message share one review card, so they are counted
+        and listed once: ``/queue`` answers "how many cards are waiting", and
+        a four-image post listed four times would overstate the backlog.
+        Each row carries the lowest detection id (the number on the card) and
+        how many images it covers.
+
         Ordered oldest-first so a moderator coming back to a neglected server
         works the backlog in arrival order instead of seeing the newest noise
         first, and capped so a server that ignored the queue for a month
-        cannot render an unbounded response. Served by the existing
-        ``ix_detections_guild_reported`` composite index.
+        cannot render an unbounded response.
 
         The count rides along as a window function rather than a second
         ``SELECT``: with two queries a moderator pressing a button between
-        them makes the page and the total disagree, and ``/queue`` then
-        reports "N more not shown" against a backlog that already moved.
-        ``COUNT(*) OVER ()`` is evaluated before ``LIMIT``, so it still sees
-        every qualifying row, and both supported dialects (PostgreSQL and
-        SQLite >= 3.25) implement it.
+        them makes the page and the total disagree. ``COUNT(*) OVER ()`` runs
+        after ``GROUP BY`` and before ``LIMIT``, so it counts every waiting
+        card; both supported dialects (PostgreSQL and SQLite >= 3.25)
+        implement it.
         """
+        first_seen = func.min(Detection.created_at)
         stmt = (
-            select(Detection, func.count().over().label("total"))
+            select(
+                func.min(Detection.id).label("detection_id"),
+                func.min(Detection.channel_id).label("channel_id"),
+                Detection.message_id,
+                func.min(Detection.uploader_id).label("uploader_id"),
+                # "scam" sorts after "ambiguous": the card shows the strongest.
+                func.max(Detection.verdict).label("verdict"),
+                first_seen.label("created_at"),
+                func.count(Detection.id).label("images"),
+                func.count().over().label("total"),
+            )
             .where(
                 Detection.guild_id == self._guild_id,
                 Detection.reported_at.is_not(None),
                 Detection.action_taken == "none",
             )
-            .order_by(Detection.created_at.asc())
+            .group_by(Detection.message_id)
+            .order_by(first_seen.asc())
             .limit(limit)
         )
-        rows = (await self._session.execute(stmt)).all()
+        rows = (await self._session.execute(stmt)).mappings().all()
         if not rows:
             # No rows means no window to count over; an empty page is an
             # empty backlog, since the total is drawn from the same predicate.
             return [], 0
-        return [row[0] for row in rows], int(rows[0][1])
+        return [dict(row) for row in rows], int(rows[0]["total"])
 
     async def list_by_uploader_since(
         self, uploader_id: int, since: datetime, *, limit: int = 500
@@ -443,21 +459,68 @@ class DetectionRepository:
         await self._session.flush()
         return cast("CursorResult[Any]", result).rowcount or 0
 
-    async def set_reported_at(self, detection_id: int, when: datetime) -> int:
-        """Stamp when the review card for a detection was posted.
+    async def set_reported_at(
+        self, detection_id: int, when: datetime, *, review_message_id: int | None = None
+    ) -> int:
+        """Stamp when the review card for a detection was posted, and which card.
 
         Called after ``_post_report`` succeeds. Stamping is what keeps the
         ``/setup`` backlog replay idempotent: only rows with
         ``reported_at IS NULL`` are re-surfaced, so a card that has already
         been posted (from any path) never turns into a duplicate on the next
-        ``/setup`` invocation or bus redelivery.
+        ``/setup`` invocation or bus redelivery. ``review_message_id`` links
+        the row to its card so the card's buttons can act on every image on
+        it; ``None`` leaves any existing link untouched.
         """
         from sqlalchemy import update
 
+        values: dict[str, Any] = {"reported_at": when}
+        if review_message_id is not None:
+            values["review_message_id"] = review_message_id
         stmt = (
             update(Detection)
             .where(Detection.guild_id == self._guild_id, Detection.id == detection_id)
-            .values(reported_at=when)
+            .values(**values)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return cast("CursorResult[Any]", result).rowcount or 0
+
+    async def list_on_card(self, review_message_id: int) -> Sequence[Detection]:
+        """Every detection shown on one review card, lowest id first.
+
+        Guild-scoped like every other read, so a card id from another server
+        resolves to nothing. Served by ``ix_detections_guild_card``.
+        """
+        stmt = (
+            select(Detection)
+            .where(
+                Detection.guild_id == self._guild_id,
+                Detection.review_message_id == review_message_id,
+            )
+            .order_by(Detection.id.asc())
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def list_for_message(self, message_id: int) -> Sequence[Detection]:
+        """Every detection recorded for one scanned message, lowest id first."""
+        stmt = (
+            select(Detection)
+            .where(Detection.guild_id == self._guild_id, Detection.message_id == message_id)
+            .order_by(Detection.id.asc())
+        )
+        return (await self._session.execute(stmt)).scalars().all()
+
+    async def link_to_card(self, detection_ids: Sequence[int], review_message_id: int) -> int:
+        """Point ``detection_ids`` at a (re)posted review card; return rows affected."""
+        from sqlalchemy import update
+
+        if not detection_ids:
+            return 0
+        stmt = (
+            update(Detection)
+            .where(Detection.guild_id == self._guild_id, Detection.id.in_(list(detection_ids)))
+            .values(review_message_id=review_message_id)
         )
         result = await self._session.execute(stmt)
         await self._session.flush()

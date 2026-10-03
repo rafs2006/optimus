@@ -172,6 +172,13 @@ class VerdictEvent(_Event):
     #: review card can render the image inline (see :mod:`.review`).
     source_url: str | None = None
     distances: dict[str, int] = Field(default_factory=dict)
+    #: The moderator who confirmed this as a scam (Confirm scam button or
+    #: "Review as scam"). Such a verdict is already decided, so its review card
+    #: is shown folded -- outcome only, no buttons.
+    confirmed_by: int | None = None
+    #: The review card the Confirm button was pressed on. The enforcement
+    #: outcome is written onto that card instead of posting a new one.
+    review_card_id: int | None = None
 
 
 class ActionResultEvent(_Event):

@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -200,57 +200,71 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
             since = datetime.now(UTC) - timedelta(days=setup_replay_days)
             total_pending = await det_repo.count_unreported_since(since)
             pending = await det_repo.list_unreported_since(since, limit=setup_replay_limit)
-        posted = 0
+        # One card per message, as on the live path: a post with four images
+        # replays as one card whose buttons act on all four.
+        by_message: dict[int, list[Any]] = {}
         for detection in pending:
-            data = ReportData(
-                detection_id=detection.id,
-                guild_id=guild_id,
-                channel_id=detection.channel_id,
-                message_id=detection.message_id,
-                uploader_id=detection.uploader_id,
-                verdict=detection.verdict,
-                # Confidence is a runtime property of the verdict -- not
-                # persisted on the row -- so replayed cards omit the line.
-                confidence=None,
-                action_taken=detection.action_taken,
-                locale=locale,
-            )
+            by_message.setdefault(detection.message_id, []).append(detection)
+        posted = 0
+        stamped = 0
+        for group in by_message.values():
+            group.sort(key=lambda d: d.id)
+            items = [
+                ReportData(
+                    detection_id=detection.id,
+                    guild_id=guild_id,
+                    channel_id=detection.channel_id,
+                    message_id=detection.message_id,
+                    uploader_id=detection.uploader_id,
+                    verdict=detection.verdict,
+                    # Confidence is a runtime property of the verdict -- not
+                    # persisted on the row -- so replayed cards omit the line.
+                    confidence=None,
+                    action_taken=detection.action_taken,
+                    locale=locale,
+                )
+                for detection in group
+            ]
             # Reuse the moderation service's own post helper so replayed cards
             # go through exactly the same render + button wiring as live ones
             # (no drift between the two code paths on future review-card
             # tweaks).
             try:
-                posted_message_id = await _post_report(bot.rest, channel_id, data)
+                posted_message_id = await _post_report(bot.rest, channel_id, items)
             except Exception:
                 _log.warning(
                     "setup_replay_post_failed",
                     guild_id=guild_id,
-                    detection_id=detection.id,
+                    detection_id=group[0].id,
                     exc_info=True,
                 )
                 continue
             if posted_message_id is None:
                 # _post_report returned None -- the rest call itself did not
                 # raise but did not produce a message either. Skip the stamp
-                # so the row stays eligible for the next /setup re-run.
+                # so the rows stay eligible for the next /setup re-run.
                 continue
-            # Stamp per-row rather than in one UPDATE at the end: a mid-loop
+            # Stamp per card rather than in one UPDATE at the end: a mid-loop
             # crash then leaves the un-posted tail eligible to be picked up
             # again on the next ``/setup`` re-run, not double-posted.
             async with app._scope() as session:
-                await DetectionRepository(session, guild_id).set_reported_at(
-                    detection.id, datetime.now(UTC)
-                )
+                repo = DetectionRepository(session, guild_id)
+                for detection in group:
+                    await repo.set_reported_at(
+                        detection.id, datetime.now(UTC), review_message_id=int(posted_message_id)
+                    )
             _log.info(
                 "setup_replay_posted",
                 guild_id=guild_id,
-                detection_id=detection.id,
+                detection_id=group[0].id,
+                images=len(group),
                 message_id=int(posted_message_id),
             )
             posted += 1
+            stamped += len(group)
         if posted > 0:
-            more = max(total_pending - posted, 0)
-            summary = explain_setup_replay_summary(posted, more, setup_replay_days, locale)
+            more = max(total_pending - stamped, 0)
+            summary = explain_setup_replay_summary(stamped, more, setup_replay_days, locale)
             with contextlib.suppress(Exception):
                 await bot.rest.create_message(channel_id, summary)
         _log.info(

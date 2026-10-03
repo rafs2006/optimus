@@ -16,7 +16,7 @@ wiring that produces an :class:`InteractionContext` and renders an
 from __future__ import annotations
 
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -48,6 +48,7 @@ from optimus.services.moderation.permissions import AccessReport
 from optimus.services.moderation.review import (
     BUTTON_LABELS,
     ParsedCustomId,
+    ReportData,
     ReviewAction,
     jump_url,
 )
@@ -72,6 +73,9 @@ class InteractionContext:
     subcommand: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     locale: str = "en"
+    #: For a button press: the message id of the card the button is on, so a
+    #: review action can cover every image shown on that card.
+    card_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +252,10 @@ class ModerationRest(Protocol):
 
     async def fetch_owner_ids(self) -> set[int]: ...
 
+    async def post_review_card(self, channel_id: int, items: Sequence[ReportData]) -> int:
+        """Post one (grouped) review card with its buttons; return its message id."""
+        ...
+
 
 class InteractionDeps(Protocol):
     """Side-effecting collaborators a handler needs, all per-request scoped."""
@@ -278,6 +286,22 @@ class InteractionDeps(Protocol):
     async def resolve_appeal(self, guild_id: int, appeal_id: int, *, approved: bool) -> None: ...
     async def reverse_detection_action(self, guild_id: int, detection_id: int) -> None: ...
     async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None: ...
+    async def get_card_detections(
+        self, guild_id: int, card_message_id: int
+    ) -> list[DetectionFacts]:
+        """Every detection on one review card (empty for pre-0012 cards)."""
+        ...
+
+    async def get_message_detections(self, guild_id: int, message_id: int) -> list[DetectionFacts]:
+        """Every detection recorded for one scanned message."""
+        ...
+
+    async def repost_review_card(
+        self, guild_id: int, detections: list[DetectionFacts]
+    ) -> int | None:
+        """Post a fresh full card for ``detections``; ``None`` if it could not be posted."""
+        ...
+
     async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None: ...
     async def set_detection_hashes(
         self, guild_id: int, detection_id: int, hashes: dict[str, int]
@@ -422,6 +446,8 @@ class InteractionDeps(Protocol):
         attachment_id: int,
         uploader_id: int,
         matched_hash_id: str,
+        confirmed_by: int | None = None,
+        review_card_id: int | None = None,
     ) -> None:
         """Record a moderator-confirmed scam match and run the moderation pipeline.
 
@@ -670,6 +696,8 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
             attachment_id=attachment_id,
             uploader_id=author_id,
             matched_hash_id=stored.hash_id,
+            # A moderator's own call: its card is posted already folded.
+            confirmed_by=ctx.user_id,
         )
     if not added_hash_ids:
         return InteractionResponse("command.reviewmsg_all_failed", {"failed": failed})
@@ -1013,6 +1041,9 @@ async def _cmd_queue(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     replay, and listing them here would promise a card that does not exist.
     """
     assert ctx.guild_id is not None
+    reopen = ctx.options.get("detection")
+    if reopen is not None:
+        return await _reopen_card(ctx, deps, int(reopen))
     summary = await deps.open_queue(ctx.guild_id, limit=QUEUE_PAGE_SIZE)
     total = int(summary["total"])
     if total == 0:
@@ -1037,9 +1068,10 @@ async def _cmd_queue(ctx: InteractionContext, deps: InteractionDeps) -> Interact
     for row in rows:
         url = jump_url(ctx.guild_id, int(row["channel_id"]), int(row["message_id"]))
         age = _format_age(float(row["age_seconds"]))
+        images = int(row.get("images", 1))
         line = (
             f"\u2022 [#{row['detection_id']}]({url}) \u2014 {row['verdict']}, "
-            f"<@{row['uploader_id']}>, {age} old"
+            f"<@{row['uploader_id']}>, {age} old" + (f", {images} images" if images > 1 else "")
         )
         cost = len(line) + (1 if lines else 0)  # the "\n" join adds one each
         # Always emit the oldest row: a listing of nothing under a header that
@@ -1061,6 +1093,29 @@ async def _cmd_queue(ctx: InteractionContext, deps: InteractionDeps) -> Interact
             "oldest": oldest,
         },
     )
+
+
+async def _reopen_card(
+    ctx: InteractionContext, deps: InteractionDeps, detection_id: int
+) -> InteractionResponse:
+    """Post report ``detection_id`` again as a full card with fresh buttons.
+
+    Decided cards fold and lose their buttons, so this is how a misclick gets
+    corrected: the new card covers every image of the same message, and
+    pressing a different decision on it simply applies that decision. The old
+    folded card stays as the record of the first call. Guild-scoped like
+    every detection read, so another server's number resolves to nothing.
+    """
+    assert ctx.guild_id is not None
+    det = await deps.get_detection(ctx.guild_id, detection_id)
+    if det is None:
+        return InteractionResponse("button.detection_missing", {"detection_id": detection_id})
+    group = await deps.get_message_detections(ctx.guild_id, det.message_id)
+    card_id = await deps.repost_review_card(ctx.guild_id, group or [det])
+    if card_id is None:
+        return InteractionResponse("command.queue_reopen_failed", {"detection_id": detection_id})
+    await deps.audit(ctx.guild_id, ctx.user_id, "review.reopen", target=str(detection_id))
+    return InteractionResponse("command.queue_reopened", {"detection_id": detection_id})
 
 
 async def _cmd_help(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
@@ -1238,6 +1293,43 @@ def _image_hashes_to_guild_hash(hashes: ImageHashes, added_by: int) -> GuildHash
     )
 
 
+async def _card_group(
+    ctx: InteractionContext, deps: InteractionDeps, det: DetectionFacts
+) -> list[DetectionFacts]:
+    """Every detection the pressed card covers, lowest id first.
+
+    Images from one message share one card, so its buttons act on all of
+    them. The card is identified by the message the button lives on, and only
+    trusted when the button's own detection is on it -- a forged custom id
+    cannot widen the action to another card. Cards posted before migration
+    0012 carry no link and resolve to the single detection, as before.
+    """
+    assert ctx.guild_id is not None
+    if ctx.card_message_id is None:
+        return [det]
+    on_card = await deps.get_card_detections(ctx.guild_id, ctx.card_message_id)
+    if not any(d.detection_id == det.detection_id for d in on_card):
+        return [det]
+    return on_card
+
+
+def _distinct_images(dets: Sequence[DetectionFacts]) -> list[DetectionFacts]:
+    """One detection per attachment (lowest id), for the per-image writes.
+
+    A confirmed verdict records its own row for the same attachment, so a
+    reopened card can list an image twice; hashing, whitelisting and voting
+    must still happen once per image.
+    """
+    seen: set[tuple[int, int]] = set()
+    out: list[DetectionFacts] = []
+    for det in dets:
+        key = (det.message_id, det.attachment_id)
+        if key not in seen:
+            seen.add(key)
+            out.append(det)
+    return out
+
+
 async def handle_review_button(
     ctx: InteractionContext, parsed: ParsedCustomId, deps: InteractionDeps
 ) -> InteractionResponse:
@@ -1248,36 +1340,51 @@ async def handle_review_button(
     original author or any cached value. The detection lookup is guild-scoped,
     so a forged ``custom_id`` carrying another guild's detection id resolves to
     nothing here.
+
+    One card covers every flagged image of a message (see :func:`_card_group`),
+    so each action applies to all of them: one delete / ban / unban per
+    message or uploader, one hash / whitelist write per image, one state change
+    and audit row per detection.
     """
     _require(ctx, review_action_permission(parsed.action))
     assert ctx.guild_id is not None
     action = parsed.action
     detection_id = parsed.detection_id
 
-    det = await deps.get_detection(ctx.guild_id, detection_id)
-    if det is None:
+    primary = await deps.get_detection(ctx.guild_id, detection_id)
+    if primary is None:
         return InteractionResponse("button.detection_missing", {"detection_id": detection_id})
+    group = await _card_group(ctx, deps, primary)
+    images = _distinct_images(group)
 
     if action is ReviewAction.CONFIRM_SCAM:
         # All REST/network work runs before the first DB write -- see
-        # _resolve_image_hashes on why that ordering is load-bearing.
-        hashes = await _resolve_image_hashes(deps, det)
-        await deps.rest_delete_message(det.channel_id, det.message_id)
-        if hashes is not None:
-            await deps.add_guild_hash(
-                ctx.guild_id, _image_hashes_to_guild_hash(hashes, ctx.user_id)
-            )
+        # _resolve_image_hashes on why that ordering is load-bearing. Every
+        # image is hashed BEFORE the message is deleted: re-hashing a member
+        # report needs the attachment, which the delete takes with it.
+        resolved = [(det, await _resolve_image_hashes(deps, det)) for det in images]
+        for channel_id, message_id in dict.fromkeys((d.channel_id, d.message_id) for d in group):
+            await deps.rest_delete_message(channel_id, message_id)
+        for det, hashes in resolved:
+            if hashes is None:
+                continue
+            stored = _image_hashes_to_guild_hash(hashes, ctx.user_id)
+            await deps.add_guild_hash(ctx.guild_id, stored)
             if det.hashes is None:
                 # Member reports are filed without hashes; now that a moderator
                 # confirmed and we re-hashed the image, keep the result so the
                 # other buttons (whitelist, submit to global) still work after
                 # the original message -- just deleted above -- is gone.
                 await deps.set_detection_hashes(
-                    ctx.guild_id, detection_id, _hash_ensemble_dict(hashes)
+                    ctx.guild_id, det.detection_id, _hash_ensemble_dict(hashes)
                 )
-        await deps.set_detection_action(ctx.guild_id, detection_id, "confirmed")
-        await deps.audit(ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(detection_id))
-        if hashes is not None:
+        for det in group:
+            await deps.set_detection_action(ctx.guild_id, det.detection_id, "confirmed")
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(det.detection_id)
+            )
+        hashed = [(det, hashes) for det, hashes in resolved if hashes is not None]
+        for det, hashes in hashed:
             # Route the confirmation through the same verdict pipeline a live
             # detection uses. Without this, Confirm deleted the single message
             # above and stopped: no ban, and therefore none of the enforcement
@@ -1285,7 +1392,8 @@ async def handle_review_button(
             # campaign sweep, the audited action row. A moderator pressing
             # "confirm scam" clearly intends the guild's configured
             # action_policy (e.g. delete + ban) to apply, exactly as it would
-            # have if the hash had matched on upload.
+            # have if the hash had matched on upload. The card id lets the
+            # outcome land on this (folded) card instead of a new one.
             await deps.submit_confirmed_scam(
                 ctx.guild_id,
                 channel_id=det.channel_id,
@@ -1293,39 +1401,43 @@ async def handle_review_button(
                 attachment_id=det.attachment_id,
                 uploader_id=det.uploader_id,
                 matched_hash_id=f"{hashes.phash:016x}",
+                confirmed_by=ctx.user_id,
+                review_card_id=ctx.card_message_id,
             )
-        key = "button.confirmed_scam" if hashes is not None else "button.confirmed_no_hash"
+        key = "button.confirmed_scam" if hashed else "button.confirmed_no_hash"
         # Confirm doubles as the global promotion vote — but only from servers
         # the owner approved AND that opted in. Everyone else's confirm stays
         # purely local; the vote can also be refused (rate limit/reputation)
         # without affecting the local confirm, which already happened above.
-        if hashes is not None and await _is_global_participant(deps, ctx.guild_id):
-            vote = await deps.global_vote(
-                hash_id=f"{hashes.phash:016x}",
-                phash=hashes.phash,
-                dhash=hashes.dhash,
-                whash=hashes.whash,
-                voter_user_id=ctx.user_id,
-                voter_guild_id=ctx.guild_id,
-            )
-            if vote is not None:
-                await deps.audit(
-                    ctx.guild_id,
-                    ctx.user_id,
-                    "global.vote",
-                    target=f"{hashes.phash:016x}",
+        if hashed and await _is_global_participant(deps, ctx.guild_id):
+            votes: list[str] = []
+            for _det, hashes in hashed:
+                vote = await deps.global_vote(
+                    hash_id=f"{hashes.phash:016x}",
+                    phash=hashes.phash,
+                    dhash=hashes.dhash,
+                    whash=hashes.whash,
+                    voter_user_id=ctx.user_id,
+                    voter_guild_id=ctx.guild_id,
                 )
-                key = (
-                    "button.confirmed_scam_promoted"
-                    if vote == "promoted"
-                    else "button.confirmed_scam_voted"
-                )
+                if vote is not None:
+                    votes.append(vote)
+                    await deps.audit(
+                        ctx.guild_id,
+                        ctx.user_id,
+                        "global.vote",
+                        target=f"{hashes.phash:016x}",
+                    )
+            if "promoted" in votes:
+                key = "button.confirmed_scam_promoted"
+            elif votes:
+                key = "button.confirmed_scam_voted"
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
 
     if action is ReviewAction.FALSE_POSITIVE:
-        hashes = await _resolve_image_hashes(deps, det)
+        resolved = [(det, await _resolve_image_hashes(deps, det)) for det in images]
         # If enforcement already banned the uploader, a false positive must
         # actually free them -- best-effort, before the first DB write. But an
         # unban is a Ban Members power: False positive is on Manage Messages so
@@ -1335,45 +1447,47 @@ async def handle_review_button(
         # who holds it, and the card says so to everyone watching.
         can_unban = has_permission(ctx.member_permissions, Permission.BAN_MEMBERS)
         if can_unban:
-            await deps.rest_unban(
-                ctx.guild_id,
-                det.uploader_id,
-                reason=reasons.false_positive_reason(detection_id),
-            )
-        if hashes is not None:
+            for uploader_id in dict.fromkeys(d.uploader_id for d in group):
+                await deps.rest_unban(
+                    ctx.guild_id,
+                    uploader_id,
+                    reason=reasons.false_positive_reason(detection_id),
+                )
+        for det, hashes in resolved:
+            if hashes is None:
+                continue
             await deps.add_whitelist(
                 ctx.guild_id,
                 GuildWhitelist(
                     phash=hashes.phash,
                     dhash=hashes.dhash,
                     whash=hashes.whash,
-                    reason=f"false positive: detection #{detection_id}",
+                    reason=f"false positive: detection #{det.detection_id}",
                     added_by=ctx.user_id,
                 ),
             )
-        await deps.reverse_detection_action(ctx.guild_id, detection_id)
-        await deps.audit(
-            ctx.guild_id, ctx.user_id, "review.false_positive", target=str(detection_id)
-        )
-        key = (
-            "button.marked_false_positive"
-            if hashes is not None
-            else "button.marked_false_positive_no_hash"
-        )
+        for det in group:
+            await deps.reverse_detection_action(ctx.guild_id, det.detection_id)
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "review.false_positive", target=str(det.detection_id)
+            )
+        disputed = [h for _det, h in resolved if h is not None]
+        key = "button.marked_false_positive" if disputed else "button.marked_false_positive_no_hash"
         # A false positive from a participating server kills the global entry:
         # revoke immediately and dock the submitter's reputation. One bad
         # community poisoning the shared set costs it credibility; a legitimate
         # mistake self-corrects. Anywhere else the verdict stays local -- the
         # whitelist above still keeps this server from flagging the image.
-        if (
-            hashes is not None
-            and await _is_global_participant(deps, ctx.guild_id)
-            and await deps.global_dispute(f"{hashes.phash:016x}")
-        ):
-            await deps.audit(
-                ctx.guild_id, ctx.user_id, "global.dispute", target=f"{hashes.phash:016x}"
-            )
-            key = "button.marked_false_positive_global_revoked"
+        if disputed and await _is_global_participant(deps, ctx.guild_id):
+            for entry in disputed:
+                if await deps.global_dispute(f"{entry.phash:016x}"):
+                    await deps.audit(
+                        ctx.guild_id,
+                        ctx.user_id,
+                        "global.dispute",
+                        target=f"{entry.phash:016x}",
+                    )
+                    key = "button.marked_false_positive_global_revoked"
         note_key = "card.handled" if can_unban else "card.handled_ban_kept"
         return InteractionResponse(
             key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id, key=note_key)
@@ -1391,8 +1505,11 @@ async def handle_review_button(
         # without a terminal state these rows sit at action_taken='none'
         # forever. The reporter is deliberately not told, so mass-reporting
         # cannot be used to probe what does and does not get through.
-        await deps.set_detection_action(ctx.guild_id, detection_id, "dismissed")
-        await deps.audit(ctx.guild_id, ctx.user_id, "review.dismiss", target=str(detection_id))
+        for det in group:
+            await deps.set_detection_action(ctx.guild_id, det.detection_id, "dismissed")
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "review.dismiss", target=str(det.detection_id)
+            )
         return InteractionResponse(
             "button.dismissed", {"detection_id": detection_id}, **_card_note(action, ctx.user_id)
         )
@@ -1400,50 +1517,62 @@ async def handle_review_button(
     if action is ReviewAction.BAN_UPLOADER:
         config = await deps.get_config(ctx.guild_id)
         purge_hours = min(int(config.get("ban_purge_hours", 24)), 168)  # Discord caps at 7d
-        banned = await deps.rest_ban(
-            ctx.guild_id,
-            det.uploader_id,
-            reason=reasons.confirmed_reason(detection_id),
-            purge_seconds=purge_hours * 3600,
-        )
+        banned = False
+        for uploader_id in dict.fromkeys(d.uploader_id for d in group):
+            banned = (
+                await deps.rest_ban(
+                    ctx.guild_id,
+                    uploader_id,
+                    reason=reasons.confirmed_reason(detection_id),
+                    purge_seconds=purge_hours * 3600,
+                )
+                or banned
+            )
         if not banned:
             return InteractionResponse("button.action_failed")
-        await deps.set_detection_action(ctx.guild_id, detection_id, "banned")
-        await deps.audit(ctx.guild_id, ctx.user_id, "review.ban_uploader", target=str(detection_id))
-        return InteractionResponse(
-            "button.uploader_banned",
-            card_note_key="card.handled",
-            card_note_params={"action": BUTTON_LABELS[action], "user_id": ctx.user_id},
-        )
+        for det in group:
+            await deps.set_detection_action(ctx.guild_id, det.detection_id, "banned")
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "review.ban_uploader", target=str(det.detection_id)
+            )
+        return InteractionResponse("button.uploader_banned", **_card_note(action, ctx.user_id))
 
     if action is ReviewAction.UNBAN:
-        unbanned = await deps.rest_unban(
-            ctx.guild_id,
-            det.uploader_id,
-            reason=reasons.manual_unban_reason(detection_id),
-        )
+        unbanned = False
+        for uploader_id in dict.fromkeys(d.uploader_id for d in group):
+            unbanned = (
+                await deps.rest_unban(
+                    ctx.guild_id,
+                    uploader_id,
+                    reason=reasons.manual_unban_reason(detection_id),
+                )
+                or unbanned
+            )
         if not unbanned:
             return InteractionResponse("button.action_failed")
         await deps.audit(ctx.guild_id, ctx.user_id, "review.unban", target=str(detection_id))
         return InteractionResponse("button.uploader_unbanned", **_card_note(action, ctx.user_id))
 
     if action is ReviewAction.WHITELIST_IMAGE:
-        hashes = await _resolve_image_hashes(deps, det)
-        if hashes is None:
+        resolved = [(det, await _resolve_image_hashes(deps, det)) for det in images]
+        if all(hashes is None for _det, hashes in resolved):
             return InteractionResponse("button.no_image")
-        await deps.add_whitelist(
-            ctx.guild_id,
-            GuildWhitelist(
-                phash=hashes.phash,
-                dhash=hashes.dhash,
-                whash=hashes.whash,
-                reason=f"review: detection #{detection_id}",
-                added_by=ctx.user_id,
-            ),
-        )
-        await deps.audit(
-            ctx.guild_id, ctx.user_id, "review.whitelist_image", target=str(detection_id)
-        )
+        for det, hashes in resolved:
+            if hashes is None:
+                continue
+            await deps.add_whitelist(
+                ctx.guild_id,
+                GuildWhitelist(
+                    phash=hashes.phash,
+                    dhash=hashes.dhash,
+                    whash=hashes.whash,
+                    reason=f"review: detection #{det.detection_id}",
+                    added_by=ctx.user_id,
+                ),
+            )
+            await deps.audit(
+                ctx.guild_id, ctx.user_id, "review.whitelist_image", target=str(det.detection_id)
+            )
         return InteractionResponse("button.image_whitelisted", **_card_note(action, ctx.user_id))
 
     if action is ReviewAction.SUBMIT_GLOBAL:

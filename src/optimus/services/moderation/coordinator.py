@@ -8,9 +8,12 @@ testable without a live gateway or database.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+import time
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass, field, replace
 
 from prometheus_client import Counter
 
@@ -99,9 +102,40 @@ TargetResolver = Callable[[int, int], Awaitable[TargetContext | None]]
 ReportPoster = Callable[[int, ReportData], Awaitable[int | None]]
 #: Persists the action taken + an audit row; returns the detection row id (if any).
 AuditRecorder = Callable[[VerdictEvent, str, ActionResult], Awaitable[int | None]]
+#: Re-renders an open review card in place: (review channel, card id, every
+#: report on it). Used when another image of the same message is flagged.
+ReportUpdater = Callable[[int, int, Sequence[ReportData]], Awaitable[None]]
 #: Stamps ``detections.reported_at`` once a review card has been posted, so
-#: the ``/setup`` backlog replay does not re-surface the same row twice.
-ReportedStamper = Callable[[int, int], Awaitable[None]]
+#: the ``/setup`` backlog replay does not re-surface the same row twice, and
+#: links the row to its card: (guild, detection, card message id or None).
+ReportedStamper = Callable[[int, int, int | None], Awaitable[None]]
+
+#: How long a message's card stays open for further images of that message.
+#: Images of one post are scanned within seconds of each other; the window
+#: only bounds memory, it is not a moderation timeout.
+OPEN_CARD_TTL_SECONDS = 15 * 60
+#: Upper bound on remembered open cards (oldest evicted first).
+OPEN_CARD_LIMIT = 512
+
+
+@dataclass(slots=True)
+class _KeyedLock:
+    """A per-message lock plus how many callers hold or await it."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+@dataclass(slots=True)
+class _OpenCard:
+    """A card already posted for a message, which later images join."""
+
+    channel_id: int
+    card_id: int
+    items: list[ReportData]
+    opened_at: float = field(default_factory=time.monotonic)
+
+
 #: Purges the rest of a confirmed scammer's campaign across every channel and
 #: harvests the variant hashes. Returns a summary for the review card.
 Sweeper = Callable[[VerdictEvent], Awaitable[SweepOutcome]]
@@ -121,6 +155,7 @@ class ModerationCoordinator:
         dispatcher: PriorityDispatcher[ActionResult] | None = None,
         sweep: Sweeper | None = None,
         mark_reported: ReportedStamper | None = None,
+        update_report: ReportUpdater | None = None,
     ) -> None:
         self._config = config
         self._target = target
@@ -132,6 +167,13 @@ class ModerationCoordinator:
         # collaborators they need keep working; production wires it up in
         # :func:`build_coordinator`.
         self._mark_reported = mark_reported
+        # One card per message: without an updater every image posts its own
+        # card, which is also the safe fallback when an update fails.
+        self._update_report = update_report
+        #: Cards that later images of the same message join, keyed by
+        #: (guild, message, decided).
+        self._open_cards: OrderedDict[tuple[int, int, bool], _OpenCard] = OrderedDict()
+        self._card_locks: dict[tuple[int, int], _KeyedLock] = {}
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -307,62 +349,148 @@ class ModerationCoordinator:
             if swept.harvested:
                 extra += f", +{len(swept.harvested)} hashes blocklisted"
             action_taken = f"{action_taken} — {extra}"
-        try:
-            await self._report(
-                cfg.review_channel_id,
-                ReportData(
-                    detection_id=detection_id,
+        data = ReportData(
+            detection_id=detection_id,
+            guild_id=event.guild_id,
+            channel_id=event.channel_id,
+            message_id=event.message_id,
+            uploader_id=event.uploader_id,
+            verdict=event.verdict.value,
+            confidence=event.confidence,
+            action_taken=action_taken,
+            matched_hash_id=event.matched_hash_id,
+            global_match=event.matched_source == "global",
+            reported_by=event.reported_by,
+            # Show the image only while it still exists. A member report
+            # deletes nothing, and a delete that was refused for want of
+            # permission leaves it up too -- both are precisely the cards
+            # a moderator has to eyeball before pressing Confirm.
+            image_url=None if result.message_deleted else event.source_url,
+            ocr_summary=_ocr_summary(event.ocr),
+            problem=problem,
+            partial=result.partial,
+            locale=cfg.locale,
+        )
+        key = (event.guild_id, event.message_id)
+        # A moderator's confirmation is already decided: its card is folded
+        # (outcome, no buttons) and kept apart from the message's open card.
+        decided = event.confirmed_by is not None
+        card_key = (event.guild_id, event.message_id, decided)
+        if decided:
+            data = replace(data, decided_by=event.confirmed_by)
+        async with self._card_lock(key):
+            if decided:
+                # The open card is settled now; later images must not reopen it.
+                self._open_cards.pop((event.guild_id, event.message_id, False), None)
+                if event.review_card_id is not None and card_key not in self._open_cards:
+                    # Confirm was pressed on a card: write the outcome onto it.
+                    self._open_cards[card_key] = _OpenCard(
+                        channel_id=cfg.review_channel_id, card_id=event.review_card_id, items=[]
+                    )
+            if await self._join_open_card(card_key, cfg.review_channel_id, data, detection_id):
+                return
+            try:
+                card_id = await self._report(cfg.review_channel_id, data)
+            except Exception as exc:
+                # Posting the report is best-effort status: a failure here (missing
+                # send permission in the review channel, deleted channel) must not
+                # fail the verdict handler — the action already ran and was audited,
+                # and a bus redelivery would only re-run it into a "duplicate".
+                # The stamper is intentionally NOT called on this path either:
+                # ``reported_at IS NULL`` is what makes the row eligible for the
+                # ``/setup`` backlog replay, so a failed post stays eligible.
+                #
+                # The cause is classified because this log line is the *only* signal
+                # left when the review channel itself is unreachable: "missing
+                # access to the review channel" is actionable, a bare traceback is
+                # not.
+                failure = classify(exc)
+                _log.error(
+                    "review_report_failed",
                     guild_id=event.guild_id,
-                    channel_id=event.channel_id,
-                    message_id=event.message_id,
-                    uploader_id=event.uploader_id,
-                    verdict=event.verdict.value,
-                    confidence=event.confidence,
-                    action_taken=action_taken,
-                    matched_hash_id=event.matched_hash_id,
-                    global_match=event.matched_source == "global",
-                    reported_by=event.reported_by,
-                    # Show the image only while it still exists. A member report
-                    # deletes nothing, and a delete that was refused for want of
-                    # permission leaves it up too -- both are precisely the cards
-                    # a moderator has to eyeball before pressing Confirm.
-                    image_url=None if result.message_deleted else event.source_url,
-                    ocr_summary=_ocr_summary(event.ocr),
-                    problem=problem,
-                    partial=result.partial,
-                    locale=cfg.locale,
-                ),
-            )
-        except Exception as exc:
-            # Posting the report is best-effort status: a failure here (missing
-            # send permission in the review channel, deleted channel) must not
-            # fail the verdict handler — the action already ran and was audited,
-            # and a bus redelivery would only re-run it into a "duplicate".
-            # The stamper is intentionally NOT called on this path either:
-            # ``reported_at IS NULL`` is what makes the row eligible for the
-            # ``/setup`` backlog replay, so a failed post stays eligible.
-            #
-            # The cause is classified because this log line is the *only* signal
-            # left when the review channel itself is unreachable: "missing
-            # access to the review channel" is actionable, a bare traceback is
-            # not.
-            failure = classify(exc)
-            _log.error(
-                "review_report_failed",
-                guild_id=event.guild_id,
-                channel_id=cfg.review_channel_id,
+                    channel_id=cfg.review_channel_id,
+                    detection_id=detection_id,
+                    cause=failure.detail,
+                    permission_related=failure.permission_related,
+                    exc_info=True,
+                )
+                return
+            # Stamp only after a successful post: an exception above returned
+            # already, and the retention purge does not care about this column
+            # (its cutoff is ``created_at``). A stamp failure here is best-effort
+            # -- the card is already in Discord, and losing the stamp would only
+            # surface as a duplicate card on the next ``/setup``, not as a
+            # correctness problem.
+            if card_id is not None:
+                self._remember_card(card_key, cfg.review_channel_id, card_id, data)
+            if self._mark_reported is not None:
+                with contextlib.suppress(Exception):
+                    await self._mark_reported(event.guild_id, detection_id, card_id)
+
+    @contextlib.asynccontextmanager
+    async def _card_lock(self, key: tuple[int, int]) -> AsyncIterator[None]:
+        """Serialise card posting per message, so its images share one card.
+
+        Without it, two images of one post finishing together would both see
+        "no card yet" and post two. Per message rather than global so one busy
+        campaign does not queue every other server's cards behind it. The lock
+        entry is dropped once nobody holds or waits on it.
+        """
+        entry = self._card_locks.setdefault(key, _KeyedLock())
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            # Counted rather than ``lock.locked()``: right after a release the
+            # lock reads unlocked while a waiter is still about to take it, and
+            # dropping the entry then would hand a newcomer a second lock.
+            entry.users -= 1
+            if entry.users == 0:
+                del self._card_locks[key]
+
+    def _remember_card(
+        self, key: tuple[int, int, bool], channel_id: int, card_id: int, data: ReportData
+    ) -> None:
+        self._open_cards[key] = _OpenCard(channel_id=channel_id, card_id=card_id, items=[data])
+        self._open_cards.move_to_end(key)
+        while len(self._open_cards) > OPEN_CARD_LIMIT:
+            self._open_cards.popitem(last=False)
+
+    async def _join_open_card(
+        self, key: tuple[int, int, bool], channel_id: int, data: ReportData, detection_id: int
+    ) -> bool:
+        """Add ``data`` to the message's open card; ``False`` when a new card is needed.
+
+        Falls back to a new card -- never to silence -- when there is no open
+        card, it expired or moved channel, no updater is wired, or Discord
+        refused the edit (e.g. a moderator deleted the card).
+        """
+        card = self._open_cards.get(key)
+        if card is None or self._update_report is None:
+            return False
+        if card.channel_id != channel_id or (
+            time.monotonic() - card.opened_at > OPEN_CARD_TTL_SECONDS
+        ):
+            del self._open_cards[key]
+            return False
+        # A bus redelivery of an image already on the card replaces its entry.
+        items = [i for i in card.items if i.detection_id != data.detection_id] + [data]
+        items.sort(key=lambda i: i.detection_id)
+        try:
+            await self._update_report(channel_id, card.card_id, items)
+        except Exception:
+            _log.warning(
+                "review_card_update_failed",
+                guild_id=key[0],
+                card_id=card.card_id,
                 detection_id=detection_id,
-                cause=failure.detail,
-                permission_related=failure.permission_related,
                 exc_info=True,
             )
-            return
-        # Stamp only after a successful post: an exception above returned
-        # already, and the retention purge does not care about this column
-        # (its cutoff is ``created_at``). A stamp failure here is best-effort
-        # -- the card is already in Discord, and losing the stamp would only
-        # surface as a duplicate card on the next ``/setup``, not as a
-        # correctness problem.
+            del self._open_cards[key]
+            return False
+        card.items = items
         if self._mark_reported is not None:
             with contextlib.suppress(Exception):
-                await self._mark_reported(event.guild_id, detection_id)
+                await self._mark_reported(key[0], detection_id, card.card_id)
+        return True

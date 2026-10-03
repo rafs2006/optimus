@@ -19,10 +19,14 @@ object.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import hikari
+
+if TYPE_CHECKING:
+    from optimus.services.moderation.review import ReportData
 
 
 class HikariRestActions:
@@ -94,6 +98,15 @@ class HikariRestActions:
             if int(attachment.id) == attachment_id:
                 return str(attachment.url)
         return None
+
+    async def post_review_card(self, channel_id: int, items: Sequence[ReportData]) -> int:
+        """Post one (grouped) review card with buttons; return its message id."""
+        from optimus.services.moderation.service import _post_report
+
+        posted = await _post_report(self._rest, channel_id, items)
+        if posted is None:  # pragma: no cover - _post_report always returns an id
+            raise RuntimeError("review card post returned no message")
+        return posted
 
     async def create_review_channel(
         self, guild_id: int, *, name: str, mod_role_ids: list[int]
