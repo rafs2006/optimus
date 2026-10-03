@@ -114,7 +114,13 @@ channel. Read it in this order and stop as soon as you have an answer.
 2. **OCR/QR risk scan** — present only when the image did *not* match a known
    hash. This is the bot saying "I have never seen this, but the text or QR code
    in it looks like phishing", with the signals it found. Treat it as a prompt
-   to look, not as a verdict.
+   to look, not as a verdict. Common words ("team", "support", "free") next
+   to a link are not enough on their own, and links to the official AI sites
+   or discord.com don't count against an image, so ordinary screenshots stay
+   out of the queue. Discord invite and app-authorization links, subdomains,
+   and pages anyone can publish (Google Forms/Sites, Hugging Face) still do. What does raise a card is a claim/redeem prompt, a login
+   or wallet request, a known scam phrase or a crypto address, especially
+   beside an unfamiliar link, or any lookalike domain.
 3. **Matched hash** and **Confidence** — present when it *did* match. A match
    against a hash your own team added is the strongest signal on the card.
 4. **Source** — if it says the global database, nothing has been done and

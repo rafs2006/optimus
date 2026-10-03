@@ -107,22 +107,77 @@ _RISK_THRESHOLDS: tuple[tuple[int, str], ...] = (
     (1, "low"),
 )
 
+# Domain endings a scheme-less address must end in to count as a URL. OCR'd
+# prose is full of "word.word" (a missed space after a full stop, "e.g",
+# file names); requiring a real ending keeps those from scoring as links.
+# Covers the common generic endings, the country codes scam links lean on, and
+# the cheap endings phishing kits favour. Addresses with http(s):// or www.
+# match whatever their ending.
+_URL_TLDS = (
+    "com|net|org|edu|gov|info|biz|io|ai|co|me|gg|app|dev|xyz|top|site|online|"
+    "shop|store|live|link|click|lol|fun|vip|pro|club|tech|space|website|icu|"
+    "buzz|rest|cfd|sbs|monster|cyou|bond|life|world|today|news|support|help|"
+    "gift|gifts|money|finance|digital|network|cloud|tk|ml|ga|cf|gq|cc|ws|to|"
+    "ly|sh|so|tv|us|uk|ru|cn|in|de|fr|br|ua|pl|nl|eu|ca|au|jp|kr|ir|tr|vn|id"
+)
+
+# What a scheme-less address may end in: any two letters (every country code,
+# which covers shorteners like goo.gl, is.gd, rb.gy and phishing on .lt, .es
+# ...), or one of the longer endings above, plus forms.gle. Kept separate from
+# _URL_TLDS so the defang rejoins below stay on the curated list.
+_URL_ENDINGS = r"[a-z]{2}|" + "|".join(t for t in _URL_TLDS.split("|") if len(t) > 2) + "|gle"
+
 _URL_RE = re.compile(
     r"https?://[^\s<>'\"]+"
     r"|www\.[^\s<>'\"]+"
-    r"|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z]{2,}(?:/[^\s<>'\"]*)?",
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _URL_ENDINGS + r")\b(?:/[^\s<>'\"]*)?",
     re.IGNORECASE,
 )
 
-# OCR defang patterns — scammers break URLs to evade detection.
+# OCR defang patterns — scammers break URLs to evade detection. Only explicit
+# tricks are rejoined. A spaced-out dot is closed only when a real domain
+# ending follows ("openai . com"); text is never otherwise collapsed --
+# deleting every space turned "Thanks for the help. Our team is on it" into a
+# "URL" and sent ordinary screenshots to the mod queue.
 _DEFANG_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"hxxps?://", re.I), "https://"),
     (re.compile(r"\s*\[\.\]\s*"), "."),
     (re.compile(r"\s*\(\.\)\s*"), "."),
-    (re.compile(r"\s+dot\s+", re.I), "."),
-    (re.compile(r"\s*\.\s*"), "."),
-    (re.compile(r"\s+"), ""),
+    (re.compile(r"\s*[\[(]dot[\])]\s*", re.I), "."),
+    (re.compile(r"\s+dot\s+(?=(?:" + _URL_TLDS + r")\b)", re.I), "."),
+    # Space *before* the dot is an OCR split ("openai . com"); a dot followed
+    # only by a space is a sentence end ("Thanks. Support is ...") and is kept.
+    (re.compile(r"\s+\.\s*(?=(?:" + _URL_TLDS + r")\b)", re.I), "."),
+    # "openai.com / login" -> "openai.com/login", only right after an ending.
+    (re.compile(r"\b(" + _URL_TLDS + r")\s+/\s*", re.I), r"\1/"),
 )
+
+# Sites whose appearance in a screenshot is not, by itself, a reason for
+# suspicion: the official AI sites (which the lookalike check protects) and
+# Discord's own web address, which appears in nearly every screenshot of a
+# server. A link to one of these earns no co-occurrence bonus.
+#
+# Exact hosts only. A subdomain is not trusted, and neither is any host where
+# anyone can publish a page: Google (Forms, Sites, Docs), Hugging Face Spaces
+# and Replicate all host phishing pages. Lookalikes of the AI domains are still
+# scored, through the separate lookalike bonus.
+_USER_CONTENT_HOSTS: frozenset[str] = frozenset({"google.com", "huggingface.co", "replicate.com"})
+_DISCORD_HOSTS: frozenset[str] = frozenset({"discord.com", "discordapp.com"})
+_NO_BONUS_HOSTS: frozenset[str] = (OFFICIAL_AI_DOMAINS - _USER_CONTENT_HOSTS) | _DISCORD_HOSTS
+
+# Discord paths that are a lure in themselves: server invites (same as
+# discord.gg, which is never trusted) and bot authorization, the "verify by
+# authorizing this app" scam.
+_DISCORD_RISKY_PATH = re.compile(r"^/(?:api/(?:v\d+/)?)?(?:oauth2|invite)\b", re.I)
+
+# Signals strong enough that a link beside them is a real scam pattern. Weak
+# marketing words (free, team, support, limited) next to a link are how
+# ordinary screenshots look, so on their own they earn only a small bonus.
+_STRONG_FOR_URL: frozenset[str] = frozenset(
+    {"claim", "credentials", "wallet", "scam_phrase", "crypto_address"}
+)
+_URL_BONUS_STRONG = 3
+_URL_BONUS_WEAK = 1
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +363,9 @@ def extract_text(image_bytes: bytes, *, timeout: float | None = None) -> str:
 def _repair_urls(text: str) -> str:
     """Repair common OCR artifacts in URLs that scammers use to evade detection.
 
-    Handles: hxxps://, [.] , (.), dot, and stray spaces in domains.
+    Handles: hxxps://, [.], (.), [dot], " dot " and spaces around a dot when a
+    real domain ending follows ("openai . com"). Everything else is left
+    as-is: ordinary sentences must not be glued into URL-shaped strings.
     """
     result = text
     for pattern, replacement in _DEFANG_REPLACEMENTS:
@@ -331,7 +388,13 @@ def find_phishing_signals(
     - 2 pts per medium signal (claim, ai_community)
     - 3 pts per strong signal (credentials, wallet, scam_phrase)
     - 4 pts for crypto addresses
-    - +3 if signals co-occur with a URL (scam text + link = high risk)
+    - +3 if a strong signal (claim, credentials, wallet, scam_phrase,
+      crypto_address) co-occurs with a URL: scam text + link = high risk
+    - +1 if only weak/medium signals co-occur with a URL, so "team" or
+      "free" beside a link cannot reach "high" on its own
+    - URLs on exact official hosts (perplexity.ai, discord.com, ...) earn no
+      URL bonus; subdomains, user-content hosts (Google, Hugging Face) and
+      Discord invite/authorization links do. Lookalikes are scored next
     - +3 if signals co-occur with a lookalike domain
     """
     if not text:
@@ -353,9 +416,10 @@ def find_phishing_signals(
             matched.append(category)
             score += weight
 
-    # URL-signal correlation: scam text + URL = much higher risk.
-    if matched and urls:
-        score += 3
+    # URL-signal correlation: scam text + an unfamiliar link = higher risk,
+    # by how strong the text is.
+    if matched and _has_untrusted_url(urls):
+        score += _URL_BONUS_STRONG if seen & _STRONG_FOR_URL else _URL_BONUS_WEAK
     if matched and lookalikes:
         score += 3
 
@@ -371,6 +435,27 @@ def find_phishing_signals(
 # ---------------------------------------------------------------------------
 # URL extraction and domain analysis
 # ---------------------------------------------------------------------------
+
+
+def _is_trusted_url(url: str) -> bool:
+    """Whether ``url`` is on an exact official host and not a risky path there.
+
+    Unparseable URLs, subdomains, user-content hosts and Discord invite or
+    authorization links are all untrusted (fail toward scoring them).
+    """
+    domain = normalize_domain(url)
+    if not domain or domain not in _NO_BONUS_HOSTS:
+        return False
+    if domain in _DISCORD_HOSTS:
+        path = urlparse(url if url.startswith(("http://", "https://")) else "http://" + url).path
+        if _DISCORD_RISKY_PATH.match(path):
+            return False
+    return True
+
+
+def _has_untrusted_url(urls: list[str] | None) -> bool:
+    """Whether any URL points somewhere other than a trusted official page."""
+    return any(not _is_trusted_url(url) for url in urls or ())
 
 
 def extract_urls(text: str) -> list[str]:
