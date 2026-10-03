@@ -509,7 +509,14 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         params["remaining"] = len(rows) - len(shown)
         return InteractionResponse("command.hash_list_truncated", params)
     if sub == "import":
-        entries = validate_import(str(ctx.options["file"]))
+        raw = ctx.options.get("file")
+        # The glue replaces Discord's attachment id with the downloaded bytes.
+        # Anything else (an unresolved id, a missing option) must never reach
+        # the parser -- a bare number is valid JSON and would be misreported
+        # as a malformed export.
+        if not isinstance(raw, (str, bytes)):
+            raise InteractionRejected(CommandError.IMPORT_DOWNLOAD_FAILED)
+        entries = validate_import(raw)
         added = await _import_hashes(deps, ctx.guild_id, entries, added_by=ctx.user_id)
         await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.import", target=str(added))
         return InteractionResponse(

@@ -151,7 +151,12 @@ def test_validate_import_note_optional() -> None:
 def test_validate_import_rejects_invalid(doc: str) -> None:
     with pytest.raises(InteractionRejected) as exc:
         validate_import(doc)
-    assert exc.value.reason in (CommandError.IMPORT_INVALID, CommandError.IMPORT_TOO_LARGE)
+    assert exc.value.reason in (
+        CommandError.IMPORT_INVALID,
+        CommandError.IMPORT_NOT_JSON,
+        CommandError.IMPORT_EMPTY,
+        CommandError.IMPORT_BAD_ENTRY,
+    )
 
 
 def test_validate_import_rejects_over_uint64() -> None:
@@ -170,7 +175,8 @@ def test_validate_import_rejects_oversized_blob() -> None:
     blob = b'{"version":1,"hashes":[' + b"0" * MAX_IMPORT_BYTES + b"]}"
     with pytest.raises(InteractionRejected) as exc:
         validate_import(blob)
-    assert exc.value.reason is CommandError.IMPORT_TOO_LARGE
+    # The byte cap has its own message: it is not about the entry count.
+    assert exc.value.reason is CommandError.IMPORT_FILE_TOO_BIG
 
 
 def test_validate_import_rejects_long_note() -> None:
