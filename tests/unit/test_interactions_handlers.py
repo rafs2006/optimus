@@ -1154,8 +1154,11 @@ async def test_config_set_field_values_stay_quoted() -> None:
 
 @pytest.mark.asyncio
 async def test_config_permissions_reports_blocked_channels() -> None:
+    # A deleting server whose bot sees channel 11 but cannot delete there.
     deps = FakeDeps(
-        access_report=build_access_report([(10, VIEW_CHANNEL | MANAGE_MESSAGES), (11, 0)])
+        access_report=build_access_report(
+            [(10, VIEW_CHANNEL | MANAGE_MESSAGES), (11, VIEW_CHANNEL)], deletes=True
+        )
     )
     resp = await handle_command(_ctx("config", subcommand="permissions"), deps)
     assert resp.i18n_key == "command.permissions_report"

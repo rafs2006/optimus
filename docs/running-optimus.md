@@ -93,8 +93,9 @@ answer.
 
 The most common "the bot is broken" report is not a capacity problem — it is a
 channel the bot cannot act in. Have a moderator run **`/config permissions`**:
-it lists every channel where enforcement is blocked and names the missing
-permission. Grant it and the backlog in that channel is rescanned
+it checks the review channel first, then lists every channel the bot watches
+where enforcement is blocked and names the missing permission. Channels hidden
+from the bot are counted as private rather than flagged. Grant it and the backlog in that channel is rescanned
 automatically; the bot posts a note in the review channel saying what it
 recovered.
 
