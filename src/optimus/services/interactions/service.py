@@ -34,7 +34,7 @@ from optimus.core.loadstats import load_snapshot
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
 from optimus.db.engine import SessionScope
-from optimus.db.models import Guild, GuildHash, GuildWhitelist
+from optimus.db.models import Detection, Guild, GuildHash, GuildWhitelist
 from optimus.db.repositories import (
     AppealRepository,
     DeploymentBootRepository,
@@ -85,7 +85,7 @@ from optimus.services.moderation.permissions import (
     preflight_punitive,
     punitive_requirement,
 )
-from optimus.services.moderation.review import decode_custom_id
+from optimus.services.moderation.review import ReportData, build_folded_embed, decode_custom_id
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -201,6 +201,17 @@ def error_message(
     if reason is CommandError.IMPORT_BAD_ENTRY:
         defaults["entry"] = "?"
     return translate(key, locale, **{**defaults, **(params or {})})
+
+
+def _detection_facts(row: Detection) -> DetectionFacts:
+    return DetectionFacts(
+        detection_id=row.id,
+        channel_id=row.channel_id,
+        message_id=row.message_id,
+        attachment_id=row.attachment_id,
+        uploader_id=row.uploader_id,
+        hashes=row.hashes,
+    )
 
 
 class DbDeps:
@@ -389,16 +400,17 @@ class DbDeps:
             "total": total,
             "rows": [
                 {
-                    "detection_id": row.id,
-                    "channel_id": row.channel_id,
-                    "message_id": row.message_id,
-                    "uploader_id": row.uploader_id,
-                    "verdict": row.verdict,
+                    "detection_id": int(row["detection_id"]),
+                    "channel_id": int(row["channel_id"]),
+                    "message_id": int(row["message_id"]),
+                    "uploader_id": int(row["uploader_id"]),
+                    "verdict": row["verdict"],
+                    "images": int(row["images"]),
                     # aiosqlite strips tzinfo on round-trip, so re-attach UTC
                     # before subtracting rather than trusting what came back.
                     "age_seconds": max(
                         0.0,
-                        (now - row.created_at.replace(tzinfo=UTC)).total_seconds(),
+                        (now - row["created_at"].replace(tzinfo=UTC)).total_seconds(),
                     ),
                 }
                 for row in rows
@@ -475,16 +487,69 @@ class DbDeps:
 
     async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None:
         row = await DetectionRepository(self._session, guild_id).get(detection_id)
-        if row is None:
+        return None if row is None else _detection_facts(row)
+
+    async def get_card_detections(
+        self, guild_id: int, card_message_id: int
+    ) -> list[DetectionFacts]:
+        rows = await DetectionRepository(self._session, guild_id).list_on_card(card_message_id)
+        return [_detection_facts(row) for row in rows]
+
+    async def get_message_detections(self, guild_id: int, message_id: int) -> list[DetectionFacts]:
+        rows = await DetectionRepository(self._session, guild_id).list_for_message(message_id)
+        return [_detection_facts(row) for row in rows]
+
+    async def repost_review_card(
+        self, guild_id: int, detections: list[DetectionFacts]
+    ) -> int | None:
+        """Post a fresh, full review card for ``detections`` and link them to it.
+
+        Used by ``/queue detection:`` to reopen a folded card after a misclick.
+        ``None`` when there is no review channel, no REST client, or Discord
+        refused the post.
+        """
+        if self._rest is None or not detections:
             return None
-        return DetectionFacts(
-            detection_id=row.id,
-            channel_id=row.channel_id,
-            message_id=row.message_id,
-            attachment_id=row.attachment_id,
-            uploader_id=row.uploader_id,
-            hashes=row.hashes,
-        )
+        guild = await GuildRepository(self._session).get(guild_id)
+        if guild is None or guild.review_channel_id is None:
+            return None
+        repo = DetectionRepository(self._session, guild_id)
+        items: list[ReportData] = []
+        linked: list[int] = []
+        shown: set[tuple[int, int]] = set()
+        for det in sorted(detections, key=lambda d: d.detection_id):
+            row = await repo.get(det.detection_id)
+            if row is None:
+                continue
+            # Every row is linked so the buttons cover it, but each image is
+            # shown once: a confirmed verdict records a second row for it.
+            linked.append(row.id)
+            if (row.message_id, row.attachment_id) in shown:
+                continue
+            shown.add((row.message_id, row.attachment_id))
+            items.append(
+                ReportData(
+                    detection_id=row.id,
+                    guild_id=guild_id,
+                    channel_id=row.channel_id,
+                    message_id=row.message_id,
+                    uploader_id=row.uploader_id,
+                    verdict=row.verdict,
+                    # Not persisted on the row, as on /setup replay cards.
+                    confidence=None,
+                    action_taken=row.action_taken,
+                    locale=guild.locale,
+                )
+            )
+        if not items:
+            return None
+        try:
+            card_id = await self._rest.post_review_card(guild.review_channel_id, items)
+        except Exception:
+            _log.warning("review_card_repost_failed", guild_id=guild_id, exc_info=True)
+            return None
+        await repo.link_to_card(linked, card_id)
+        return card_id
 
     async def set_detection_action(self, guild_id: int, detection_id: int, action: str) -> None:
         await DetectionRepository(self._session, guild_id).set_action_taken(detection_id, action)
@@ -804,6 +869,8 @@ class DbDeps:
         attachment_id: int,
         uploader_id: int,
         matched_hash_id: str,
+        confirmed_by: int | None = None,
+        review_card_id: int | None = None,
     ) -> None:
         if self._detection is None:  # pragma: no cover - always wired at app startup
             _log.warning("reviewmsg_no_detection_service", guild_id=guild_id)
@@ -822,6 +889,8 @@ class DbDeps:
             confidence=1.0,
             matched_hash_id=matched_hash_id,
             matched_source="guild",
+            confirmed_by=confirmed_by,
+            review_card_id=review_card_id,
         )
         # Persist through THIS request's session -- the transaction already
         # holds SQLite's write lock (store_attachment_hash flushed an INSERT
@@ -1398,27 +1467,48 @@ async def run_interaction(  # pragma: no cover - hikari glue
 
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
-    """Defer an interaction before dispatch, then edit in the rendered result."""
+    """Defer an interaction before dispatch, then deliver the rendered result.
+
+    Review-card buttons are acknowledged as an update of the card itself, not
+    with a new message: a decision folds the card in place (see
+    :func:`_fold_card`), and that folded card *is* the confirmation -- every
+    moderator in the review channel sees it, and nobody collects one private
+    "done" message per press. Only a refusal or failure still answers the
+    clicker privately. Everything else (slash commands, appeal and other
+    buttons) keeps its private deferred reply.
+    """
     log_context = {
         "interaction_id": str(interaction.id),
         "command_name": getattr(interaction, "command_name", None),
     }
+    on_card = isinstance(interaction, hikari.ComponentInteraction) and (
+        decode_custom_id(interaction.custom_id) is not None
+    )
     try:
-        await interaction.create_initial_response(
-            hikari.ResponseType.DEFERRED_MESSAGE_CREATE,
-            flags=hikari.MessageFlag.EPHEMERAL,
-        )
+        if on_card:
+            await interaction.create_initial_response(hikari.ResponseType.DEFERRED_MESSAGE_UPDATE)
+        else:
+            await interaction.create_initial_response(
+                hikari.ResponseType.DEFERRED_MESSAGE_CREATE,
+                flags=hikari.MessageFlag.EPHEMERAL,
+            )
     except Exception:
         _log.exception("interaction_defer_failed", **log_context)
         return
 
     message, attachment_body, card_note = await run_interaction(service, interaction)
     if card_note:
-        await _append_card_note(interaction, card_note, log_context)
+        await _fold_card(interaction, card_note, log_context)
+        if on_card:
+            return
     if not message:
         return
     try:
-        if attachment_body is not None:
+        if on_card:
+            # The deferred update produced no message of its own, so the
+            # refusal goes out as a private follow-up.
+            await interaction.execute(message, flags=hikari.MessageFlag.EPHEMERAL)
+        elif attachment_body is not None:
             # Ephemeral responses support attachments; exports ride along as a
             # real downloadable file instead of being silently dropped.
             await interaction.edit_initial_response(
@@ -1435,26 +1525,43 @@ async def respond_to_interaction(service: InteractionService, interaction: Any) 
         _log.exception("interaction_edit_failed", **log_context)
 
 
-async def _append_card_note(interaction: Any, card_note: str, log_context: dict[str, Any]) -> None:
-    """Append a handled-by status line to the review card message, once.
+async def _fold_card(interaction: Any, card_note: str, log_context: dict[str, Any]) -> None:
+    """Collapse the review card to its title plus who decided what, without buttons.
 
-    The card lives in the shared review channel, so this line is what tells
-    the *other* moderators the report is already dealt with. Best-effort and
-    idempotent: a retried/double click whose note already sits in the content
-    is skipped, and any REST failure (card deleted, missing permission) is
-    logged without failing the interaction -- the clicker already got their
-    ephemeral confirmation.
+    The card lives in the shared review channel, so the folded line is what
+    tells the *other* moderators the report is dealt with, and removing the
+    buttons keeps a settled card from being acted on twice. A misclick is
+    corrected by reopening the card with ``/queue detection:<number>``.
+    Best-effort: any REST failure (card deleted, missing permission) is
+    logged without failing the interaction -- the decision is already saved.
     """
     card = getattr(interaction, "message", None)
     if card is None:  # pragma: no cover - slash commands have no source message
         return
     try:
-        content = card.content or ""
-        if card_note in content:
-            return
-        await card.edit(f"{content}\n\n{card_note}" if content else card_note)
+        await card.edit(content=None, embeds=[folded_card_embed(card, card_note)], components=[])
     except Exception:
-        _log.warning("card_note_edit_failed", **log_context)
+        _log.warning("card_fold_failed", **log_context)
+
+
+def folded_card_embed(card: Any, card_note: str) -> Any:
+    """The folded embed for ``card`` after a decision described by ``card_note``.
+
+    Keeps the card's title (number, verdict, image count) and its link to the
+    scanned message. A card that is already folded -- two moderators pressing
+    at once -- keeps its text and gains the second line, so neither decision
+    disappears from the channel.
+    """
+    embeds = list(getattr(card, "embeds", None) or [])
+    first = embeds[0] if embeds else None
+    title = getattr(first, "title", None)
+    url = getattr(first, "url", None)
+    if title is None and first is not None and getattr(first, "description", None):
+        body = str(first.description)
+        if card_note not in body:
+            body = f"{body}\n{card_note}"
+        return build_folded_embed(None, body, url)
+    return build_folded_embed(title, card_note, url)
 
 
 def _component_context(interaction: Any) -> InteractionContext:  # pragma: no cover - hikari glue
@@ -1466,6 +1573,9 @@ def _component_context(interaction: Any) -> InteractionContext:  # pragma: no co
         member_permissions=perms,
         command="",
         locale=str(getattr(interaction, "locale", "en") or "en"),
+        card_message_id=(
+            int(interaction.message.id) if getattr(interaction, "message", None) else None
+        ),
     )
 
 

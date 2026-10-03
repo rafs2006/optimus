@@ -43,7 +43,13 @@ card does, and every command and setting.
 
 Every detection — an automatic hash/risk match, a member report, or a
 moderator's `/scamhash review` — posts a **review card** into the review
-channel with the evidence and five buttons.
+channel with the evidence and the buttons below.
+
+There is **one card per message**. A post with several flagged images gets a
+single card that shows up to four of them together and says how many there
+are, and every button on it acts on all of them: Confirm blocklists every
+image, False positive whitelists every image, Dismiss closes them all, and the
+message is deleted or its uploader banned once.
 
 The card's **Message** field is a jump link straight to the offending message,
 and when the message still exists the image itself is shown on the card — so a
@@ -68,10 +74,21 @@ else both stay local to your server.
 
 Notes on cards:
 
-- When a moderator handles a card, the card gets a visible
-  `✅ <action> — handled by @moderator` line, so with several mods watching
-  one channel nobody double-handles a report. Detailed results are shown
-  only to the clicking moderator.
+- **A decided card folds.** As soon as a moderator presses a decision, the
+  card collapses to one grey line — its title plus
+  `✅ <action> — handled by @moderator` — and its buttons disappear, so with
+  several mods watching one channel nobody double-handles a report and the
+  channel stays short. There is no separate "done" message: the folded card is
+  the confirmation. Only a refusal or failure (missing permission, Discord
+  said no) is answered privately, and then the card stays open.
+- After **Confirm scam**, the folded card also shows what enforcement did
+  (`Action: …`). Cards from `/scamhash review` are posted already folded,
+  since a moderator already made the call.
+- **Fixing a misclick:** `/queue detection:<number>` posts that report again
+  as a full card with fresh buttons, covering every image of the message. Press
+  the right decision there; the old folded card stays as the record of the
+  first one. If the misclick was **False positive**, its whitelist entry
+  stays and still wins over the blocklist.
 - Each button needs the Discord permission that matches what it does, so
   the moderators you already trust with that power can use it — no Manage
   Server needed:
@@ -93,9 +110,9 @@ Notes on cards:
 - If a moderator gets "you don't have permission" on a button, give their
   role the permission above — adding them to `mod_role` only lets them *see*
   the channel.
-- **False positives are cheap, misses are not.** When in doubt, Confirm — the
-  card keeps an **Unban** button, so a wrong call is one press away from being
-  undone. Members who need to contest a call reach you directly.
+- **False positives are cheap, misses are not.** When in doubt, Confirm — a
+  wrong call is undone by reopening the card with `/queue detection:<number>`
+  and pressing **Unban**. Members who need to contest a call reach you directly.
 - **Do not use False positive to clear junk reports.** It permanently
   whitelists the image, so a member who reports a real scam image incorrectly
   would get that image exempted from detection forever. **Dismiss** is the
@@ -155,13 +172,13 @@ the card gives you signals for both:
 
 | Looks like | Signals | Reasonable response |
 | --- | --- | --- |
-| A scammer | brand-new account, no history in the server, posted the same image into several channels, no other messages | **Confirm scam**, then **Ban uploader** — the ban purges their recent messages too |
+| A scammer | brand-new account, no history in the server, posted the same image into several channels, no other messages | **Confirm scam**. With `action_policy delete_ban` that bans too; otherwise reopen the card (`/queue detection:<number>`) and press **Ban uploader** — the ban purges their recent messages too |
 | A stolen or hacked account | a known member with real history who suddenly posts a giveaway image, often across many channels at once, often at an odd hour | **Confirm scam** to kill the image, then a timeout rather than a ban — the owner is the victim and will want the account back |
 | Someone sharing a warning | a member posting a screenshot *of* a scam to warn others | **Whitelist image** if it will keep re-tripping, or leave it; do not punish |
 
 When you cannot tell, act on the image and be gentle with the account. Deleting
 the post is the urgent half; a ban is the reversible-but-annoying half, and
-**Unban** is right there on the card.
+**Unban** is one `/queue detection:<number>` away.
 
 ### The bar for pressing Confirm
 
@@ -213,7 +230,7 @@ Moderator commands (require **Manage Server**, except `/queue`, which needs
 | `/config set <field> <value>` | Change one setting (fields below). |
 | `/config permissions` | Check the review channel first, then list the channels the bot watches but can't enforce in, with the exact permission each is missing. Channels hidden from the bot are counted as private, not flagged. The first thing to run when "the bot ignored a scam". |
 | `/stats` | Detection activity, pipeline load, and the database persistence canary. |
-| `/queue` | List the cards still waiting on a decision, oldest first, each with a jump link. Answers "what did we miss while nobody was online?" — the review channel cannot, once the backlog has scrolled past a screen. |
+| `/queue [detection]` | List the cards still waiting on a decision, oldest first, each with a jump link and its image count. Answers "what did we miss while nobody was online?" — the review channel cannot, once the backlog has scrolled past a screen. `detection:<number>` reopens that report as a full card with buttons, to correct a decision. |
 | `/help` | This guide's short version, right inside Discord. Available to everyone. |
 
 Admin-only:

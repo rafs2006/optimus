@@ -96,6 +96,11 @@ class FakeDeps:
         #: Explicit rows; when absent, get_detection fabricates one per id
         #: (with stored hashes) unless ``detection_missing`` is set.
         self.detections: dict[int, DetectionFacts] = dict(flags.get("detections", {}))
+        #: review card message id -> detection ids shown on it
+        self.cards: dict[int, list[int]] = dict(flags.get("cards", {}))
+        self.confirm_meta: list[dict[str, Any]] = []
+        self.reposted: list[list[int]] = []
+        self._repost_fails: bool = bool(flags.get("repost_fails", False))
         self._detection_missing = flags.get("detection_missing", False)
         #: hashes for fabricated detections; pass ``stored_hashes=None`` to
         #: model a member report filed without hashes.
@@ -287,6 +292,30 @@ class FakeDeps:
         self.hashes[hash_id] = gh
         return gh
 
+    async def get_card_detections(
+        self, guild_id: int, card_message_id: int
+    ) -> list[DetectionFacts]:
+        out = []
+        for det_id in self.cards.get(card_message_id, []):
+            det = await self.get_detection(guild_id, det_id)
+            if det is not None:
+                out.append(det)
+        return out
+
+    async def get_message_detections(self, guild_id: int, message_id: int) -> list[DetectionFacts]:
+        return sorted(
+            (d for d in self.detections.values() if d.message_id == message_id),
+            key=lambda d: d.detection_id,
+        )
+
+    async def repost_review_card(
+        self, guild_id: int, detections: list[DetectionFacts]
+    ) -> int | None:
+        if self._repost_fails:
+            return None
+        self.reposted.append([d.detection_id for d in detections])
+        return 900 + len(self.reposted)
+
     async def get_detection(self, guild_id: int, detection_id: int) -> DetectionFacts | None:
         if self._detection_missing:
             return None
@@ -359,7 +388,10 @@ class FakeDeps:
         attachment_id: int,
         uploader_id: int,
         matched_hash_id: str,
+        confirmed_by: int | None = None,
+        review_card_id: int | None = None,
     ) -> None:
+        self.confirm_meta.append({"confirmed_by": confirmed_by, "review_card_id": review_card_id})
         self.confirmed_scams.append(
             {
                 "guild_id": guild_id,

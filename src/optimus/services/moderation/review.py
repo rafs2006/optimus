@@ -8,7 +8,8 @@ provisioning REST calls live behind thin adapters at the bottom of the module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any, cast
 
@@ -99,6 +100,15 @@ class ReportData:
     #: card must not read as a clean success.
     partial: bool = False
     locale: str = "en"
+    #: How many flagged images from the message this card covers. Images from
+    #: one message share one card (see :func:`merge_reports`).
+    image_count: int = 1
+    #: Further still-live images from the same message, shown alongside
+    #: ``image_url`` as a gallery (Discord renders up to four per message).
+    extra_image_urls: tuple[str, ...] = ()
+    #: Set when a moderator already confirmed this (Confirm scam, "Review as
+    #: scam"): the card is rendered folded -- outcome only, no buttons.
+    decided_by: int | None = None
 
 
 def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
@@ -119,8 +129,74 @@ def message_reference(data: ReportData) -> str:
 
 def report_title(data: ReportData) -> str:
     """A short, localized title for the report."""
+    if data.image_count > 1:
+        return translate(
+            "report.title_group",
+            data.locale,
+            detection_id=data.detection_id,
+            verdict=data.verdict.upper(),
+            count=data.image_count,
+        )
     return translate(
         "report.title", data.locale, detection_id=data.detection_id, verdict=data.verdict.upper()
+    )
+
+
+#: Discord shows at most four images in one message's embed gallery.
+MAX_CARD_IMAGES = 4
+#: Discord's embed field value limit.
+_FIELD_LIMIT = 1024
+#: Verdict strength, strongest last: the merged card shows the strongest one.
+_VERDICT_RANK = {"clean": 0, "ambiguous": 1, "scam": 2}
+
+
+def _unique(values: Sequence[str | None]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= _FIELD_LIMIT else text[: _FIELD_LIMIT - 1] + "\u2026"
+
+
+def merge_reports(items: Sequence[ReportData]) -> ReportData:
+    """Fold the reports for every flagged image of one message into one card.
+
+    The first item (lowest detection id) gives the card its number and its
+    buttons; the rest contribute evidence. Each field keeps the most useful
+    value across images: the strongest verdict and highest confidence, every
+    distinct matched hash, action, OCR finding and problem, and every live
+    image for the gallery. A single item comes back unchanged.
+    """
+    if not items:
+        raise ValueError("merge_reports needs at least one report")
+    first = items[0]
+    if len(items) == 1:
+        return first
+    verdict = max((i.verdict for i in items), key=lambda v: _VERDICT_RANK.get(v, 0))
+    confidences = [i.confidence for i in items if i.confidence is not None]
+    images = _unique([i.image_url for i in items])
+    swarm = [i.swarm_guilds for i in items if i.swarm_guilds]
+    return replace(
+        first,
+        verdict=verdict,
+        confidence=max(confidences) if confidences else None,
+        action_taken=_clip("; ".join(_unique([i.action_taken for i in items]))),
+        matched_hash_id=", ".join(_unique([i.matched_hash_id for i in items])) or None,
+        global_match=any(i.global_match for i in items),
+        swarm_guilds=max(swarm) if swarm else None,
+        evidence_url=next((i.evidence_url for i in items if i.evidence_url), None),
+        image_url=images[0] if images else None,
+        extra_image_urls=tuple(images[1:MAX_CARD_IMAGES]),
+        reported_by=next((i.reported_by for i in items if i.reported_by), None),
+        ocr_summary=_clip("\n".join(_unique([i.ocr_summary for i in items]))) or None,
+        problem=_clip("\n".join(_unique([i.problem for i in items]))) or None,
+        partial=any(i.partial for i in items),
+        image_count=len(items),
+        decided_by=next((i.decided_by for i in items if i.decided_by), None),
     )
 
 
@@ -192,14 +268,44 @@ BUTTON_LABELS: dict[ReviewAction, str] = {
 
 def build_embed(data: ReportData) -> object:
     """Build a hikari embed for ``data`` (imported lazily to keep this testable)."""
+    return build_embeds(data)[0]
+
+
+def build_embeds(data: ReportData) -> list[Any]:
+    """The card's embeds: the report, plus one per extra image for the gallery.
+
+    Discord merges embeds that share a ``url`` into one embed with an image
+    grid, which is how one card shows up to four images. The shared url is
+    the scanned message's jump link, so the title doubles as a link to it.
+    """
     import hikari
 
-    embed = hikari.Embed(title=report_title(data))
+    url = jump_url(data.guild_id, data.channel_id, data.message_id)
+    embed = hikari.Embed(title=report_title(data), url=url)
     for name, value in report_fields(data):
         embed.add_field(name=name, value=value, inline=True)
     if data.image_url:
         embed.set_image(data.image_url)
-    return embed
+    embeds = [embed]
+    for extra in data.extra_image_urls:
+        embeds.append(hikari.Embed(url=url).set_image(extra))
+    return embeds
+
+
+#: Embed colour of a folded (decided) card: Discord's muted grey.
+FOLDED_COLOUR = 0x4F545C
+
+
+def folded_text(title: str | None, note: str) -> str:
+    """The one-line body of a decided card: its title, then who did what."""
+    return f"**{title}**\n{note}" if title else note
+
+
+def build_folded_embed(title: str | None, note: str, url: str | None = None) -> Any:
+    """The small grey embed a card collapses to once a moderator decides."""
+    import hikari
+
+    return hikari.Embed(description=folded_text(title, note), url=url, colour=FOLDED_COLOUR)
 
 
 def build_action_rows(detection_id: int) -> list[object]:
@@ -231,3 +337,34 @@ def build_action_rows(detection_id: int) -> list[object]:
     if buttons_in_row:
         rows.append(row)
     return rows
+
+
+def decided_note(data: ReportData) -> str:
+    """The folded body of a card a moderator already confirmed: who, and the outcome."""
+    loc = data.locale
+    lines = [
+        translate(
+            "card.handled",
+            loc,
+            action=BUTTON_LABELS[ReviewAction.CONFIRM_SCAM],
+            user_id=data.decided_by,
+        ),
+        f"{translate('report.field_action', loc)}: {data.action_taken}",
+    ]
+    if data.problem:
+        lines.append(data.problem)
+    return "\n".join(lines)
+
+
+def build_card(items: Sequence[ReportData]) -> tuple[list[Any], list[object]]:
+    """Embeds and button rows for the card covering ``items`` (one message).
+
+    An undecided card is the full report with buttons. A card a moderator
+    already confirmed is folded: title, who confirmed it and what enforcement
+    did, no buttons -- there is nothing left to decide on it.
+    """
+    merged = merge_reports(items)
+    if merged.decided_by is not None:
+        url = jump_url(merged.guild_id, merged.channel_id, merged.message_id)
+        return [build_folded_embed(report_title(merged), decided_note(merged), url)], []
+    return build_embeds(merged), build_action_rows(merged.detection_id)

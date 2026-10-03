@@ -262,6 +262,8 @@ class Detection(Base):
         # used; the row count on ``reported_at IS NULL`` is small in steady
         # state anyway.
         Index("ix_detections_guild_reported", "guild_id", "reported_at", "created_at"),
+        # Every review-card click looks up "all detections on this card".
+        Index("ix_detections_guild_card", "guild_id", "review_message_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -286,6 +288,11 @@ class Detection(Base):
     #: ``/setup``) or the post failed. These are the rows the ``/setup``
     #: backlog replay finds. A stamped row is never replayed again.
     reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The review-channel message id of the card this detection is shown on.
+    #: Images from one message share a card, so the card's buttons act on every
+    #: row carrying its id. ``None`` until a card is posted, and on rows
+    #: reported before migration 0012 (those keep one card per image).
+    review_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class Appeal(Base):

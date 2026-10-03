@@ -75,24 +75,33 @@ async def test_attachment_body_is_uploaded_as_a_file(monkeypatch: pytest.MonkeyP
     assert attachment.data == b'{"version": 1, "hashes": []}'
 
 
-async def test_card_note_is_appended_to_the_review_card(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A ``card_note`` must be appended to the button's source message once.
-
-    The note is what tells the *other* moderators in the shared review channel
-    that the report was handled and by whom; a double click (or interaction
-    retry) whose note is already present must not append it twice.
-    """
+def _review_click(custom_id: str = "om:v1:dismiss:7") -> tuple[MagicMock, MagicMock]:
     interaction = MagicMock(spec=hikari.ComponentInteraction)
+    interaction.custom_id = custom_id
     interaction.create_initial_response = AsyncMock()
     interaction.edit_initial_response = AsyncMock()
+    interaction.execute = AsyncMock()
     card = MagicMock()
-    card.content = "Scam detected: #7"
+    card.content = None
+    card.embeds = [
+        hikari.Embed(title="Scam detection #7 — SCAM · 4 images", url="https://discord.com/x")
+    ]
     card.edit = AsyncMock()
     interaction.message = card
+    return interaction, card
 
-    note = "Confirmed scam — handled by <@42>"
+
+async def test_review_decision_folds_the_card_without_a_private_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decision collapses the card in place; the folded card is the confirmation.
+
+    The press is acknowledged as an update of the card itself, so no private
+    "done" message piles up per press, and the buttons are removed so a
+    settled card cannot be acted on again.
+    """
+    interaction, card = _review_click()
+    note = "✅ **Dismiss** — handled by <@42>"
 
     async def run_interaction(
         service: object, received_interaction: object
@@ -102,13 +111,64 @@ async def test_card_note_is_appended_to_the_review_card(
     monkeypatch.setattr(interaction_service, "run_interaction", run_interaction)
 
     await interaction_service.respond_to_interaction(MagicMock(), interaction)
-    card.edit.assert_awaited_once_with(f"Scam detected: #7\n\n{note}")
 
-    # Second click: the note already sits in the content -> no second edit.
-    card.content = f"Scam detected: #7\n\n{note}"
-    card.edit.reset_mock()
+    interaction.create_initial_response.assert_awaited_once_with(
+        hikari.ResponseType.DEFERRED_MESSAGE_UPDATE
+    )
+    card.edit.assert_awaited_once()
+    kwargs = card.edit.await_args.kwargs
+    assert kwargs["content"] is None
+    assert kwargs["components"] == []
+    (folded,) = kwargs["embeds"]
+    assert folded.title is None
+    assert folded.description == f"**Scam detection #7 — SCAM · 4 images**\n{note}"
+    assert folded.url == "https://discord.com/x"
+    interaction.edit_initial_response.assert_not_awaited()
+    interaction.execute.assert_not_awaited()
+
+
+async def test_review_refusal_replies_privately_and_leaves_the_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No decision (permission refused, Discord said no): card untouched, private reply."""
+    interaction, card = _review_click("om:v1:unban:7")
+
+    async def run_interaction(
+        service: object, received_interaction: object
+    ) -> tuple[str, str | None, str | None]:
+        return RESPONSE_MESSAGE, None, None
+
+    monkeypatch.setattr(interaction_service, "run_interaction", run_interaction)
+
     await interaction_service.respond_to_interaction(MagicMock(), interaction)
+
     card.edit.assert_not_awaited()
+    interaction.execute.assert_awaited_once_with(
+        RESPONSE_MESSAGE, flags=hikari.MessageFlag.EPHEMERAL
+    )
+    interaction.edit_initial_response.assert_not_awaited()
+
+
+def test_folding_an_already_folded_card_keeps_both_decisions() -> None:
+    """Two moderators pressing at once: the second line joins the first, once."""
+    card = MagicMock()
+    first = "**Scam detection #7 — SCAM**\n✅ **Dismiss** — handled by <@1>"
+    card.embeds = [hikari.Embed(description=first, url="https://discord.com/x")]
+    second = "✅ **Confirm scam** — handled by <@2>"
+
+    folded = interaction_service.folded_card_embed(card, second)
+    assert folded.description == f"{first}\n{second}"
+
+    card.embeds = [folded]
+    again = interaction_service.folded_card_embed(card, second)
+    assert again.description == f"{first}\n{second}"
+
+
+def test_folding_a_card_without_embeds_still_shows_the_decision() -> None:
+    card = MagicMock()
+    card.embeds = []
+    folded = interaction_service.folded_card_embed(card, "note")
+    assert folded.description == "note"
 
 
 async def test_card_note_edit_failure_does_not_break_the_reply(
