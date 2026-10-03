@@ -93,6 +93,22 @@ The opt-out and appeal surfaces discussed in #49 are historical: #50 removed
 appeals and #51 removed self-service scanning opt-out. This gate does not
 restore either feature.
 
+### Moderator review permissions
+
+Since [#57](https://github.com/rafs2006/optimus/pull/57), each review action is
+authorized by the Discord permission that matches its effect rather than by
+Manage Server: **Ban uploader** and **Unban** require Ban Members; **Confirm
+scam**, **False positive**, **Dismiss**, **Whitelist image**, and `/queue`
+require Manage Messages. Administrator implies all of them; Manage Server
+implies none of them. Confirm stays on Manage Messages because it applies the
+server's standing `action_policy`, the same decision the automatic pipeline
+enforces. Setup and settings commands remain on Manage Server and
+`/delete_server_data` on Administrator. `mod_role` grants visibility of cards,
+not permission to act. The permission mask is derived from the enum, and an
+action missing from the permission map falls back to Manage Server, never to no
+check. See the [moderator guide](docs/moderator-guide.md) and
+[security audit](docs/security-audit.md).
+
 ### Proposed improvements
 
 The seven items below are the plan against the head of `main` as of
@@ -176,3 +192,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#48 --> Applied: centralize evidence-bearing, encoded-length-bounded audit reasons across moderation actions - from #48.
 
 <!-- decision:rafs2006/optimus#49 --> Applied: gate permissionless command registration and dispatch while retaining subsequent removal of appeals and self-service opt-out - from #49.
+
+<!-- decision:rafs2006/optimus#57 --> Applied: review actions are authorized per action by Ban Members or Manage Messages instead of Manage Server, with fail-closed handling for unmapped actions - from #57.
