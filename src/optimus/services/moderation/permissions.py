@@ -209,41 +209,90 @@ def effective_permissions(
 
 @dataclass(frozen=True, slots=True)
 class AccessReport:
-    """What enforcement can and cannot do across a whole guild, right now.
+    """What the bot can and cannot do across a whole guild, right now.
 
     Built from cached permissions for every textable channel, so ``/config
     permissions`` can answer "where are we blind?" without a request per
     channel -- and, unlike a record of past failures, it also names channels no
     scam has landed in yet.
+
+    Channels are sorted into what actually needs a moderator's attention:
+
+    * the **review channel**, checked on its own, because it is the one private
+      channel the bot must see -- without it no card reaches a moderator;
+    * **hidden** channels (the bot lacks View Channel): treated as private by
+      design and only counted, never flagged. Staff, beta and archive channels
+      hide themselves from everyone; demanding access to them would push a
+      server to hand the bot rooms it has no business in;
+    * **blocked** channels: visible, but enforcement under the current action
+      policy is impossible there (it cannot delete);
+    * **advisory** channels: visible and watched, and only short of what a
+      deleting policy would need -- a heads-up while on ``report_only``.
     """
 
-    #: Channels checked (excludes ones ignored by config).
+    #: Visible channels evaluated (excludes ignored and hidden ones).
     checked: int
-    #: Channels skipped because ``/config`` ignores them.
+    #: Channels skipped because the guild's ignore list contains them.
     ignored: int
-    #: ``(channel_id, missing permission names)`` for each blocked channel,
-    #: grouped by the caller for display.
+    #: ``(channel_id, missing permission names)`` where the current policy
+    #: cannot be carried out.
     blocked: tuple[tuple[int, tuple[str, ...]], ...]
     #: Guild-wide permissions the punitive step needs but the bot lacks.
     guild_missing: tuple[str, ...]
+    #: Channels the bot cannot see; not monitored, not a fault.
+    hidden: int = 0
+    #: ``(channel_id, missing)`` the bot watches but could not delete in, were
+    #: deleting switched on. Only populated under ``report_only``.
+    advisory: tuple[tuple[int, tuple[str, ...]], ...] = ()
+    #: The linked review channel, or ``None`` when ``/setup`` has not run.
+    review_channel_id: int | None = None
+    #: What the bot lacks to post review cards there (empty = fine).
+    review_missing: tuple[str, ...] = ()
+    #: The linked review channel no longer exists in the guild.
+    review_channel_missing: bool = False
+
+    @property
+    def review_ok(self) -> bool:
+        """Whether review cards can be posted (fails closed if none is linked)."""
+        return (
+            self.review_channel_id is not None
+            and not self.review_channel_missing
+            and not self.review_missing
+        )
 
     @property
     def ok(self) -> bool:
-        """Whether nothing at all is blocked."""
-        return not self.blocked and not self.guild_missing
+        """Whether nothing needs fixing. Hidden and advisory channels never count."""
+        return self.review_ok and not self.blocked and not self.guild_missing
 
     def grouped(self) -> tuple[tuple[tuple[str, ...], tuple[int, ...]], ...]:
         """Blocked channels bucketed by identical missing-permission sets.
 
         Ten channels missing the same permission render as one line, not ten.
         """
-        buckets: dict[tuple[str, ...], list[int]] = {}
-        for channel_id, missing in self.blocked:
-            buckets.setdefault(missing, []).append(channel_id)
-        return tuple(
-            (missing, tuple(channel_ids))
-            for missing, channel_ids in sorted(buckets.items(), key=lambda kv: -len(kv[1]))
-        )
+        return _group(self.blocked)
+
+    def advisory_grouped(self) -> tuple[tuple[tuple[str, ...], tuple[int, ...]], ...]:
+        return _group(self.advisory)
+
+
+def _group(
+    rows: tuple[tuple[int, tuple[str, ...]], ...],
+) -> tuple[tuple[tuple[str, ...], tuple[int, ...]], ...]:
+    buckets: dict[tuple[str, ...], list[int]] = {}
+    for channel_id, missing in rows:
+        buckets.setdefault(missing, []).append(channel_id)
+    return tuple(
+        (missing, tuple(channel_ids))
+        for missing, channel_ids in sorted(buckets.items(), key=lambda kv: -len(kv[1]))
+    )
+
+
+def _is_hidden(granted: int | None) -> bool:
+    """The bot cannot see this channel (unknown permissions fail open: visible)."""
+    if granted is None or granted & ADMINISTRATOR:
+        return False
+    return not granted & VIEW_CHANNEL
 
 
 def build_access_report(
@@ -252,25 +301,45 @@ def build_access_report(
     ignored_channels: frozenset[int] = frozenset(),
     guild_permissions: int | None = None,
     punitive: int = 0,
-    required: int = DELETE_REQUIRES,
+    deletes: bool = True,
+    review_channel_id: int | None = None,
 ) -> AccessReport:
     """Summarize per-channel access into a report for display.
 
-    ``required`` is what enforcement needs in a channel (deleting a scam image);
-    ``punitive`` is the guild-wide bit its ban/kick/timeout step needs, checked
-    once rather than per channel.
+    ``deletes`` is whether the guild's action policy removes scam images: only
+    then is Manage Messages a requirement. Under ``report_only`` the bot needs
+    nothing beyond seeing a channel, and a missing Manage Messages is reported
+    as advisory. ``punitive`` is the guild-wide bit the ban/kick/timeout step
+    needs, checked once rather than per channel. The review channel is checked
+    against what posting a card needs, whether or not it is otherwise hidden.
     """
     blocked: list[tuple[int, tuple[str, ...]]] = []
-    checked = 0
-    ignored = 0
+    advisory: list[tuple[int, tuple[str, ...]]] = []
+    checked = ignored = hidden = 0
+    review_granted: int | None = None
+    review_seen = False
     for channel_id, granted in channel_access:
+        if channel_id == review_channel_id:
+            review_seen = True
+            review_granted = granted
+            continue
         if channel_id in ignored_channels:
             ignored += 1
             continue
+        if _is_hidden(granted):
+            hidden += 1
+            continue
         checked += 1
-        result = check(required, granted)
-        if not result.ok:
-            blocked.append((channel_id, result.missing))
+        result = check(DELETE_REQUIRES, granted)
+        if result.ok:
+            continue
+        (blocked if deletes else advisory).append((channel_id, result.missing))
+
+    review_missing: tuple[str, ...] = ()
+    if review_seen:
+        review_result = check(REPORT_REQUIRES, review_granted)
+        review_missing = () if review_result.ok else review_result.missing
+
     guild_missing: tuple[str, ...] = ()
     if punitive and guild_permissions is not None:
         guild_result = check(punitive, guild_permissions)
@@ -281,6 +350,11 @@ def build_access_report(
         ignored=ignored,
         blocked=tuple(blocked),
         guild_missing=guild_missing,
+        hidden=hidden,
+        advisory=tuple(advisory),
+        review_channel_id=review_channel_id,
+        review_missing=review_missing,
+        review_channel_missing=review_channel_id is not None and not review_seen,
     )
 
 

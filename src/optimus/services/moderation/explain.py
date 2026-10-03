@@ -86,24 +86,62 @@ def explain_result(
     return "\n".join(lines)
 
 
+def _channel_listing(channel_ids: tuple[int, ...], locale: str) -> str:
+    shown = channel_ids[:_MAX_CHANNELS_PER_GROUP]
+    listing = "  ".join(f"<#{cid}>" for cid in shown)
+    hidden = len(channel_ids) - len(shown)
+    if hidden:
+        listing += " " + translate("command.permissions_more", locale, count=hidden)
+    return listing
+
+
+def _review_line(report: AccessReport, locale: str) -> str:
+    if report.review_channel_id is None:
+        return translate("command.permissions_review_unset", locale)
+    channel = f"<#{report.review_channel_id}>"
+    if report.review_channel_missing:
+        return translate("command.permissions_review_gone", locale, channel=channel)
+    if report.review_missing:
+        return translate(
+            "command.permissions_review_blocked",
+            locale,
+            channel=channel,
+            missing=", ".join(report.review_missing),
+        )
+    return translate("command.permissions_review_ok", locale, channel=channel)
+
+
 def explain_access_report(report: AccessReport, locale: str) -> str:
     """Render an :class:`AccessReport` as the body of ``/config permissions``.
 
-    Deliberately silent when healthy -- a wall of green checkmarks for every
-    channel is noise. When something is blocked, channels are grouped by the
-    permission they are missing and rendered as mentions, which Discord shows as
-    the channel's real name rather than a raw id.
+    The review channel always comes first: it is the one private channel the
+    bot must reach, and the one failure that silently stops every card. Real
+    gaps follow, grouped by the permission they lack and rendered as channel
+    mentions (Discord shows the real name). Channels hidden from the bot are
+    only counted -- private staff channels are expected, not a fault -- and a
+    ``report_only`` server is told what deleting would need without being told
+    anything is broken.
     """
-    if report.ok:
-        return translate("command.permissions_all_ok", locale, checked=report.checked)
-    lines = [
-        translate(
-            "command.permissions_header",
-            locale,
-            blocked=len(report.blocked),
-            checked=report.checked,
+    lines = [_review_line(report, locale)]
+    if report.blocked:
+        lines.append(
+            "\n"
+            + translate(
+                "command.permissions_header",
+                locale,
+                blocked=len(report.blocked),
+                checked=report.checked,
+            )
         )
-    ]
+        for missing, channel_ids in report.grouped():
+            lines.append(
+                translate("command.permissions_group", locale, missing=", ".join(missing))
+                + "\n"
+                + _channel_listing(channel_ids, locale)
+            )
+        lines.append(translate("command.permissions_how_to_fix", locale))
+    else:
+        lines.append(translate("command.permissions_all_ok", locale, checked=report.checked))
     if report.guild_missing:
         lines.append(
             "\n"
@@ -113,21 +151,20 @@ def explain_access_report(report: AccessReport, locale: str) -> str:
                 missing=", ".join(report.guild_missing),
             )
         )
-    for missing, channel_ids in report.grouped():
-        shown = channel_ids[:_MAX_CHANNELS_PER_GROUP]
-        listing = "  ".join(f"<#{cid}>" for cid in shown)
-        hidden = len(channel_ids) - len(shown)
-        if hidden:
-            listing += " " + translate("command.permissions_more", locale, count=hidden)
+    for missing, channel_ids in report.advisory_grouped():
         lines.append(
             "\n"
-            + translate("command.permissions_group", locale, missing=", ".join(missing))
+            + translate("command.permissions_advisory", locale, missing=", ".join(missing))
             + "\n"
-            + listing
+            + _channel_listing(channel_ids, locale)
         )
-    lines.append("\n" + translate("command.permissions_how_to_fix", locale))
+    footer = []
+    if report.hidden:
+        footer.append(translate("command.permissions_hidden", locale, count=report.hidden))
     if report.ignored:
-        lines.append(translate("command.permissions_ignored", locale, count=report.ignored))
+        footer.append(translate("command.permissions_ignored", locale, count=report.ignored))
+    if footer:
+        lines.append("\n" + "\n".join(footer))
     return "\n".join(lines)
 
 

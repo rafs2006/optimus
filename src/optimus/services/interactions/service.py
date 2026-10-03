@@ -658,6 +658,8 @@ class DbDeps:
             ignored_channels=config.ignored_channels,
             guild_permissions=guild_permissions,
             punitive=punitive_requirement(policy),
+            deletes=policy.value.startswith("delete"),
+            review_channel_id=guild.review_channel_id if guild is not None else None,
         )
 
     async def hash_rate_ok(self, user_id: int) -> bool:

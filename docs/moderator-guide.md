@@ -17,7 +17,8 @@ card does, and every command and setting.
 
 1. **Invite the bot** with these permissions: View Channels, Read Message
    History, Manage Messages (delete scams), Ban Members (ban scammers),
-   Manage Channels (create the review channel), Moderate Members (timeouts),
+   Manage Channels (only so `/setup` can create the review channel; remove it
+   afterwards if you like), Moderate Members (timeouts),
    plus the `applications.commands` scope. The README's
    [Quickstart](../README.md#quickstart) has the full OAuth walkthrough.
 2. **Run `/setup mod_role:@YourModRole`.** This creates a private
@@ -204,7 +205,7 @@ Moderator commands (require **Manage Server**, except `/queue`, which needs
 | `/scamhash review <message>` | Mark a posted message as scam by link/ID: blocks its images and applies the action policy. Also available as right-click → Apps → *Review as scam*. |
 | `/config view` | Show all settings. |
 | `/config set <field> <value>` | Change one setting (fields below). |
-| `/config permissions` | List every channel where the bot cannot enforce, and the exact permission it is missing. The first thing to run when "the bot ignored a scam". |
+| `/config permissions` | Check the review channel first, then list the channels the bot watches but can't enforce in, with the exact permission each is missing. Channels hidden from the bot are counted as private, not flagged. The first thing to run when "the bot ignored a scam". |
 | `/stats` | Detection activity, pipeline load, and the database persistence canary. |
 | `/queue` | List the cards still waiting on a decision, oldest first, each with a jump link. Answers "what did we miss while nobody was online?" — the review channel cannot, once the backlog has scrolled past a screen. |
 | `/help` | This guide's short version, right inside Discord. Available to everyone. |
@@ -288,7 +289,12 @@ community can ever cause action on your server**:
   before the bot joined don't survive.
 - **`/config permissions` answers "why did the bot ignore that?"** Nine times
   out of ten the bot could not act in that channel rather than chose not to.
-  The command lists the blocked channels and the missing permission for each.
+  It starts with the review channel — if the bot can't post cards there, no
+  moderator sees any detection — then lists the channels it watches but can't
+  enforce in, with the missing permission for each. Channels hidden from the
+  bot (staff, beta, archive rooms) are only counted: keeping them private is
+  fine. On `report_only`, a missing Manage Messages is shown as what deleting
+  would need, not as a fault.
   Grant it and the bot notices on its own — no restart, no re-running anything:
   it rescans that channel's recent history for scams posted while it was locked
   out and posts a note in the review channel saying what it found.
