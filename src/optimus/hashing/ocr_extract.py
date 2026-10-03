@@ -121,10 +121,16 @@ _URL_TLDS = (
     "ly|sh|so|tv|us|uk|ru|cn|in|de|fr|br|ua|pl|nl|eu|ca|au|jp|kr|ir|tr|vn|id"
 )
 
+# What a scheme-less address may end in: any two letters (every country code,
+# which covers shorteners like goo.gl, is.gd, rb.gy and phishing on .lt, .es
+# ...), or one of the longer endings above, plus forms.gle. Kept separate from
+# _URL_TLDS so the defang rejoins below stay on the curated list.
+_URL_ENDINGS = r"[a-z]{2}|" + "|".join(t for t in _URL_TLDS.split("|") if len(t) > 2) + "|gle"
+
 _URL_RE = re.compile(
     r"https?://[^\s<>'\"]+"
     r"|www\.[^\s<>'\"]+"
-    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _URL_TLDS + r")\b(?:/[^\s<>'\"]*)?",
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:" + _URL_ENDINGS + r")\b(?:/[^\s<>'\"]*)?",
     re.IGNORECASE,
 )
 
@@ -146,13 +152,23 @@ _DEFANG_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(" + _URL_TLDS + r")\s+/\s*", re.I), r"\1/"),
 )
 
-# Domains whose appearance in a screenshot is not, by itself, a reason for
-# suspicion: the official AI domains (which the lookalike check protects) plus
-# Discord's own web addresses, which appear in nearly every screenshot of a
-# server. A URL on these earns no co-occurrence bonus. Lookalikes of the AI
-# domains are still scored, through the separate lookalike bonus. discord.gg
-# invite links are not here: an invite next to "free Nitro" is a classic lure.
-_NO_BONUS_DOMAINS: frozenset[str] = OFFICIAL_AI_DOMAINS | {"discord.com", "discordapp.com"}
+# Sites whose appearance in a screenshot is not, by itself, a reason for
+# suspicion: the official AI sites (which the lookalike check protects) and
+# Discord's own web address, which appears in nearly every screenshot of a
+# server. A link to one of these earns no co-occurrence bonus.
+#
+# Exact hosts only. A subdomain is not trusted, and neither is any host where
+# anyone can publish a page: Google (Forms, Sites, Docs), Hugging Face Spaces
+# and Replicate all host phishing pages. Lookalikes of the AI domains are still
+# scored, through the separate lookalike bonus.
+_USER_CONTENT_HOSTS: frozenset[str] = frozenset({"google.com", "huggingface.co", "replicate.com"})
+_DISCORD_HOSTS: frozenset[str] = frozenset({"discord.com", "discordapp.com"})
+_NO_BONUS_HOSTS: frozenset[str] = (OFFICIAL_AI_DOMAINS - _USER_CONTENT_HOSTS) | _DISCORD_HOSTS
+
+# Discord paths that are a lure in themselves: server invites (same as
+# discord.gg, which is never trusted) and bot authorization, the "verify by
+# authorizing this app" scam.
+_DISCORD_RISKY_PATH = re.compile(r"^/(?:api/(?:v\d+/)?)?(?:oauth2|invite)\b", re.I)
 
 # Signals strong enough that a link beside them is a real scam pattern. Weak
 # marketing words (free, team, support, limited) next to a link are how
@@ -376,8 +392,9 @@ def find_phishing_signals(
       crypto_address) co-occurs with a URL: scam text + link = high risk
     - +1 if only weak/medium signals co-occur with a URL, so "team" or
       "free" beside a link cannot reach "high" on its own
-    - URLs on official domains (perplexity.ai, discord.com, ...) earn no URL
-      bonus at all; lookalikes of them are scored by the next rule
+    - URLs on exact official hosts (perplexity.ai, discord.com, ...) earn no
+      URL bonus; subdomains, user-content hosts (Google, Hugging Face) and
+      Discord invite/authorization links do. Lookalikes are scored next
     - +3 if signals co-occur with a lookalike domain
     """
     if not text:
@@ -420,21 +437,25 @@ def find_phishing_signals(
 # ---------------------------------------------------------------------------
 
 
-def _is_no_bonus_domain(domain: str) -> bool:
-    return any(domain == d or domain.endswith("." + d) for d in _NO_BONUS_DOMAINS)
+def _is_trusted_url(url: str) -> bool:
+    """Whether ``url`` is on an exact official host and not a risky path there.
+
+    Unparseable URLs, subdomains, user-content hosts and Discord invite or
+    authorization links are all untrusted (fail toward scoring them).
+    """
+    domain = normalize_domain(url)
+    if not domain or domain not in _NO_BONUS_HOSTS:
+        return False
+    if domain in _DISCORD_HOSTS:
+        path = urlparse(url if url.startswith(("http://", "https://")) else "http://" + url).path
+        if _DISCORD_RISKY_PATH.match(path):
+            return False
+    return True
 
 
 def _has_untrusted_url(urls: list[str] | None) -> bool:
-    """Whether any URL points somewhere other than a known official domain.
-
-    A URL whose domain cannot be parsed counts as untrusted (fail toward
-    scoring it, as before).
-    """
-    for url in urls or ():
-        domain = normalize_domain(url)
-        if not domain or not _is_no_bonus_domain(domain):
-            return True
-    return False
+    """Whether any URL points somewhere other than a trusted official page."""
+    return any(not _is_trusted_url(url) for url in urls or ())
 
 
 def extract_urls(text: str) -> list[str]:

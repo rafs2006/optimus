@@ -81,6 +81,18 @@ SCAMS = [
         "You have been selected! Redeem your gift at gift-claim . com / redeem", id="spaced-dot"
     ),
     pytest.param("Free Pro, limited time: perplexity-gift dot com", id="dot-word-lookalike"),
+    # Lures hosted on trusted names: subdomains, user-content hosts and
+    # Discord's own invite / bot-authorization links must not be trusted.
+    pytest.param(
+        "Authorize app to verify: discord.com/oauth2/authorize?client_id=1", id="discord-oauth2"
+    ),
+    pytest.param("Claim your reward: huggingface.co/spaces/evil/drainer", id="hf-space"),
+    pytest.param("Login to verify: docs.google.com/forms/d/abc", id="google-form"),
+    # Shorteners and country-code domains must still be seen as links.
+    pytest.param("Claim now: goo.gl/xyz", id="goo-gl"),
+    pytest.param("Sign in to claim: forms.gle/abc123", id="forms-gle"),
+    pytest.param("Redeem: is.gd/abc", id="is-gd"),
+    pytest.param("Login: scam-site.lt/login", id="cctld"),
 ]
 
 
@@ -116,6 +128,59 @@ def test_prose_yields_no_urls(text: str) -> None:
 )
 def test_defanged_and_bare_domains_still_parse(text: str, url: str) -> None:
     assert url in extract_urls(_repair_urls(text))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "goo.gl/xyz",
+        "forms.gle/abc123",
+        "is.gd/abc",
+        "rb.gy/abc",
+        "scam-site.lt/login",
+        "t.me/drainerbot",
+        "bit.ly/x",
+    ],
+)
+def test_shorteners_and_country_codes_are_links(url: str) -> None:
+    assert extract_urls(f"go to {url} now") == [url]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "perplexity.ai/pro",
+        "https://www.perplexity.ai/search/x",
+        "chatgpt.com/share/abc",
+        "discord.com/channels/1/2",
+        "https://discordapp.com/channels/1",
+    ],
+)
+def test_exact_official_hosts_earn_no_url_bonus(url: str) -> None:
+    _, with_link, _ = find_phishing_signals("redeem", urls=[url])
+    _, without, _ = find_phishing_signals("redeem")
+    assert with_link == without
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "help.perplexity.ai",  # subdomain
+        "docs.google.com/forms/d/abc",  # user content
+        "sites.google.com/view/x",
+        "google.com/url?q=evil",
+        "huggingface.co/spaces/evil/drainer",
+        "replicate.com/evil/model",
+        "discord.com/invite/abc",
+        "https://discord.com/oauth2/authorize?client_id=1",
+        "discord.com/api/oauth2/authorize?client_id=1",
+        "discord.com/api/v10/oauth2/authorize",
+        "discord.gg/abc",
+    ],
+)
+def test_subdomains_user_content_and_discord_lures_are_untrusted(url: str) -> None:
+    _, score, _ = find_phishing_signals("redeem", urls=[url])
+    assert score == 5
 
 
 def test_official_link_earns_no_url_bonus() -> None:

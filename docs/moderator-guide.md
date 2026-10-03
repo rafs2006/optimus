@@ -116,7 +116,8 @@ channel. Read it in this order and stop as soon as you have an answer.
    to look, not as a verdict. Common words ("team", "support", "free") next
    to a link are not enough on their own, and links to the official AI sites
    or discord.com don't count against an image, so ordinary screenshots stay
-   out of the queue. What does raise a card is a claim/redeem prompt, a login
+   out of the queue. Discord invite and app-authorization links, subdomains,
+   and pages anyone can publish (Google Forms/Sites, Hugging Face) still do. What does raise a card is a claim/redeem prompt, a login
    or wallet request, a known scam phrase or a crypto address, especially
    beside an unfamiliar link, or any lookalike domain.
 3. **Matched hash** and **Confidence** — present when it *did* match. A match
