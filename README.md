@@ -95,6 +95,10 @@ commands (registered automatically on first run):
   author is actioned per your `action_policy`.
 - **`/scamhash list`** / **`/scamhash remove`** — see the 10 newest blocked
   hashes (how, by whom and when each was added) or drop one.
+- **`/scamhash whitelist`** / **`/scamhash unwhitelist`** — see the images
+  this server exempts from detection, and remove entries by number, or in a
+  batch by moderator and time (`confirm:True` to apply). Confirm scam, Review
+  as scam and `/scamhash add` also remove entries that cover the image.
 - **`/scamhash export`** — download this server's hashes as a JSON file;
   **`/scamhash import`** loads that file on another server.
 - **`/config set`** — choose what happens on a match (report / delete / timeout /

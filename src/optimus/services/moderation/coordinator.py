@@ -437,6 +437,7 @@ class ModerationCoordinator:
             problem=problem,
             partial=result.partial,
             locale=cfg.locale,
+            whitelist_removed=event.whitelist_removed,
         )
         key = (event.guild_id, event.message_id)
         # A moderator's confirmation is already decided: its card is folded

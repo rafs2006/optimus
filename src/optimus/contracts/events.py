@@ -179,6 +179,9 @@ class VerdictEvent(_Event):
     #: The review card the Confirm button was pressed on. The enforcement
     #: outcome is written onto that card instead of posting a new one.
     review_card_id: int | None = None
+    #: How many whitelist entries the confirmation lifted (they covered the
+    #: confirmed images). Shown on the folded card.
+    whitelist_removed: int = 0
 
 
 class ActionResultEvent(_Event):

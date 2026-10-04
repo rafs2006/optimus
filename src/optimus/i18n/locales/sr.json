@@ -46,7 +46,7 @@
     "import_too_large": "Datoteka za uvoz ima više od {limit} heševa. Podelite je na manje datoteke i uvezite svaku posebno.",
     "import_file_too_big": "Datoteka za uvoz je veća od {limit_kb} KB. Podelite je na manje datoteke i uvezite svaku posebno.",
     "import_download_failed": "Nije moguće preuzeti otpremljenu datoteku sa Discorda. Pokušajte uvoz ponovo; ako i dalje ne uspeva, ponovo izvezite datoteku i otpremite novu.",
-    "export_ok": "Izvezeno {count} heševa — JSON datoteka je priložena ispod. Učitajte je na drugom serveru komandom `/scamhash import`.",
+    "export_ok": "Izvezeno heševa: {count}, stavki bele liste: {whitelisted}. JSON datoteka je priložena ispod. Učitajte heševe na drugom serveru komandom `/scamhash import`; uvoz preskače belu listu.",
     "export_empty": "Ovaj server još nema heševe za izvoz. Prvo blokirajte sliku komandom `/scamhash add` ili `/scamhash review`.",
     "reviewmsg_no_images": "Ta poruka nema priloge sa slikama za pregled.",
     "report_ok": "Hvala — ta poruka je poslata moderatorima ovog servera na pregled.",
@@ -134,7 +134,24 @@
     "add_already_listed": "Već je na listi kao `{hash_id}` — {origin}.",
     "add_already_caught": "Već je hvata `{hash_id}` — {origin}. Nije ponovo dodato.",
     "add_known": "{notes}",
-    "add_whitelisted": "Napomena: `{hash_id}` je na beloj listi ovog servera, koja ima prednost nad blok listom. Optimus je neće označiti."
+    "add_unwhitelisted": "Uklonjeno sa bele liste: {entries}. Optimus ponovo označava ove slike.",
+    "whitelist_reason_card": "**{action}** na detekciji #{detection_id}",
+    "whitelist_reason_unknown": "razlog nije zabeležen",
+    "whitelist_overrides": "Poništava blokirane heševe: {hash_ids}",
+    "whitelist_overrides_more": "Poništava blokirane heševe: {hash_ids} i još {more}",
+    "whitelist_filter_by": "koje je dodao/la <@{user_id}>",
+    "whitelist_filter_since": "u poslednjih {since}",
+    "whitelist_empty": "Bela lista ovog servera je prazna.",
+    "whitelist_none_match": "Nema stavki bele liste{filter}.",
+    "whitelist_page": "Bela lista ovog servera ima stavki: {count}{filter}. Strana {page}/{pages}, najnovije prve:\n{entries}\nUklonite stavke komandom `/scamhash unwhitelist entry:<broj>`.",
+    "whitelist_bad_since": "Koristite `since:` kao `30m`, `2h`, `3d` ili `1w` (najviše godinu dana).",
+    "unwhitelist_entry_or_filter": "Koristite `entry:`, ili `by:` / `since:`. Ne oba.",
+    "unwhitelist_nothing_given": "Navedite `entry:` (brojeve iz `/scamhash whitelist`), ili `by:` / `since:` da izaberete grupu.",
+    "unwhitelist_not_found": "Nijedna stavka bele liste ne odgovara: {entries}.",
+    "unwhitelist_missing": "Nije pronađeno: {entries}.",
+    "unwhitelist_done": "Uklonjeno stavki bele liste: {count}: {entries}. Optimus ponovo označava te slike.{notes}",
+    "unwhitelist_preview": "Stavki bele liste: {count}{filter}: {entries}.\nNišta još nije uklonjeno. Pokrenite istu komandu sa `confirm:True` da ih uklonite.",
+    "unwhitelist_preview_more": " i još {more}"
   },
   "button": {
     "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",
@@ -173,7 +190,10 @@
   "card": {
     "handled": "✅ **{action}** — obradio/la <@{user_id}>",
     "handled_ban_kept": "✅ **{action}** — obradio/la <@{user_id}>. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
-    "followups_removed": "Uklonjeno još {count} kasnijih objava ovog korisnika."
+    "followups_removed": "Uklonjeno još {count} kasnijih objava ovog korisnika.",
+    "handled_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}.",
+    "handled_ban_kept_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
+    "whitelist_removed": "Uklonjeno stavki bele liste koje su pokrivale ovu sliku: {count}."
   },
   "failure": {
     "step_delete": "Nije moguće ukloniti poruku",

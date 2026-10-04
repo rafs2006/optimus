@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -62,7 +63,6 @@ class FakeDeps:
         self.hashes: dict[str, GuildHash] = {}
         #: hash id of a re-saved copy -> the listed entry the scanner matches it to.
         self.near_copies: dict[str, str] = flags.get("near_copies", {})
-        self.whitelisted_ids: set[str] = set(flags.get("whitelisted_ids", ()))
         self.appeals: dict[int, dict[str, Any]] = {}
         self.reversed: list[int] = []
         self.purged: list[int] = []
@@ -104,6 +104,8 @@ class FakeDeps:
         #: review card message id -> detection ids shown on it
         self.cards: dict[int, list[int]] = dict(flags.get("cards", {}))
         self.confirm_meta: list[dict[str, Any]] = []
+        #: whitelist_removed passed with each confirmed scam.
+        self.whitelist_removed_sent: list[int] = []
         self.reposted: list[list[int]] = []
         self._repost_fails: bool = bool(flags.get("repost_fails", False))
         self._detection_missing = flags.get("detection_missing", False)
@@ -136,15 +138,14 @@ class FakeDeps:
 
     async def known_image(self, guild_id: int, hashes: AttachmentHashes) -> KnownImage:
         # Mirrors DbDeps: the same image is "already listed"; a configured
-        # near-copy is "already caught"; a configured phash is whitelisted.
+        # near-copy is "already caught".
         hash_id = f"{hashes.phash:016x}"
-        whitelisted = hash_id in self.whitelisted_ids
         if hash_id in self.hashes:
-            return KnownImage(entry=self.hashes[hash_id], exact=True, whitelisted=whitelisted)
+            return KnownImage(entry=self.hashes[hash_id], exact=True)
         near = self.near_copies.get(hash_id)
         if near is not None and near in self.hashes:
-            return KnownImage(entry=self.hashes[near], whitelisted=whitelisted)
-        return KnownImage(whitelisted=whitelisted)
+            return KnownImage(entry=self.hashes[near])
+        return KnownImage()
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
         return 1 if self.hashes.pop(hash_id, None) is not None else 0
@@ -153,8 +154,19 @@ class FakeDeps:
         return list(self.hashes.values())
 
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist:
+        # Mirrors the database: each entry gets the next number.
+        if entry.id is None:
+            entry.id = max((w.id or 0 for w in self.whitelisted), default=0) + 1
         self.whitelisted.append(entry)
         return entry
+
+    async def list_whitelist(self, guild_id: int) -> list[GuildWhitelist]:
+        return list(self.whitelisted)
+
+    async def remove_whitelist(self, guild_id: int, entry_ids: Sequence[int]) -> int:
+        before = len(self.whitelisted)
+        self.whitelisted = [w for w in self.whitelisted if w.id not in set(entry_ids)]
+        return before - len(self.whitelisted)
 
     def auto_act_threshold(self) -> float:
         return float(self._auto_act_threshold)
@@ -407,8 +419,10 @@ class FakeDeps:
         matched_hash_id: str,
         confirmed_by: int | None = None,
         review_card_id: int | None = None,
+        whitelist_removed: int = 0,
     ) -> None:
         self.confirm_meta.append({"confirmed_by": confirmed_by, "review_card_id": review_card_id})
+        self.whitelist_removed_sent.append(whitelist_removed)
         self.confirmed_scams.append(
             {
                 "guild_id": guild_id,
@@ -679,7 +693,7 @@ async def test_false_positive_whitelists_unbans_reverses_and_audits() -> None:
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
     resp = await handle_review_button(ctx, parsed, deps)
     assert resp.i18n_key == "button.marked_false_positive"
-    assert resp.card_note_key == "card.handled"
+    assert resp.card_note_key == "card.handled_whitelisted"
     assert deps.reversed == [5]
     # The i18n reply says "the image was whitelisted" -- it must actually be.
     assert [w.phash for w in deps.whitelisted] == [0xABC]
@@ -955,7 +969,7 @@ async def test_false_positive_without_ban_members_leaves_the_ban_and_says_so() -
     assert [w.phash for w in deps.whitelisted] == [0xABC]
     assert deps.audits[0][2] == "review.false_positive"
     # The card -- seen by every mod in the channel -- points at who can finish it.
-    assert resp.card_note_key == "card.handled_ban_kept"
+    assert resp.card_note_key == "card.handled_ban_kept_whitelisted"
     for locale in ("en", "sr"):
         note = translate(resp.card_note_key, locale, **resp.card_note_params)
         assert "Ban Members" in note
@@ -969,7 +983,7 @@ async def test_false_positive_with_ban_power_still_unbans(perms: int) -> None:
     parsed = ParsedCustomId(action=ReviewAction.FALSE_POSITIVE, detection_id=5)
     resp = await handle_review_button(_ctx("", perms=perms), parsed, deps)
     assert deps.unbans == [(1, 333)]
-    assert resp.card_note_key == "card.handled"
+    assert resp.card_note_key == "card.handled_whitelisted"
 
 
 # --- appeal lifecycle ----------------------------------------------------------
