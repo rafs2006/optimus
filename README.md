@@ -88,7 +88,8 @@ commands (registered automatically on first run):
 - **`/scamhash add`** — block scam images: upload one, give a message link
   (`message:` blocks every image on it) or paste one Discord image link
   (`url:`, right-click the image → Copy Link). Nobody is acted on. From now on
-  Optimus catches re-posts of those images and variants of them.
+  Optimus catches re-posts of those images and variants of them. If the list
+  already covers an image, Optimus says which entry does instead of adding it again.
 - **`/scamhash review`** — point at a message that was already posted (link or
   ID, or right-click → Apps → *Review as scam*): its images are blocked and the
   author is actioned per your `action_policy`.

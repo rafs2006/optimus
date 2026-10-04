@@ -130,7 +130,11 @@
     "add_skip_message_unreadable": "Preskočeno `message:` — poruka nije mogla da se pročita sa Discorda.",
     "add_skip_message_other_server": "Preskočeno `message:` — ta poruka je na drugom serveru.",
     "add_skip_bad_url": "Preskočeno `url:` — to nije Discord link slike.",
-    "add_fetch_failed_count": "Nije preuzeto slika: {count}."
+    "add_fetch_failed_count": "Nije preuzeto slika: {count}.",
+    "add_already_listed": "Već je na listi kao `{hash_id}` — {origin}.",
+    "add_already_caught": "Već je hvata `{hash_id}` — {origin}. Nije ponovo dodato.",
+    "add_known": "{notes}",
+    "add_whitelisted": "Napomena: `{hash_id}` je na beloj listi ovog servera, koja ima prednost nad blok listom. Optimus je neće označiti."
   },
   "button": {
     "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",
