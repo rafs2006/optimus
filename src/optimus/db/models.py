@@ -7,7 +7,7 @@ additionally enforce ``guild_id`` filtering in every query as defense in depth.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from sqlalchemy import (
@@ -63,8 +63,24 @@ class Base(DeclarativeBase):
     type_annotation_map: ClassVar[dict[Any, Any]] = {dict[str, Any]: JSON}
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
 def _ts() -> Mapped[datetime]:
-    return mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    """A creation timestamp the application always fills in itself.
+
+    ``server_default`` alone is not enough: it only exists in a table whose
+    migration declared it, and migration 0009 created
+    ``global_trusted_guilds.created_at`` as ``NOT NULL`` with no default. The
+    ORM then left the column out of the insert, so every
+    ``/global approve_server`` failed in production while tests (which build
+    tables from these models) passed. Setting the value client-side works
+    whatever the live table says.
+    """
+    return mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
+    )
 
 
 class Guild(Base):
