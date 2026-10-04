@@ -44,11 +44,12 @@ def test_builder_expands_subcommands_and_their_options() -> None:
     subs = {opt.name: opt for opt in scamhash.options}
     assert "add" in subs
     assert subs["add"].type == hikari.OptionType.SUB_COMMAND
-    # Adding is image-only: the confusing typed-hex options (phash/dhash/whash)
-    # were removed -- bulk/hex exchange goes through import/export instead.
+    # Adding takes images only -- an upload, a message link, or a Discord
+    # image link, any of them -- never typed hex (that goes through
+    # import/export). All optional; the handler asks for at least one.
     add_opts = {o.name: o for o in (subs["add"].options or [])}
-    assert set(add_opts) == {"image"}
-    assert add_opts["image"].is_required is True
+    assert set(add_opts) == {"image", "message", "url"}
+    assert not any(o.is_required for o in add_opts.values())
 
 
 def test_review_subcommand_replaces_reviewmsg() -> None:

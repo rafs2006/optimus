@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -58,7 +59,8 @@ _log = get_logger(__name__)
 #: Keep ``/scamhash list`` safely below Discord's 2,000-character message limit
 #: even if every rendered line maxes out (64-char hash id, 32-char source, and
 #: a full-width ``by <@user>`` mention ≈ 130 chars per line).
-_HASH_LIST_PREVIEW_LIMIT = 12
+#: ``/scamhash list`` shows the newest entries only; export has the rest.
+_HASH_LIST_PREVIEW_LIMIT = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,20 +502,46 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     if sub == "add":
         if not await deps.hash_rate_ok(ctx.user_id):
             raise InteractionRejected(CommandError.RATE_LIMITED)
-        attachment_id, url = ctx.options.get("attachment_id"), ctx.options.get("url")
-        if attachment_id is None or url is None:
-            # The glue layer found no usable image on the interaction (wrong
-            # file type, or Discord sent no resolved attachment).
+        if ctx.options.get("bad_url"):
+            return InteractionResponse("command.add_bad_url")
+        images = [(int(a), str(u)) for a, u in ctx.options.get("images") or []]
+        if not images:
+            if ctx.options.get("message_no_images"):
+                return InteractionResponse("command.add_message_no_images")
+            # Wrong file type, Discord sent no resolved attachment, or no
+            # source given at all.
             return InteractionResponse("command.add_not_image")
-        try:
-            hashes = await deps.compute_attachment_hashes(
-                attachment_id=int(attachment_id), url=str(url)
+        # Every download first, then every write: fetching must not run
+        # inside the transaction (see compute_attachment_hashes).
+        computed: list[AttachmentHashes] = []
+        failures: list[str] = []
+        for attachment_id, url in images:
+            try:
+                computed.append(
+                    await deps.compute_attachment_hashes(attachment_id=attachment_id, url=url)
+                )
+            except AttachmentHashError as exc:
+                failures.append(str(exc))
+        if not computed:
+            return InteractionResponse("command.add_fetch_failed", {"reason": failures[0]})
+        blocked: list[str] = []
+        for hashes in computed:
+            stored = await deps.add_guild_hash(
+                ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id)
             )
-        except AttachmentHashError as exc:
-            return InteractionResponse("command.add_fetch_failed", {"reason": str(exc)})
-        stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
-        await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
-        return InteractionResponse("command.hash_added", {"hash_id": stored.hash_id})
+            if stored.hash_id not in blocked:
+                blocked.append(stored.hash_id)
+                await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
+        if len(images) == 1:
+            return InteractionResponse("command.hash_added", {"hash_id": blocked[0]})
+        return InteractionResponse(
+            "command.hashes_added",
+            {
+                "count": len(blocked),
+                "hash_ids": ", ".join(f"`{h}`" for h in blocked),
+                "failed": len(failures),
+            },
+        )
     if sub == "remove":
         hash_id = str(ctx.options["hash_id"])
         removed = await deps.remove_guild_hash(ctx.guild_id, hash_id)
@@ -525,14 +553,14 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         rows = await deps.list_guild_hashes(ctx.guild_id)
         if not rows:
             return InteractionResponse("command.hash_list_empty")
-        shown = sorted(rows, key=lambda r: r.hash_id)[:_HASH_LIST_PREVIEW_LIMIT]
+        shown = sorted(rows, key=_added_at, reverse=True)[:_HASH_LIST_PREVIEW_LIMIT]
         params: dict[str, Any] = {
             "count": len(rows),
+            "shown": len(shown),
             "hashes": "\n".join(_render_hash_entry(r) for r in shown),
         }
         if len(rows) <= _HASH_LIST_PREVIEW_LIMIT:
             return InteractionResponse("command.hash_list_header", params)
-        params["remaining"] = len(rows) - len(shown)
         return InteractionResponse("command.hash_list_truncated", params)
     if sub == "import":
         raw = ctx.options.get("file")
@@ -561,10 +589,33 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
+#: How each blocklist entry got there, in the words moderators know.
+_HASH_SOURCE_LABELS: dict[str, str] = {
+    "local": "/scamhash add",
+    "review_confirm": "Confirm scam",
+    "reviewmsg": "Review as scam",
+    "campaign_sweep": "campaign cleanup",
+    "import": "import",
+}
+
+
+def _added_at(row: GuildHash) -> datetime:
+    """When a blocklist entry was added, as an aware UTC datetime.
+
+    SQLite hands timestamps back naive; they are stored in UTC.
+    """
+    when = row.created_at
+    if when is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
 def _render_hash_entry(row: GuildHash) -> str:
-    """One display line per hash: id, source, and who added it (when known)."""
+    """One line per hash: id, how it was added, by whom, and when."""
+    source = _HASH_SOURCE_LABELS.get(row.source, row.source)
     added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
-    return f"\u2022 `{row.hash_id}` \u2014 {row.source}{added_by}"
+    when = f" <t:{int(_added_at(row).timestamp())}:d>" if row.created_at is not None else ""
+    return f"\u2022 `{row.hash_id}` \u2014 {source}{added_by}{when}"
 
 
 async def _cmd_report_message(

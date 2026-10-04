@@ -85,12 +85,15 @@ commands (registered automatically on first run):
   posts a review card with Confirm / False positive / Ban buttons. The
   **[Moderator Guide](docs/moderator-guide.md)** covers the full review
   workflow, every button, and every setting — share it with your mod team.
-- **`/scamhash add`** — attach a scam image to block it. From now on Optimus
-  catches re-posts of that image and variants of it.
+- **`/scamhash add`** — block scam images: upload one, give a message link
+  (`message:` blocks every image on it) or paste one Discord image link
+  (`url:`, right-click the image → Copy Link). Nobody is acted on. From now on
+  Optimus catches re-posts of those images and variants of them.
 - **`/scamhash review`** — point at a message that was already posted (link or
   ID, or right-click → Apps → *Review as scam*): its images are blocked and the
   author is actioned per your `action_policy`.
-- **`/scamhash list`** / **`/scamhash remove`** — review or drop blocked hashes.
+- **`/scamhash list`** / **`/scamhash remove`** — see the 10 newest blocked
+  hashes (how, by whom and when each was added) or drop one.
 - **`/scamhash export`** — download this server's hashes as a JSON file;
   **`/scamhash import`** loads that file on another server.
 - **`/config set`** — choose what happens on a match (report / delete / timeout /

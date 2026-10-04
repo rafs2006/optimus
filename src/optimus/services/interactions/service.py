@@ -1244,25 +1244,92 @@ def _context_menu_context(interaction: Any) -> InteractionContext:
     )
 
 
-def _resolve_add_options(ctx: InteractionContext, interaction: Any) -> InteractionContext:
-    """Resolve ``/scamhash add image:<attachment>`` into ``(id, url)`` options.
+#: Most images one ``/scamhash add`` stores (a message link can carry ten).
+MAX_ADD_IMAGES = 10
 
-    Discord sends an ATTACHMENT option's *value* as a bare snowflake id; the
-    actual attachment object (with its CDN url) rides separately on
-    ``interaction.resolved.attachments``. Non-image uploads are dropped here
-    (options left empty) so the handler answers ``command.add_not_image``
-    instead of attempting a doomed fetch/decode round-trip.
+
+def parse_cdn_image_url(raw: str) -> tuple[int, str] | None:
+    """Accept a Discord image link and return ``(attachment_id, url)``.
+
+    Only Discord's own image hosts are accepted (the fetcher's SSRF guard
+    enforces the same list at connect time; checking here gives a clear
+    answer instead of a fetch error). The attachment id comes from the
+    ``/attachments/<channel>/<attachment>/<file>`` path every Discord image
+    link carries; it keys the hash cache like an uploaded attachment's id.
     """
+    from urllib.parse import urlsplit
+
+    from optimus.ingest.ssrf import is_discord_host
+
+    try:
+        parts = urlsplit(raw.strip())
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not parts.hostname or not is_discord_host(parts.hostname):
+        return None
+    segments = [p for p in parts.path.split("/") if p]
+    if len(segments) != 4 or segments[0] not in ("attachments", "ephemeral-attachments"):
+        return None
+    if not segments[2].isdigit():
+        return None
+    return int(segments[2]), parts.geturl()
+
+
+async def _resolve_add_options(
+    ctx: InteractionContext, interaction: Any, *, rest: Any = None
+) -> InteractionContext:
+    """Resolve ``/scamhash add`` into the list of images to block.
+
+    Three optional sources, combinable, at least one needed:
+
+    * ``image`` -- an uploaded attachment. Discord sends an ATTACHMENT
+      option's *value* as a bare snowflake id; the attachment object (with
+      its CDN url) rides on ``interaction.resolved.attachments``.
+    * ``message`` -- a message link or id: every image on that message (the
+      bot must be able to read it, as for ``/scamhash review``). Unlike
+      review, nobody is acted on; the images are only blocklisted.
+    * ``url`` -- one Discord image link (right-click an image > Copy Link),
+      for blocking one specific image of a multi-image post.
+
+    Non-image uploads, a message with no images and a non-Discord link are
+    flagged rather than fetched, so the handler can say exactly what was wrong.
+    """
+    images: list[tuple[int, str]] = []
     options: dict[str, Any] = {}
     resolved_attachments = getattr(getattr(interaction, "resolved", None), "attachments", None)
     raw = ctx.options.get("image")
-    if raw is not None and resolved_attachments:
-        for snowflake, attachment in resolved_attachments.items():
+    if raw is not None:
+        found = False
+        for snowflake, attachment in (resolved_attachments or {}).items():
             if int(snowflake) != int(raw):
                 continue
             if (attachment.media_type or "").startswith("image/"):
-                options = {"attachment_id": int(attachment.id), "url": attachment.url}
+                images.append((int(attachment.id), attachment.url))
+                found = True
             break
+        if not found:
+            options["not_image"] = True
+    if ctx.options.get("message"):
+        if rest is None:
+            raise InteractionRejected(CommandError.FETCH_FAILED)
+        target = await _resolve_message_target_options(ctx, interaction, rest=rest)
+        on_message = list(target.options["attachments"])
+        if not on_message:
+            options["message_no_images"] = True
+        images.extend(on_message)
+    if ctx.options.get("url"):
+        parsed = parse_cdn_image_url(str(ctx.options["url"]))
+        if parsed is None:
+            options["bad_url"] = True
+        else:
+            images.append(parsed)
+    seen: set[int] = set()
+    unique: list[tuple[int, str]] = []
+    for attachment_id, url in images:
+        if attachment_id not in seen:
+            seen.add(attachment_id)
+            unique.append((attachment_id, url))
+    options["images"] = unique[:MAX_ADD_IMAGES]
     return InteractionContext(
         guild_id=ctx.guild_id,
         user_id=ctx.user_id,
@@ -1441,7 +1508,7 @@ async def run_interaction(  # pragma: no cover - hikari glue
                         ctx, interaction, rest=interaction.app.rest
                     )
                 elif ctx.command == "scamhash" and ctx.subcommand == "add":
-                    ctx = _resolve_add_options(ctx, interaction)
+                    ctx = await _resolve_add_options(ctx, interaction, rest=interaction.app.rest)
                 elif ctx.command == "scamhash" and ctx.subcommand == "import":
                     ctx = await _resolve_import_options(
                         ctx, interaction, fetch=service.import_fetcher()
