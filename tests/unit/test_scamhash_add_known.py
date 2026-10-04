@@ -282,3 +282,30 @@ def test_the_new_lines_exist_in_every_language(locale: str) -> None:
         assert translate(
             f"command.{key}", locale, hash_id="x", origin="y", notes="z", entries="#1"
         ) != (f"command.{key}")
+
+
+async def test_a_campaign_cleanup_entry_is_credited_to_optimus_not_a_broken_mention() -> None:
+    # The campaign cleanup stores the bot's own actor id (0); "<@0>" rendered
+    # as a broken mention in the add reply and in /scamhash list.
+    deps = FakeDeps()
+    row = _listed(f"{5:016x}")
+    row.source = "campaign_sweep"
+    row.added_by = 0
+    deps.hashes[row.hash_id] = row
+    resp = await handle_command(_add([(5, "u5")]), deps)
+    stamp = int(datetime(2026, 10, 3, 12, 0, tzinfo=UTC).timestamp())
+    assert _text(resp) == (
+        f"Already in the list as `{5:016x}` — campaign cleanup by Optimus <t:{stamp}:d>."
+    )
+    listing = await handle_command(
+        InteractionContext(
+            guild_id=GUILD,
+            user_id=MOD,
+            member_permissions=MANAGE_GUILD,
+            command="scamhash",
+            subcommand="list",
+        ),
+        deps,
+    )
+    assert "by Optimus" in _text(listing)
+    assert "<@0>" not in _text(listing)

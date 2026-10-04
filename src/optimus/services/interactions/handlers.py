@@ -55,6 +55,7 @@ from optimus.services.moderation.review import (
     ReviewAction,
     jump_url,
 )
+from optimus.services.moderation.service import SYSTEM_ACTOR
 
 _log = get_logger(__name__)
 
@@ -710,10 +711,19 @@ def _added_at(row: GuildHash) -> datetime:
     return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
 
 
+def _who(user_id: int) -> str:
+    """A mention for a moderator; "Optimus" for the bot's own actions.
+
+    The campaign cleanup stores :data:`SYSTEM_ACTOR` (0) as the author, and
+    ``<@0>`` renders as a broken mention.
+    """
+    return "Optimus" if user_id == SYSTEM_ACTOR else f"<@{user_id}>"
+
+
 def _hash_origin(row: GuildHash) -> str:
     """How a blocklist entry got there, by whom, and when: ``Confirm scam by @x <date>``."""
     source = _HASH_SOURCE_LABELS.get(row.source, row.source)
-    added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
+    added_by = f" by {_who(row.added_by)}" if row.added_by is not None else ""
     when = f" <t:{int(_added_at(row).timestamp())}:d>" if row.created_at is not None else ""
     return f"{source}{added_by}{when}"
 
@@ -811,7 +821,7 @@ def _render_whitelist_entry(
     """One line per entry: number, why, who, when, and what it overrides."""
     line = f"\u2022 **#{row.id}** \u2014 {_whitelist_reason(row, locale)}"
     if row.added_by is not None:
-        line += f" by <@{row.added_by}>"
+        line += f" by {_who(row.added_by)}"
     if row.created_at is not None:
         line += f" <t:{int(_whitelist_added_at(row).timestamp())}:d>"
     covered = [h.hash_id for h in blocklist if _covers(row.phash, h.phash)]

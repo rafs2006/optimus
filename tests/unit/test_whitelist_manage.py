@@ -357,3 +357,11 @@ async def test_an_old_entry_without_reason_author_or_date_still_lists() -> None:
     # Without a date it can never fall inside a since: window.
     none = await handle_command(_cmd("whitelist", since="1w"), deps)
     assert none.i18n_key == "command.whitelist_none_match"
+
+
+async def test_an_entry_the_bot_added_is_credited_to_optimus() -> None:
+    deps = FakeDeps()
+    await _wl(deps, 1, by=0)
+    resp = await handle_command(_cmd("whitelist"), deps)
+    assert " by Optimus <t:" in resp.params["entries"]
+    assert "<@0>" not in resp.params["entries"]
