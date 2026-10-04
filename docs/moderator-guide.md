@@ -32,7 +32,8 @@ card does, and every command and setting.
    - Re-running `/setup` never creates duplicates; it tells you where reviews
      already go. Use the `channel` option to move them.
 3. **Seed the blocklist.** `/scamhash add` with a screenshot of a known scam
-   image, or `/scamhash import` with a JSON file exported from another server
+   image, a link to a message carrying scam images, or a Discord image link —
+   or `/scamhash import` with a JSON file exported from another server
    you moderate.
 4. **Pick an enforcement level.** The default `action_policy` is
    `report_only` — detections are only reported to the review channel. When
@@ -236,9 +237,9 @@ Moderator commands (require **Manage Server**, except `/queue`, which needs
 | Command | What it does |
 | --- | --- |
 | `/setup [mod_role] [channel]` | Create (or link) the private review channel. |
-| `/scamhash add <image>` | Block a scam image; future reposts are caught. |
+| `/scamhash add [image] [message] [url]` | Block scam images without acting on anyone: an upload, every image on a message (`message:` link or ID), and/or one Discord image link (`url:`, right-click the image → Copy Link). Up to 10 per command; future reposts are caught. |
 | `/scamhash remove <hash_id>` | Unblock by hash id (from `/scamhash list`). |
-| `/scamhash list` | Show blocked hashes. |
+| `/scamhash list` | Show the 10 newest blocked hashes: id, how it was added (Confirm scam, Review as scam, campaign cleanup, `/scamhash add`, import), by whom and when. `/scamhash export` has all of them. |
 | `/scamhash export` | Download this server's hashes as JSON. |
 | `/scamhash import <file>` | Load hashes from another server's export. |
 | `/scamhash review <message>` | Mark a posted message as scam by link/ID: blocks its images and applies the action policy. Also available as right-click → Apps → *Review as scam*. |

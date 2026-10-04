@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -30,6 +31,7 @@ from optimus.services.interactions.attachment_hash import (
 )
 from optimus.services.interactions.commands import required_permission
 from optimus.services.interactions.logic import (
+    AddProblem,
     CommandError,
     ComponentAction,
     InteractionRejected,
@@ -58,7 +60,8 @@ _log = get_logger(__name__)
 #: Keep ``/scamhash list`` safely below Discord's 2,000-character message limit
 #: even if every rendered line maxes out (64-char hash id, 32-char source, and
 #: a full-width ``by <@user>`` mention ≈ 130 chars per line).
-_HASH_LIST_PREVIEW_LIMIT = 12
+#: ``/scamhash list`` shows the newest entries only; export has the rest.
+_HASH_LIST_PREVIEW_LIMIT = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,22 +501,7 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     assert ctx.guild_id is not None  # guaranteed by _require (MANAGE_GUILD => guild-only)
     sub = ctx.subcommand
     if sub == "add":
-        if not await deps.hash_rate_ok(ctx.user_id):
-            raise InteractionRejected(CommandError.RATE_LIMITED)
-        attachment_id, url = ctx.options.get("attachment_id"), ctx.options.get("url")
-        if attachment_id is None or url is None:
-            # The glue layer found no usable image on the interaction (wrong
-            # file type, or Discord sent no resolved attachment).
-            return InteractionResponse("command.add_not_image")
-        try:
-            hashes = await deps.compute_attachment_hashes(
-                attachment_id=int(attachment_id), url=str(url)
-            )
-        except AttachmentHashError as exc:
-            return InteractionResponse("command.add_fetch_failed", {"reason": str(exc)})
-        stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
-        await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
-        return InteractionResponse("command.hash_added", {"hash_id": stored.hash_id})
+        return await _scamhash_add(ctx, deps)
     if sub == "remove":
         hash_id = str(ctx.options["hash_id"])
         removed = await deps.remove_guild_hash(ctx.guild_id, hash_id)
@@ -525,14 +513,14 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         rows = await deps.list_guild_hashes(ctx.guild_id)
         if not rows:
             return InteractionResponse("command.hash_list_empty")
-        shown = sorted(rows, key=lambda r: r.hash_id)[:_HASH_LIST_PREVIEW_LIMIT]
+        shown = sorted(rows, key=_added_at, reverse=True)[:_HASH_LIST_PREVIEW_LIMIT]
         params: dict[str, Any] = {
             "count": len(rows),
+            "shown": len(shown),
             "hashes": "\n".join(_render_hash_entry(r) for r in shown),
         }
         if len(rows) <= _HASH_LIST_PREVIEW_LIMIT:
             return InteractionResponse("command.hash_list_header", params)
-        params["remaining"] = len(rows) - len(shown)
         return InteractionResponse("command.hash_list_truncated", params)
     if sub == "import":
         raw = ctx.options.get("file")
@@ -561,10 +549,110 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
+#: What a single problem answers when nothing at all could be blocked:
+#: (i18n key, or the rejection whose existing text already says it).
+_ADD_ONLY_PROBLEM: dict[AddProblem, str | CommandError] = {
+    AddProblem.NOT_IMAGE: "command.add_not_image",
+    AddProblem.MESSAGE_NO_IMAGES: "command.add_message_no_images",
+    AddProblem.MESSAGE_NOT_FOUND: CommandError.MESSAGE_NOT_FOUND,
+    AddProblem.MESSAGE_UNREADABLE: CommandError.FETCH_FAILED,
+    AddProblem.MESSAGE_OTHER_SERVER: "command.add_message_other_server",
+    AddProblem.BAD_URL: "command.add_bad_url",
+}
+
+
+def _add_notes(problems: list[AddProblem], failed: int, locale: str) -> list[str]:
+    """One short line per input that was skipped, plus any failed downloads."""
+    lines = [translate(f"command.add_skip_{p.value}", locale) for p in problems]
+    if failed:
+        lines.append(translate("command.add_fetch_failed_count", locale, count=failed))
+    return lines
+
+
+async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    """Block every image the ``image``/``message``/``url`` inputs resolved to.
+
+    Each input stands alone: a problem with one is reported next to what the
+    others blocked, never instead of it. Only when nothing at all could be
+    blocked does a single problem get its own specific answer.
+    """
+    assert ctx.guild_id is not None
+    if not await deps.hash_rate_ok(ctx.user_id):
+        raise InteractionRejected(CommandError.RATE_LIMITED)
+    images = [(int(a), str(u)) for a, u in ctx.options.get("images") or []]
+    problems = [AddProblem(p) for p in ctx.options.get("problems") or []]
+    # Every download first, then every write: fetching must not run inside
+    # the transaction (see compute_attachment_hashes).
+    computed: list[AttachmentHashes] = []
+    failures: list[str] = []
+    for attachment_id, url in images:
+        try:
+            computed.append(
+                await deps.compute_attachment_hashes(attachment_id=attachment_id, url=url)
+            )
+        except AttachmentHashError as exc:
+            failures.append(str(exc))
+
+    if not computed:
+        if failures and not problems:
+            return InteractionResponse("command.add_fetch_failed", {"reason": failures[0]})
+        if len(problems) == 1 and not failures:
+            answer = _ADD_ONLY_PROBLEM[problems[0]]
+            if isinstance(answer, CommandError):
+                raise InteractionRejected(answer)
+            return InteractionResponse(answer)
+        if not problems:
+            # No input given at all.
+            return InteractionResponse("command.add_not_image")
+        notes = _add_notes(problems, len(failures), ctx.locale)
+        return InteractionResponse("command.add_nothing_blocked", {"notes": "\n".join(notes)})
+
+    blocked: list[str] = []
+    for hashes in computed:
+        stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
+        if stored.hash_id not in blocked:
+            blocked.append(stored.hash_id)
+            await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
+    notes = _add_notes(problems, len(failures), ctx.locale)
+    if len(images) == 1 and not notes:
+        return InteractionResponse("command.hash_added", {"hash_id": blocked[0]})
+    return InteractionResponse(
+        "command.hashes_added",
+        {
+            "count": len(blocked),
+            "hash_ids": ", ".join(f"`{h}`" for h in blocked),
+            "notes": "".join(f"\n{line}" for line in notes),
+        },
+    )
+
+
+#: How each blocklist entry got there, in the words moderators know.
+_HASH_SOURCE_LABELS: dict[str, str] = {
+    "local": "/scamhash add",
+    "review_confirm": "Confirm scam",
+    "reviewmsg": "Review as scam",
+    "campaign_sweep": "campaign cleanup",
+    "import": "import",
+}
+
+
+def _added_at(row: GuildHash) -> datetime:
+    """When a blocklist entry was added, as an aware UTC datetime.
+
+    SQLite hands timestamps back naive; they are stored in UTC.
+    """
+    when = row.created_at
+    if when is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
 def _render_hash_entry(row: GuildHash) -> str:
-    """One display line per hash: id, source, and who added it (when known)."""
+    """One line per hash: id, how it was added, by whom, and when."""
+    source = _HASH_SOURCE_LABELS.get(row.source, row.source)
     added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
-    return f"\u2022 `{row.hash_id}` \u2014 {row.source}{added_by}"
+    when = f" <t:{int(_added_at(row).timestamp())}:d>" if row.created_at is not None else ""
+    return f"\u2022 `{row.hash_id}` \u2014 {source}{added_by}{when}"
 
 
 async def _cmd_report_message(

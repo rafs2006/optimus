@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -489,7 +490,7 @@ async def test_guild_only_command_in_dm_rejected() -> None:
 async def test_scamhash_add_hashes_the_image_audits_and_stores() -> None:
     deps = FakeDeps()
     resp = await handle_command(
-        _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+        _ctx("scamhash", subcommand="add", images=[(5, "https://x/scam.png")]), deps
     )
     assert resp.i18n_key == "command.hash_added"
     stored = deps.hashes[f"{5:016x}"]  # FakeDeps hashes to phash == attachment_id
@@ -511,7 +512,7 @@ async def test_scamhash_add_without_resolved_image_is_rejected_gently() -> None:
 async def test_scamhash_add_undecodable_image_reports_reason() -> None:
     deps = FakeDeps(attachment_outcomes={5: AttachmentHashError("bad image")})
     resp = await handle_command(
-        _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+        _ctx("scamhash", subcommand="add", images=[(5, "https://x/scam.png")]), deps
     )
     assert resp.i18n_key == "command.add_fetch_failed"
     assert resp.params["reason"] == "bad image"
@@ -523,7 +524,7 @@ async def test_scamhash_add_rate_limited() -> None:
     deps = FakeDeps(hash_rate_ok=False)
     with pytest.raises(InteractionRejected) as exc:
         await handle_command(
-            _ctx("scamhash", subcommand="add", attachment_id=5, url="https://x/scam.png"), deps
+            _ctx("scamhash", subcommand="add", images=[(5, "https://x/scam.png")]), deps
         )
     assert exc.value.reason is CommandError.RATE_LIMITED
 
@@ -1073,18 +1074,27 @@ async def test_scamhash_remove_not_found_does_not_audit() -> None:
 @pytest.mark.asyncio
 async def test_scamhash_list_non_empty() -> None:
     deps = FakeDeps()
-    for hash_id in ("def", "abc"):
+    for hash_id, day in (("abc", 1), ("def", 2)):
         deps.hashes[hash_id] = GuildHash(
-            hash_id=hash_id, phash=1, dhash=2, whash=3, ahash=0, source="local", added_by=42
+            hash_id=hash_id,
+            phash=1,
+            dhash=2,
+            whash=3,
+            ahash=0,
+            source="local",
+            added_by=42,
+            created_at=datetime(2026, 10, day, tzinfo=UTC),
         )
     resp = await handle_command(_ctx("scamhash", subcommand="list"), deps)
     assert resp.i18n_key == "command.hash_list_header"
-    # Entries must actually be rendered (the header alone showed an empty list
-    # after the colon in production), sorted, with source and adder attribution.
+    # Entries are rendered newest first, saying how, by whom and when each
+    # was added (the bare id + internal source name told moderators nothing).
+    oct1 = int(datetime(2026, 10, 1, tzinfo=UTC).timestamp())
+    oct2 = int(datetime(2026, 10, 2, tzinfo=UTC).timestamp())
     assert render(resp, "en") == (
-        "This server has 2 scam hash(es):\n"
-        "\u2022 `abc` \u2014 local by <@42>\n"
-        "\u2022 `def` \u2014 local by <@42>"
+        "This server has 2 scam hash(es), newest first:\n"
+        f"\u2022 `def` \u2014 /scamhash add by <@42> <t:{oct2}:d>\n"
+        f"\u2022 `abc` \u2014 /scamhash add by <@42> <t:{oct1}:d>"
     )
 
 
@@ -1103,6 +1113,7 @@ async def test_scamhash_list_truncates_to_fit_discord_reply() -> None:
             ahash=0,
             source="x" * 32,
             added_by=2**63,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=value),
         )
 
     resp = await handle_command(_ctx("scamhash", subcommand="list"), deps)
@@ -1110,9 +1121,10 @@ async def test_scamhash_list_truncates_to_fit_discord_reply() -> None:
 
     assert resp.i18n_key == "command.hash_list_truncated"
     assert resp.params["count"] == _HASH_LIST_PREVIEW_LIMIT + 1
-    assert f"`{_HASH_LIST_PREVIEW_LIMIT - 1:064x}`" in message
-    assert f"`{_HASH_LIST_PREVIEW_LIMIT:064x}`" not in message
-    assert "1 more" in message
+    # Newest first: the oldest entry is the one left out.
+    assert f"`{_HASH_LIST_PREVIEW_LIMIT:064x}`" in message
+    assert f"`{0:064x}`" not in message
+    assert "/scamhash export" in message
     assert len(message) <= 2000
 
 

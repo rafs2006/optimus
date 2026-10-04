@@ -171,26 +171,26 @@ def _attachment(att_id: int, media_type: str | None) -> SimpleNamespace:
     return SimpleNamespace(id=att_id, url=f"https://cdn/{att_id}.bin", media_type=media_type)
 
 
-def test_resolve_add_options_maps_resolved_image_to_id_and_url() -> None:
+async def test_resolve_add_options_maps_resolved_image_to_id_and_url() -> None:
     interaction = SimpleNamespace(
         resolved=SimpleNamespace(attachments={999: _attachment(999, "image/png")})
     )
-    ctx = _resolve_add_options(_add_ctx(999), interaction)
-    assert ctx.options == {"attachment_id": 999, "url": "https://cdn/999.bin"}
+    ctx = await _resolve_add_options(_add_ctx(999), interaction)
+    assert ctx.options == {"images": [(999, "https://cdn/999.bin")], "problems": []}
 
 
-def test_resolve_add_options_drops_non_image_attachments() -> None:
-    """A PDF (or anything non-image) resolves to empty options -> add_not_image."""
+async def test_resolve_add_options_drops_non_image_attachments() -> None:
+    """A PDF (or anything non-image) is flagged, not fetched -> add_not_image."""
     interaction = SimpleNamespace(
         resolved=SimpleNamespace(attachments={999: _attachment(999, "application/pdf")})
     )
-    ctx = _resolve_add_options(_add_ctx(999), interaction)
-    assert ctx.options == {}
+    ctx = await _resolve_add_options(_add_ctx(999), interaction)
+    assert ctx.options == {"images": [], "problems": ["not_image"]}
 
 
-def test_resolve_add_options_without_resolved_data_yields_empty_options() -> None:
-    ctx = _resolve_add_options(_add_ctx(999), SimpleNamespace(resolved=None))
-    assert ctx.options == {}
+async def test_resolve_add_options_without_resolved_data_yields_no_images() -> None:
+    ctx = await _resolve_add_options(_add_ctx(999), SimpleNamespace(resolved=None))
+    assert ctx.options == {"images": [], "problems": ["not_image"]}
     assert ctx.subcommand == "add"
 
 

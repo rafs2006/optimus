@@ -82,13 +82,25 @@ COMMANDS: tuple[Command, ...] = (
         subcommands=(
             SubCommand(
                 name="add",
-                description="Block a scam image: attach it and future reposts get caught.",
+                description="Block scam images: upload one, or give a message link or image link.",
                 options=(
                     Option(
                         "image",
-                        "The scam image to block (screenshot or saved copy).",
+                        "A scam image to block (screenshot or saved copy).",
                         OPT_ATTACHMENT,
-                        required=True,
+                        required=False,
+                    ),
+                    Option(
+                        "message",
+                        "Message link or ID: blocks every image on it (nobody is acted on).",
+                        OPT_STRING,
+                        required=False,
+                    ),
+                    Option(
+                        "url",
+                        "One Discord image link (right-click the image > Copy Link).",
+                        OPT_STRING,
+                        required=False,
                     ),
                 ),
             ),
@@ -126,7 +138,7 @@ COMMANDS: tuple[Command, ...] = (
             ),
             SubCommand(
                 name="review",
-                description="Mark a posted message as scam: block its images, act on author.",
+                description="Act on a scam message by link, using your action policy.",
                 options=(
                     Option(
                         "message",
