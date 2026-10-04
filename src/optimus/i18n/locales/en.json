@@ -130,7 +130,11 @@
     "add_skip_message_unreadable": "Skipped `message:` — couldn't read that message from Discord.",
     "add_skip_message_other_server": "Skipped `message:` — that message is on another server.",
     "add_skip_bad_url": "Skipped `url:` — not a Discord image link.",
-    "add_fetch_failed_count": "Couldn't fetch {count} image(s)."
+    "add_fetch_failed_count": "Couldn't fetch {count} image(s).",
+    "add_already_listed": "Already in the list as `{hash_id}` — {origin}.",
+    "add_already_caught": "Already caught by `{hash_id}` — {origin}. Not added again.",
+    "add_known": "{notes}",
+    "add_whitelisted": "Note: `{hash_id}` is on this server's whitelist, which wins over the blocklist. Optimus will not flag it."
   },
   "button": {
     "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",

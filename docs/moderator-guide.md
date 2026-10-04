@@ -237,7 +237,7 @@ Moderator commands (require **Manage Server**, except `/queue`, which needs
 | Command | What it does |
 | --- | --- |
 | `/setup [mod_role] [channel]` | Create (or link) the private review channel. |
-| `/scamhash add [image] [message] [url]` | Block scam images without acting on anyone: an upload, every image on a message (`message:` link or ID), and/or one Discord image link (`url:`, right-click the image → Copy Link). Up to 10 per command; future reposts are caught. |
+| `/scamhash add [image] [message] [url]` | Block scam images without acting on anyone: an upload, every image on a message (`message:` link or ID), and/or one Discord image link (`url:`, right-click the image → Copy Link). Up to 10 per command; future reposts are caught. An image the list already has, or a copy Optimus already catches, is not added again: the reply names the entry that covers it. A whitelisted image is added with a warning that the whitelist wins. |
 | `/scamhash remove <hash_id>` | Unblock by hash id (from `/scamhash list`). |
 | `/scamhash list` | Show the 10 newest blocked hashes: id, how it was added (Confirm scam, Review as scam, campaign cleanup, `/scamhash add`, import), by whom and when. `/scamhash export` has all of them. |
 | `/scamhash export` | Download this server's hashes as JSON. |

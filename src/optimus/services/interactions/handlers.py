@@ -212,6 +212,21 @@ class DetectionFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class KnownImage:
+    """What this server's lists already say about an image ``/scamhash add`` got.
+
+    ``entry`` is the blocklist entry that already covers the image: the same
+    image (``exact``), or one the scanner would already flag with confidence
+    (a re-saved, resized or re-compressed copy). ``whitelisted`` is set when
+    the server's whitelist covers the image, which wins over any blocklist.
+    """
+
+    entry: GuildHash | None = None
+    exact: bool = False
+    whitelisted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ImageHashes:
     """A resolved hash ensemble for the image behind a detection.
 
@@ -264,6 +279,7 @@ class InteractionDeps(Protocol):
     """Side-effecting collaborators a handler needs, all per-request scoped."""
 
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash: ...
+    async def known_image(self, guild_id: int, hashes: AttachmentHashes) -> KnownImage: ...
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int: ...
     async def list_guild_hashes(self, guild_id: int) -> list[GuildHash]: ...
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist: ...
@@ -575,6 +591,12 @@ async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     Each input stands alone: a problem with one is reported next to what the
     others blocked, never instead of it. Only when nothing at all could be
     blocked does a single problem get its own specific answer.
+
+    An image this server's blocklist already covers -- the same image, or a
+    copy the scanner already flags with confidence -- is not stored again:
+    the reply names the entry that covers it, and no audit row is written.
+    A whitelisted image is still stored, with a warning that the whitelist
+    wins.
     """
     assert ctx.guild_id is not None
     if not await deps.hash_rate_ok(ctx.user_id):
@@ -608,12 +630,36 @@ async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         return InteractionResponse("command.add_nothing_blocked", {"notes": "\n".join(notes)})
 
     blocked: list[str] = []
+    known_lines: list[str] = []
+    whitelist_lines: list[str] = []
     for hashes in computed:
+        known = await deps.known_image(ctx.guild_id, hashes)
+        hash_id = f"{hashes.phash:016x}"
+        if known.whitelisted:
+            whitelist_lines.append(
+                translate("command.add_whitelisted", ctx.locale, hash_id=hash_id)
+            )
+        if known.entry is not None:
+            if known.entry.hash_id not in blocked:  # not just added by this command
+                key = "command.add_already_listed" if known.exact else "command.add_already_caught"
+                known_lines.append(
+                    translate(
+                        key,
+                        ctx.locale,
+                        hash_id=known.entry.hash_id,
+                        origin=_hash_origin(known.entry),
+                    )
+                )
+            continue
         stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
         if stored.hash_id not in blocked:
             blocked.append(stored.hash_id)
             await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
-    notes = _add_notes(problems, len(failures), ctx.locale)
+    notes = known_lines + whitelist_lines + _add_notes(problems, len(failures), ctx.locale)
+    if not blocked:
+        if len(notes) == 1 and known_lines:
+            return InteractionResponse("command.add_known", {"notes": notes[0]})
+        return InteractionResponse("command.add_nothing_blocked", {"notes": "\n".join(notes)})
     if len(images) == 1 and not notes:
         return InteractionResponse("command.hash_added", {"hash_id": blocked[0]})
     return InteractionResponse(
@@ -647,12 +693,17 @@ def _added_at(row: GuildHash) -> datetime:
     return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
 
 
-def _render_hash_entry(row: GuildHash) -> str:
-    """One line per hash: id, how it was added, by whom, and when."""
+def _hash_origin(row: GuildHash) -> str:
+    """How a blocklist entry got there, by whom, and when: ``Confirm scam by @x <date>``."""
     source = _HASH_SOURCE_LABELS.get(row.source, row.source)
     added_by = f" by <@{row.added_by}>" if row.added_by is not None else ""
     when = f" <t:{int(_added_at(row).timestamp())}:d>" if row.created_at is not None else ""
-    return f"\u2022 `{row.hash_id}` \u2014 {source}{added_by}{when}"
+    return f"{source}{added_by}{when}"
+
+
+def _render_hash_entry(row: GuildHash) -> str:
+    """One line per hash: id, how it was added, by whom, and when."""
+    return f"\u2022 `{row.hash_id}` \u2014 {_hash_origin(row)}"
 
 
 async def _cmd_report_message(

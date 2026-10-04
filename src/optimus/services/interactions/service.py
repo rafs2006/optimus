@@ -28,7 +28,7 @@ from sqlalchemy.exc import OperationalError
 
 from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.core.backoff import BackoffPolicy, retry_async
-from optimus.core.config import Settings
+from optimus.core.config import Sensitivity, Settings
 from optimus.core.guild_config import GuildConfigCache, load_from_db
 from optimus.core.loadstats import load_snapshot
 from optimus.core.logging import correlation_context, get_correlation_id, get_logger
@@ -62,6 +62,7 @@ from optimus.services.interactions.handlers import (
     DetectionFacts,
     InteractionContext,
     InteractionResponse,
+    KnownImage,
     ModerationRest,
     SetupFailure,
     handle_command,
@@ -287,6 +288,70 @@ class DbDeps:
         stored = await repo.add(gh)
         self.pending_index_invalidations.add(guild_id)
         return stored
+
+    async def known_image(self, guild_id: int, hashes: AttachmentHashes) -> KnownImage:
+        # The scanner's own test, against this server's blocklist only: the
+        # same image, or a copy the scanner would already flag with
+        # confidence (a SCAM verdict -- an ambiguous match still goes to
+        # review, so storing the copy is useful there). Whitelist checked
+        # with the scanner's radius.
+        from optimus.contracts.events import Verdict
+        from optimus.services.detection.index import HashIndex, KnownHash, _mirror_dict
+        from optimus.services.detection.matcher import (
+            DEFAULT_WHITELIST_RADIUS,
+            WhitelistEntry,
+            is_whitelisted,
+            match,
+        )
+
+        whitelist = [
+            WhitelistEntry(phash=w.phash)
+            for w in await WhitelistRepository(self._session, guild_id).list()
+        ]
+        whitelisted = is_whitelisted(hashes.phash, whitelist, radius=DEFAULT_WHITELIST_RADIUS)
+        rows = {
+            r.hash_id: r for r in await GuildHashRepository(self._session, guild_id).list_active()
+        }
+        exact = rows.get(f"{hashes.phash:016x}")
+        if exact is not None:
+            return KnownImage(entry=exact, exact=True, whitelisted=whitelisted)
+        if not rows:
+            return KnownImage(whitelisted=whitelisted)
+        guild = await GuildRepository(self._session).get(guild_id)
+        sensitivity = (
+            Sensitivity(guild.sensitivity)
+            if guild is not None
+            else self._settings.sensitivity_default
+        )
+        index = HashIndex(
+            [
+                KnownHash(
+                    hash_id=r.hash_id,
+                    phash=r.phash,
+                    dhash=r.dhash,
+                    whash=r.whash,
+                    ahash=r.ahash,
+                    source="guild",
+                    mirror=_mirror_dict(r.mphash, r.mdhash, r.mwhash, r.mahash),
+                )
+                for r in rows.values()
+            ]
+        )
+        outcome = match(
+            {
+                "phash": hashes.phash,
+                "dhash": hashes.dhash,
+                "whash": hashes.whash,
+                "ahash": hashes.ahash,
+            },
+            guild_index=index,
+            global_index=HashIndex([]),
+            whitelist=[],
+            sensitivity=sensitivity,
+        )
+        if outcome.verdict is Verdict.SCAM and outcome.matched_hash_id in rows:
+            return KnownImage(entry=rows[outcome.matched_hash_id], whitelisted=whitelisted)
+        return KnownImage(whitelisted=whitelisted)
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
         removed = await GuildHashRepository(self._session, guild_id).remove(hash_id)

@@ -23,6 +23,7 @@ from optimus.services.interactions.handlers import (
     ChannelCreation,
     DetectionFacts,
     InteractionContext,
+    KnownImage,
     SetupFailure,
     _format_age,
     handle_command,
@@ -59,6 +60,9 @@ class FakeDeps:
         self.audits: list[tuple[int, int, str, str | None]] = []
         self._auto_act_threshold = flags.get("auto_act_threshold", 0.85)
         self.hashes: dict[str, GuildHash] = {}
+        #: hash id of a re-saved copy -> the listed entry the scanner matches it to.
+        self.near_copies: dict[str, str] = flags.get("near_copies", {})
+        self.whitelisted_ids: set[str] = set(flags.get("whitelisted_ids", ()))
         self.appeals: dict[int, dict[str, Any]] = {}
         self.reversed: list[int] = []
         self.purged: list[int] = []
@@ -129,6 +133,18 @@ class FakeDeps:
     async def add_guild_hash(self, guild_id: int, gh: GuildHash) -> GuildHash:
         # Mirrors DbDeps: an id this server already lists keeps its row.
         return self.hashes.setdefault(gh.hash_id, gh)
+
+    async def known_image(self, guild_id: int, hashes: AttachmentHashes) -> KnownImage:
+        # Mirrors DbDeps: the same image is "already listed"; a configured
+        # near-copy is "already caught"; a configured phash is whitelisted.
+        hash_id = f"{hashes.phash:016x}"
+        whitelisted = hash_id in self.whitelisted_ids
+        if hash_id in self.hashes:
+            return KnownImage(entry=self.hashes[hash_id], exact=True, whitelisted=whitelisted)
+        near = self.near_copies.get(hash_id)
+        if near is not None and near in self.hashes:
+            return KnownImage(entry=self.hashes[near], whitelisted=whitelisted)
+        return KnownImage(whitelisted=whitelisted)
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
         return 1 if self.hashes.pop(hash_id, None) is not None else 0
