@@ -121,7 +121,16 @@
     "queue_reopen_failed": "Could not reopen report #{detection_id}. Check that the review channel is linked and that I can post in it.",
     "add_bad_url": "That isn't a Discord image link. Right-click the image > **Copy Link** and paste it into `url:`.",
     "add_message_no_images": "That message has no images to block.",
-    "hashes_added": "Blocked {count} image(s): {hash_ids}. Future posts of them will be caught. Failed to fetch: {failed}."
+    "hashes_added": "Blocked {count} image(s): {hash_ids}. Future posts of them will be caught.{notes}",
+    "add_nothing_blocked": "Nothing was blocked:\n{notes}",
+    "add_message_other_server": "That message is on another server. Use a link to a message on this server.",
+    "add_skip_not_image": "Skipped `image:` — that file isn't an image.",
+    "add_skip_message_no_images": "Skipped `message:` — that message has no images.",
+    "add_skip_message_not_found": "Skipped `message:` — message not found, or not a valid link or ID.",
+    "add_skip_message_unreadable": "Skipped `message:` — couldn't read that message from Discord.",
+    "add_skip_message_other_server": "Skipped `message:` — that message is on another server.",
+    "add_skip_bad_url": "Skipped `url:` — not a Discord image link.",
+    "add_fetch_failed_count": "Couldn't fetch {count} image(s)."
   },
   "button": {
     "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",

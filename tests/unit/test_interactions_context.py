@@ -176,7 +176,7 @@ async def test_resolve_add_options_maps_resolved_image_to_id_and_url() -> None:
         resolved=SimpleNamespace(attachments={999: _attachment(999, "image/png")})
     )
     ctx = await _resolve_add_options(_add_ctx(999), interaction)
-    assert ctx.options == {"images": [(999, "https://cdn/999.bin")]}
+    assert ctx.options == {"images": [(999, "https://cdn/999.bin")], "problems": []}
 
 
 async def test_resolve_add_options_drops_non_image_attachments() -> None:
@@ -185,12 +185,12 @@ async def test_resolve_add_options_drops_non_image_attachments() -> None:
         resolved=SimpleNamespace(attachments={999: _attachment(999, "application/pdf")})
     )
     ctx = await _resolve_add_options(_add_ctx(999), interaction)
-    assert ctx.options == {"images": [], "not_image": True}
+    assert ctx.options == {"images": [], "problems": ["not_image"]}
 
 
 async def test_resolve_add_options_without_resolved_data_yields_no_images() -> None:
     ctx = await _resolve_add_options(_add_ctx(999), SimpleNamespace(resolved=None))
-    assert ctx.options == {"images": [], "not_image": True}
+    assert ctx.options == {"images": [], "problems": ["not_image"]}
     assert ctx.subcommand == "add"
 
 

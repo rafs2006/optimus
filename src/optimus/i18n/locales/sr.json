@@ -121,7 +121,16 @@
     "queue_reopen_failed": "Prijava #{detection_id} nije mogla ponovo da se otvori. Proverite da je kanal za pregled povezan i da mogu da pišem u njemu.",
     "add_bad_url": "To nije Discord link slike. Desni klik na sliku > **Copy Link** i nalepite ga u `url:`.",
     "add_message_no_images": "Ta poruka nema slika za blokiranje.",
-    "hashes_added": "Blokirano slika: {count}: {hash_ids}. Buduće objave biće uhvaćene. Neuspelo preuzimanje: {failed}."
+    "hashes_added": "Blokirano slika: {count}: {hash_ids}. Buduće objave biće uhvaćene.{notes}",
+    "add_nothing_blocked": "Ništa nije blokirano:\n{notes}",
+    "add_message_other_server": "Ta poruka je na drugom serveru. Koristite link poruke sa ovog servera.",
+    "add_skip_not_image": "Preskočeno `image:` — taj fajl nije slika.",
+    "add_skip_message_no_images": "Preskočeno `message:` — ta poruka nema slika.",
+    "add_skip_message_not_found": "Preskočeno `message:` — poruka nije pronađena ili link/ID nije ispravan.",
+    "add_skip_message_unreadable": "Preskočeno `message:` — poruka nije mogla da se pročita sa Discorda.",
+    "add_skip_message_other_server": "Preskočeno `message:` — ta poruka je na drugom serveru.",
+    "add_skip_bad_url": "Preskočeno `url:` — to nije Discord link slike.",
+    "add_fetch_failed_count": "Nije preuzeto slika: {count}."
   },
   "button": {
     "confirmed_scam": "Otkrivanje #{detection_id} je potvrđeno kao prevara: heš slike je dodat na crnu listu, a poruka je obrisana.",

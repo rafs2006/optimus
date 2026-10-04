@@ -339,6 +339,35 @@ def parse_channel_reference(text: str) -> int | None:
     return channel_id
 
 
+class AddProblem(StrEnum):
+    """Why one ``/scamhash add`` input produced no image to block.
+
+    Each input is resolved on its own: a problem with one never discards the
+    images another one found. The handler reports every problem next to what
+    it did block.
+    """
+
+    NOT_IMAGE = "not_image"
+    MESSAGE_NO_IMAGES = "message_no_images"
+    MESSAGE_NOT_FOUND = "message_not_found"
+    MESSAGE_UNREADABLE = "message_unreadable"
+    MESSAGE_OTHER_SERVER = "message_other_server"
+    BAD_URL = "bad_url"
+
+
+_MESSAGE_LINK = re.compile(r"discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)\s*$")
+
+
+def message_link_guild(text: str) -> int | None:
+    """The server id a full message link points into; ``None`` for a bare id.
+
+    Lets a command refuse a link to another server up front instead of
+    fetching a message it should not be acting on.
+    """
+    match = _MESSAGE_LINK.search(text.strip())
+    return int(match.group(1)) if match is not None else None
+
+
 def parse_message_reference(text: str) -> tuple[int | None, int]:
     """Parse a ``/scamhash reviewmsg message:`` value into (channel_id, message_id).
 
@@ -350,10 +379,7 @@ def parse_message_reference(text: str) -> tuple[int | None, int]:
     channel), so this returns ``None`` for the channel in that case.
     """
     stripped = text.strip()
-    match = re.search(
-        r"discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)\s*$",
-        stripped,
-    )
+    match = _MESSAGE_LINK.search(stripped)
     if match is not None:
         _guild_id, channel_id, message_id = match.groups()
         return int(channel_id), int(message_id)

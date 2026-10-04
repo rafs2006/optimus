@@ -1278,24 +1278,27 @@ def parse_cdn_image_url(raw: str) -> tuple[int, str] | None:
 async def _resolve_add_options(
     ctx: InteractionContext, interaction: Any, *, rest: Any = None
 ) -> InteractionContext:
-    """Resolve ``/scamhash add`` into the list of images to block.
+    """Resolve ``/scamhash add`` into the images to block and per-input problems.
 
     Three optional sources, combinable, at least one needed:
 
     * ``image`` -- an uploaded attachment. Discord sends an ATTACHMENT
       option's *value* as a bare snowflake id; the attachment object (with
       its CDN url) rides on ``interaction.resolved.attachments``.
-    * ``message`` -- a message link or id: every image on that message (the
-      bot must be able to read it, as for ``/scamhash review``). Unlike
-      review, nobody is acted on; the images are only blocklisted.
+    * ``message`` -- a message link or id on this server: every image on that
+      message (the bot must be able to read it, as for ``/scamhash review``).
+      Unlike review, nobody is acted on; the images are only blocklisted.
     * ``url`` -- one Discord image link (right-click an image > Copy Link),
       for blocking one specific image of a multi-image post.
 
-    Non-image uploads, a message with no images and a non-Discord link are
-    flagged rather than fetched, so the handler can say exactly what was wrong.
+    Nothing here raises for a bad input. A non-image upload, an unreadable or
+    foreign message and a non-Discord link each become one
+    :class:`AddProblem`, so a bad ``url:`` cannot throw away a good upload.
     """
+    from optimus.services.interactions.logic import AddProblem, message_link_guild
+
     images: list[tuple[int, str]] = []
-    options: dict[str, Any] = {}
+    problems: list[AddProblem] = []
     resolved_attachments = getattr(getattr(interaction, "resolved", None), "attachments", None)
     raw = ctx.options.get("image")
     if raw is not None:
@@ -1308,19 +1311,32 @@ async def _resolve_add_options(
                 found = True
             break
         if not found:
-            options["not_image"] = True
-    if ctx.options.get("message"):
-        if rest is None:
-            raise InteractionRejected(CommandError.FETCH_FAILED)
-        target = await _resolve_message_target_options(ctx, interaction, rest=rest)
-        on_message = list(target.options["attachments"])
-        if not on_message:
-            options["message_no_images"] = True
-        images.extend(on_message)
+            problems.append(AddProblem.NOT_IMAGE)
+    message = ctx.options.get("message")
+    if message:
+        link_guild = message_link_guild(str(message))
+        if link_guild is not None and link_guild != ctx.guild_id:
+            problems.append(AddProblem.MESSAGE_OTHER_SERVER)
+        elif rest is None:
+            problems.append(AddProblem.MESSAGE_UNREADABLE)
+        else:
+            try:
+                target = await _resolve_message_target_options(ctx, interaction, rest=rest)
+            except InteractionRejected as rejected:
+                problems.append(
+                    AddProblem.MESSAGE_NOT_FOUND
+                    if rejected.reason is CommandError.MESSAGE_NOT_FOUND
+                    else AddProblem.MESSAGE_UNREADABLE
+                )
+            else:
+                on_message = list(target.options["attachments"])
+                if not on_message:
+                    problems.append(AddProblem.MESSAGE_NO_IMAGES)
+                images.extend(on_message)
     if ctx.options.get("url"):
         parsed = parse_cdn_image_url(str(ctx.options["url"]))
         if parsed is None:
-            options["bad_url"] = True
+            problems.append(AddProblem.BAD_URL)
         else:
             images.append(parsed)
     seen: set[int] = set()
@@ -1329,14 +1345,13 @@ async def _resolve_add_options(
         if attachment_id not in seen:
             seen.add(attachment_id)
             unique.append((attachment_id, url))
-    options["images"] = unique[:MAX_ADD_IMAGES]
     return InteractionContext(
         guild_id=ctx.guild_id,
         user_id=ctx.user_id,
         member_permissions=ctx.member_permissions,
         command=ctx.command,
         subcommand=ctx.subcommand,
-        options=options,
+        options={"images": unique[:MAX_ADD_IMAGES], "problems": [p.value for p in problems]},
         locale=ctx.locale,
     )
 

@@ -31,6 +31,7 @@ from optimus.services.interactions.attachment_hash import (
 )
 from optimus.services.interactions.commands import required_permission
 from optimus.services.interactions.logic import (
+    AddProblem,
     CommandError,
     ComponentAction,
     InteractionRejected,
@@ -500,48 +501,7 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     assert ctx.guild_id is not None  # guaranteed by _require (MANAGE_GUILD => guild-only)
     sub = ctx.subcommand
     if sub == "add":
-        if not await deps.hash_rate_ok(ctx.user_id):
-            raise InteractionRejected(CommandError.RATE_LIMITED)
-        if ctx.options.get("bad_url"):
-            return InteractionResponse("command.add_bad_url")
-        images = [(int(a), str(u)) for a, u in ctx.options.get("images") or []]
-        if not images:
-            if ctx.options.get("message_no_images"):
-                return InteractionResponse("command.add_message_no_images")
-            # Wrong file type, Discord sent no resolved attachment, or no
-            # source given at all.
-            return InteractionResponse("command.add_not_image")
-        # Every download first, then every write: fetching must not run
-        # inside the transaction (see compute_attachment_hashes).
-        computed: list[AttachmentHashes] = []
-        failures: list[str] = []
-        for attachment_id, url in images:
-            try:
-                computed.append(
-                    await deps.compute_attachment_hashes(attachment_id=attachment_id, url=url)
-                )
-            except AttachmentHashError as exc:
-                failures.append(str(exc))
-        if not computed:
-            return InteractionResponse("command.add_fetch_failed", {"reason": failures[0]})
-        blocked: list[str] = []
-        for hashes in computed:
-            stored = await deps.add_guild_hash(
-                ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id)
-            )
-            if stored.hash_id not in blocked:
-                blocked.append(stored.hash_id)
-                await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
-        if len(images) == 1:
-            return InteractionResponse("command.hash_added", {"hash_id": blocked[0]})
-        return InteractionResponse(
-            "command.hashes_added",
-            {
-                "count": len(blocked),
-                "hash_ids": ", ".join(f"`{h}`" for h in blocked),
-                "failed": len(failures),
-            },
-        )
+        return await _scamhash_add(ctx, deps)
     if sub == "remove":
         hash_id = str(ctx.options["hash_id"])
         removed = await deps.remove_guild_hash(ctx.guild_id, hash_id)
@@ -587,6 +547,83 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     if sub == "review":
         return await _review_message(ctx, deps)
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
+
+
+#: What a single problem answers when nothing at all could be blocked:
+#: (i18n key, or the rejection whose existing text already says it).
+_ADD_ONLY_PROBLEM: dict[AddProblem, str | CommandError] = {
+    AddProblem.NOT_IMAGE: "command.add_not_image",
+    AddProblem.MESSAGE_NO_IMAGES: "command.add_message_no_images",
+    AddProblem.MESSAGE_NOT_FOUND: CommandError.MESSAGE_NOT_FOUND,
+    AddProblem.MESSAGE_UNREADABLE: CommandError.FETCH_FAILED,
+    AddProblem.MESSAGE_OTHER_SERVER: "command.add_message_other_server",
+    AddProblem.BAD_URL: "command.add_bad_url",
+}
+
+
+def _add_notes(problems: list[AddProblem], failed: int, locale: str) -> list[str]:
+    """One short line per input that was skipped, plus any failed downloads."""
+    lines = [translate(f"command.add_skip_{p.value}", locale) for p in problems]
+    if failed:
+        lines.append(translate("command.add_fetch_failed_count", locale, count=failed))
+    return lines
+
+
+async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
+    """Block every image the ``image``/``message``/``url`` inputs resolved to.
+
+    Each input stands alone: a problem with one is reported next to what the
+    others blocked, never instead of it. Only when nothing at all could be
+    blocked does a single problem get its own specific answer.
+    """
+    assert ctx.guild_id is not None
+    if not await deps.hash_rate_ok(ctx.user_id):
+        raise InteractionRejected(CommandError.RATE_LIMITED)
+    images = [(int(a), str(u)) for a, u in ctx.options.get("images") or []]
+    problems = [AddProblem(p) for p in ctx.options.get("problems") or []]
+    # Every download first, then every write: fetching must not run inside
+    # the transaction (see compute_attachment_hashes).
+    computed: list[AttachmentHashes] = []
+    failures: list[str] = []
+    for attachment_id, url in images:
+        try:
+            computed.append(
+                await deps.compute_attachment_hashes(attachment_id=attachment_id, url=url)
+            )
+        except AttachmentHashError as exc:
+            failures.append(str(exc))
+
+    if not computed:
+        if failures and not problems:
+            return InteractionResponse("command.add_fetch_failed", {"reason": failures[0]})
+        if len(problems) == 1 and not failures:
+            answer = _ADD_ONLY_PROBLEM[problems[0]]
+            if isinstance(answer, CommandError):
+                raise InteractionRejected(answer)
+            return InteractionResponse(answer)
+        if not problems:
+            # No input given at all.
+            return InteractionResponse("command.add_not_image")
+        notes = _add_notes(problems, len(failures), ctx.locale)
+        return InteractionResponse("command.add_nothing_blocked", {"notes": "\n".join(notes)})
+
+    blocked: list[str] = []
+    for hashes in computed:
+        stored = await deps.add_guild_hash(ctx.guild_id, _hashes_to_guild_hash(hashes, ctx.user_id))
+        if stored.hash_id not in blocked:
+            blocked.append(stored.hash_id)
+            await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.add", target=stored.hash_id)
+    notes = _add_notes(problems, len(failures), ctx.locale)
+    if len(images) == 1 and not notes:
+        return InteractionResponse("command.hash_added", {"hash_id": blocked[0]})
+    return InteractionResponse(
+        "command.hashes_added",
+        {
+            "count": len(blocked),
+            "hash_ids": ", ".join(f"`{h}`" for h in blocked),
+            "notes": "".join(f"\n{line}" for line in notes),
+        },
+    )
 
 
 #: How each blocklist entry got there, in the words moderators know.
