@@ -161,6 +161,16 @@ class WhitelistRepository:
         stmt = select(GuildWhitelist).where(GuildWhitelist.guild_id == self._guild_id)
         return (await self._session.execute(stmt)).scalars().all()
 
+    async def remove(self, entry_ids: Sequence[int]) -> int:
+        """Delete this guild's entries with the given ids; returns how many went."""
+        if not entry_ids:
+            return 0
+        stmt = delete(GuildWhitelist).where(
+            GuildWhitelist.guild_id == self._guild_id, GuildWhitelist.id.in_(list(entry_ids))
+        )
+        result = await self._session.execute(stmt)
+        return cast("CursorResult[Any]", result).rowcount or 0
+
 
 class GlobalTrustedGuildRepository:
     """The owner-managed allowlist of servers whose confirmations count globally."""

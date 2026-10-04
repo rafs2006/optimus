@@ -18,13 +18,14 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
 from optimus.core.logging import get_logger
 from optimus.db.models import GuildHash, GuildWhitelist
 from optimus.i18n import translate
+from optimus.services.detection.matcher import DEFAULT_WHITELIST_RADIUS
 from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
@@ -217,13 +218,11 @@ class KnownImage:
 
     ``entry`` is the blocklist entry that already covers the image: the same
     image (``exact``), or one the scanner would already flag with confidence
-    (a re-saved, resized or re-compressed copy). ``whitelisted`` is set when
-    the server's whitelist covers the image, which wins over any blocklist.
+    (a re-saved, resized or re-compressed copy).
     """
 
     entry: GuildHash | None = None
     exact: bool = False
-    whitelisted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +282,8 @@ class InteractionDeps(Protocol):
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int: ...
     async def list_guild_hashes(self, guild_id: int) -> list[GuildHash]: ...
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist: ...
+    async def list_whitelist(self, guild_id: int) -> list[GuildWhitelist]: ...
+    async def remove_whitelist(self, guild_id: int, entry_ids: Sequence[int]) -> int: ...
     async def get_config(self, guild_id: int) -> dict[str, Any]: ...
 
     def auto_act_threshold(self) -> float:
@@ -467,6 +468,7 @@ class InteractionDeps(Protocol):
         matched_hash_id: str,
         confirmed_by: int | None = None,
         review_card_id: int | None = None,
+        whitelist_removed: int = 0,
     ) -> None:
         """Record a moderator-confirmed scam match and run the moderation pipeline.
 
@@ -554,14 +556,24 @@ async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> Inter
         )
     if sub == "export":
         rows = await deps.list_guild_hashes(ctx.guild_id)
-        if not rows:
+        whitelist = await deps.list_whitelist(ctx.guild_id)
+        if not rows and not whitelist:
             return InteractionResponse("command.export_empty")
         body = build_export(
-            [_ImportHash(phash=r.phash, dhash=r.dhash, whash=r.whash) for r in rows]
+            [_ImportHash(phash=r.phash, dhash=r.dhash, whash=r.whash) for r in rows],
+            whitelist=[_whitelist_export_row(w) for w in whitelist],
         )
-        return InteractionResponse("command.export_ok", {"count": len(rows)}, attachment=body)
+        return InteractionResponse(
+            "command.export_ok",
+            {"count": len(rows), "whitelisted": len(whitelist)},
+            attachment=body,
+        )
     if sub == "review":
         return await _review_message(ctx, deps)
+    if sub == "whitelist":
+        return await _scamhash_whitelist(ctx, deps)
+    if sub == "unwhitelist":
+        return await _scamhash_unwhitelist(ctx, deps)
     raise InteractionRejected(CommandError.UNKNOWN_FIELD)  # pragma: no cover
 
 
@@ -595,8 +607,8 @@ async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     An image this server's blocklist already covers -- the same image, or a
     copy the scanner already flags with confidence -- is not stored again:
     the reply names the entry that covers it, and no audit row is written.
-    A whitelisted image is still stored, with a warning that the whitelist
-    wins.
+    Whitelist entries that cover the image are removed first (the reply
+    names them), so the block takes effect.
     """
     assert ctx.guild_id is not None
     if not await deps.hash_rate_ok(ctx.user_id):
@@ -632,13 +644,18 @@ async def _scamhash_add(ctx: InteractionContext, deps: InteractionDeps) -> Inter
     blocked: list[str] = []
     known_lines: list[str] = []
     whitelist_lines: list[str] = []
+    # A moderator blocking an image means it is a scam: a whitelist entry
+    # that covers it (a misclicked False positive) would make the block
+    # useless, because the whitelist wins. Lift those entries first.
+    lifted = await _lift_whitelist(
+        deps, ctx.guild_id, ctx.user_id, [h.phash for h in computed], cause="scamhash add"
+    )
+    if lifted:
+        whitelist_lines.append(
+            translate("command.add_unwhitelisted", ctx.locale, entries=_entry_refs(lifted))
+        )
     for hashes in computed:
         known = await deps.known_image(ctx.guild_id, hashes)
-        hash_id = f"{hashes.phash:016x}"
-        if known.whitelisted:
-            whitelist_lines.append(
-                translate("command.add_whitelisted", ctx.locale, hash_id=hash_id)
-            )
         if known.entry is not None:
             if known.entry.hash_id not in blocked:  # not just added by this command
                 key = "command.add_already_listed" if known.exact else "command.add_already_caught"
@@ -704,6 +721,290 @@ def _hash_origin(row: GuildHash) -> str:
 def _render_hash_entry(row: GuildHash) -> str:
     """One line per hash: id, how it was added, by whom, and when."""
     return f"\u2022 `{row.hash_id}` \u2014 {_hash_origin(row)}"
+
+
+# --- whitelist management ----------------------------------------------------------
+
+#: ``/scamhash whitelist`` page size: 10 entries keep a page well inside
+#: Discord's 2,000-character message limit.
+WHITELIST_PAGE_SIZE = 10
+#: Hash ids a whitelist line names before it says "+N more".
+_COVERS_SHOWN = 3
+#: Entries the ``by``/``since`` preview names before it says "+N more".
+_PREVIEW_SHOWN = 20
+#: ``since`` units and their length.
+_SINCE_UNITS: dict[str, timedelta] = {
+    "m": timedelta(minutes=1),
+    "h": timedelta(hours=1),
+    "d": timedelta(days=1),
+    "w": timedelta(weeks=1),
+}
+#: Longest ``since`` window accepted.
+_SINCE_MAX = timedelta(days=365)
+
+
+def _covers(entry_phash: int, image_phash: int) -> bool:
+    """Whether a whitelist entry exempts an image -- the scanner's own test."""
+    return (entry_phash ^ image_phash).bit_count() <= DEFAULT_WHITELIST_RADIUS
+
+
+def _entry_refs(rows: Sequence[GuildWhitelist]) -> str:
+    """``#40, #41`` -- the numbers moderators pass to ``/scamhash unwhitelist``."""
+    return ", ".join(f"#{r.id}" for r in rows)
+
+
+def _whitelist_added_at(row: GuildWhitelist) -> datetime:
+    """When a whitelist entry was added, as an aware UTC datetime."""
+    when = row.created_at
+    if when is None:
+        return datetime.min.replace(tzinfo=UTC)
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
+async def _lift_whitelist(
+    deps: InteractionDeps,
+    guild_id: int,
+    user_id: int,
+    phashes: Sequence[int],
+    *,
+    cause: str,
+) -> list[GuildWhitelist]:
+    """Remove every whitelist entry that covers one of ``phashes``.
+
+    Used when a moderator calls an image a scam: an entry that still covers it
+    would win over the blocklist and keep the scanner quiet. Returns the
+    removed entries; each removal gets a ``scamhash.unwhitelist`` audit row.
+    """
+    if not phashes:
+        return []
+    rows = [
+        w for w in await deps.list_whitelist(guild_id) if any(_covers(w.phash, p) for p in phashes)
+    ]
+    if not rows:
+        return []
+    await deps.remove_whitelist(guild_id, [int(r.id) for r in rows])
+    for row in rows:
+        await deps.audit(guild_id, user_id, "scamhash.unwhitelist", target=f"#{row.id} ({cause})")
+    return rows
+
+
+def _whitelist_reason(row: GuildWhitelist, locale: str) -> str:
+    """Why an entry exists, in the words of the button that created it."""
+    reason = row.reason or ""
+    for prefix, action in (
+        ("false positive: detection #", ReviewAction.FALSE_POSITIVE),
+        ("review: detection #", ReviewAction.WHITELIST_IMAGE),
+    ):
+        if reason.startswith(prefix):
+            return translate(
+                "command.whitelist_reason_card",
+                locale,
+                action=BUTTON_LABELS[action],
+                detection_id=reason[len(prefix) :],
+            )
+    return reason or translate("command.whitelist_reason_unknown", locale)
+
+
+def _render_whitelist_entry(
+    row: GuildWhitelist, blocklist: Sequence[GuildHash], locale: str
+) -> str:
+    """One line per entry: number, why, who, when, and what it overrides."""
+    line = f"\u2022 **#{row.id}** \u2014 {_whitelist_reason(row, locale)}"
+    if row.added_by is not None:
+        line += f" by <@{row.added_by}>"
+    if row.created_at is not None:
+        line += f" <t:{int(_whitelist_added_at(row).timestamp())}:d>"
+    covered = [h.hash_id for h in blocklist if _covers(row.phash, h.phash)]
+    if covered:
+        shown = ", ".join(f"`{h}`" for h in covered[:_COVERS_SHOWN])
+        more = len(covered) - _COVERS_SHOWN
+        line += "\n  " + translate(
+            "command.whitelist_overrides" if more <= 0 else "command.whitelist_overrides_more",
+            locale,
+            hash_ids=shown,
+            more=more,
+        )
+    return line
+
+
+def _parse_since(raw: Any) -> timedelta | None:
+    """``30m`` / ``2h`` / ``3d`` / ``1w`` -> a window; ``None`` when not given.
+
+    Raises :class:`InteractionRejected` for anything else, or a window longer
+    than a year.
+    """
+    if raw is None or str(raw).strip() == "":
+        return None
+    text = str(raw).strip().lower()
+    unit = _SINCE_UNITS.get(text[-1:])
+    if unit is None or not text[:-1].isdigit() or int(text[:-1]) <= 0:
+        raise InteractionRejected(CommandError.BAD_SINCE)
+    window = unit * int(text[:-1])
+    if window > _SINCE_MAX:
+        raise InteractionRejected(CommandError.BAD_SINCE)
+    return window
+
+
+def _filter_whitelist(
+    rows: Sequence[GuildWhitelist], by: int | None, since: timedelta | None
+) -> list[GuildWhitelist]:
+    """Entries added by ``by`` within ``since``, newest first."""
+    cutoff = datetime.now(UTC) - since if since is not None else None
+    picked = [
+        r
+        for r in rows
+        if (by is None or r.added_by == by) and (cutoff is None or _whitelist_added_at(r) >= cutoff)
+    ]
+    return sorted(picked, key=lambda r: (_whitelist_added_at(r), r.id or 0), reverse=True)
+
+
+def _filter_text(by: int | None, since: Any, locale: str) -> str:
+    """`` added by @x in the last 2h`` -- echoes the filter back, or ``""``."""
+    parts: list[str] = []
+    if by is not None:
+        parts.append(translate("command.whitelist_filter_by", locale, user_id=by))
+    if since is not None and str(since).strip():
+        parts.append(translate("command.whitelist_filter_since", locale, since=str(since).strip()))
+    return "".join(f" {p}" for p in parts)
+
+
+def _whitelist_export_row(row: GuildWhitelist) -> dict[str, Any]:
+    """One whitelist entry in the export file (read by people, not by import)."""
+    return {
+        "entry": row.id,
+        "phash": f"{row.phash:016x}",
+        "reason": row.reason,
+        "added_by": row.added_by,
+        "created_at": _whitelist_added_at(row).isoformat() if row.created_at else None,
+    }
+
+
+async def _scamhash_whitelist(
+    ctx: InteractionContext, deps: InteractionDeps
+) -> InteractionResponse:
+    """``/scamhash whitelist [page] [by] [since]`` -- what the whitelist exempts.
+
+    Each line shows the entry number ``/scamhash unwhitelist`` takes, which
+    button created it, who and when, and the blocklist hashes it overrides
+    (the whitelist wins over them).
+    """
+    assert ctx.guild_id is not None
+    by = int(ctx.options["by"]) if ctx.options.get("by") is not None else None
+    since_raw = ctx.options.get("since")
+    rows = _filter_whitelist(await deps.list_whitelist(ctx.guild_id), by, _parse_since(since_raw))
+    filtered = _filter_text(by, since_raw, ctx.locale)
+    if not rows:
+        key = "command.whitelist_none_match" if filtered else "command.whitelist_empty"
+        return InteractionResponse(key, {"filter": filtered})
+    pages = math.ceil(len(rows) / WHITELIST_PAGE_SIZE)
+    page = min(max(int(ctx.options.get("page") or 1), 1), pages)
+    shown = rows[(page - 1) * WHITELIST_PAGE_SIZE : page * WHITELIST_PAGE_SIZE]
+    blocklist = await deps.list_guild_hashes(ctx.guild_id)
+    return InteractionResponse(
+        "command.whitelist_page",
+        {
+            "count": len(rows),
+            "filter": filtered,
+            "page": page,
+            "pages": pages,
+            "entries": "\n".join(_render_whitelist_entry(r, blocklist, ctx.locale) for r in shown),
+        },
+    )
+
+
+def _parse_entry_refs(raw: str) -> tuple[set[int], set[int], list[str]]:
+    """Split ``entry:`` into entry numbers, image hashes, and unreadable tokens.
+
+    ``12`` or ``#12`` is an entry number; a 16-character hex id (as
+    ``/scamhash list`` and the add replies show it) is an image hash.
+    """
+    numbers: set[int] = set()
+    hashes: set[int] = set()
+    bad: list[str] = []
+    for token in raw.replace(",", " ").split():
+        bare = token.strip("`").removeprefix("#")
+        if len(bare) == 16 and all(c in "0123456789abcdefABCDEF" for c in bare):
+            hashes.add(int(bare, 16))
+        elif bare.isdigit() and len(bare) < 16:
+            numbers.add(int(bare))
+        else:
+            bad.append(token)
+    return numbers, hashes, bad
+
+
+async def _remove_entries(
+    ctx: InteractionContext, deps: InteractionDeps, rows: Sequence[GuildWhitelist]
+) -> None:
+    assert ctx.guild_id is not None
+    await deps.remove_whitelist(ctx.guild_id, [int(r.id) for r in rows])
+    for row in rows:
+        await deps.audit(ctx.guild_id, ctx.user_id, "scamhash.unwhitelist", target=f"#{row.id}")
+
+
+async def _scamhash_unwhitelist(
+    ctx: InteractionContext, deps: InteractionDeps
+) -> InteractionResponse:
+    """``/scamhash unwhitelist`` -- remove entries so Optimus flags the images again.
+
+    ``entry:`` names entries (numbers or image hashes) and removes them at
+    once. ``by:`` / ``since:`` select a batch -- a run of misclicks -- and only
+    preview it; the same command with ``confirm:True`` removes it. Nothing is
+    kept between the two runs, so the preview cannot go stale in storage.
+    """
+    assert ctx.guild_id is not None
+    entry_raw = str(ctx.options.get("entry") or "").strip()
+    by = int(ctx.options["by"]) if ctx.options.get("by") is not None else None
+    since_raw = ctx.options.get("since")
+    since = _parse_since(since_raw)
+    if entry_raw and (by is not None or since is not None):
+        return InteractionResponse("command.unwhitelist_entry_or_filter")
+    if not entry_raw and by is None and since is None:
+        return InteractionResponse("command.unwhitelist_nothing_given")
+    rows = await deps.list_whitelist(ctx.guild_id)
+
+    if entry_raw:
+        numbers, hashes, bad = _parse_entry_refs(entry_raw)
+        picked = [r for r in rows if r.id in numbers or any(_covers(r.phash, h) for h in hashes)]
+        found_numbers = {r.id for r in picked}
+        missing = [f"#{n}" for n in sorted(numbers - found_numbers)]
+        missing += [
+            f"`{h:016x}`" for h in sorted(hashes) if not any(_covers(r.phash, h) for r in picked)
+        ]
+        missing += bad
+        if not picked:
+            return InteractionResponse(
+                "command.unwhitelist_not_found", {"entries": ", ".join(missing) or entry_raw}
+            )
+        await _remove_entries(ctx, deps, picked)
+        notes = (
+            "\n" + translate("command.unwhitelist_missing", ctx.locale, entries=", ".join(missing))
+            if missing
+            else ""
+        )
+        return InteractionResponse(
+            "command.unwhitelist_done",
+            {"count": len(picked), "entries": _entry_refs(picked), "notes": notes},
+        )
+
+    picked = _filter_whitelist(rows, by, since)
+    filtered = _filter_text(by, since_raw, ctx.locale)
+    if not picked:
+        return InteractionResponse("command.whitelist_none_match", {"filter": filtered})
+    if not bool(ctx.options.get("confirm")):
+        refs = _entry_refs(picked[:_PREVIEW_SHOWN])
+        if len(picked) > _PREVIEW_SHOWN:
+            refs += translate(
+                "command.unwhitelist_preview_more", ctx.locale, more=len(picked) - _PREVIEW_SHOWN
+            )
+        return InteractionResponse(
+            "command.unwhitelist_preview",
+            {"count": len(picked), "filter": filtered, "entries": refs},
+        )
+    await _remove_entries(ctx, deps, picked)
+    return InteractionResponse(
+        "command.unwhitelist_done",
+        {"count": len(picked), "entries": _entry_refs(picked[:_PREVIEW_SHOWN]), "notes": ""},
+    )
 
 
 async def _cmd_report_message(
@@ -824,6 +1125,13 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
     # each iteration is fast and the write lock is held for close to the
     # minimum time actually needed.
     added_hash_ids: list[str] = []
+    lifted = await _lift_whitelist(
+        deps,
+        ctx.guild_id,
+        ctx.user_id,
+        [h.phash for _a, h in computed],
+        cause="Review as scam",
+    )
     for attachment_id, hashes in computed:
         stored = await deps.store_attachment_hash(ctx.guild_id, hashes=hashes, added_by=ctx.user_id)
         added_hash_ids.append(stored.hash_id)
@@ -837,6 +1145,7 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
             matched_hash_id=stored.hash_id,
             # A moderator's own call: its card is posted already folded.
             confirmed_by=ctx.user_id,
+            whitelist_removed=len(lifted),
         )
     if not added_hash_ids:
         return InteractionResponse("command.reviewmsg_all_failed", {"failed": failed})
@@ -1342,12 +1651,25 @@ async def _import_hashes(
 # --- component (button) handlers -------------------------------------------------
 
 
-def _card_note(action: ReviewAction, user_id: int, *, key: str = "card.handled") -> dict[str, Any]:
-    """The ``card_note_*`` kwargs marking a card as handled by ``user_id``."""
-    return {
-        "card_note_key": key,
-        "card_note_params": {"action": BUTTON_LABELS[action], "user_id": user_id},
-    }
+def _card_note(
+    action: ReviewAction,
+    user_id: int,
+    *,
+    key: str = "card.handled",
+    whitelisted: Sequence[GuildWhitelist] = (),
+) -> dict[str, Any]:
+    """The ``card_note_*`` kwargs marking a card as handled by ``user_id``.
+
+    ``whitelisted`` are the whitelist entries the decision created: the card
+    names their numbers, so a misclick can be undone with
+    ``/scamhash unwhitelist``.
+    """
+    params: dict[str, Any] = {"action": BUTTON_LABELS[action], "user_id": user_id}
+    if whitelisted:
+        key = f"{key}_whitelisted"
+        params["count"] = len(whitelisted)
+        params["entries"] = _entry_refs(whitelisted)
+    return {"card_note_key": key, "card_note_params": params}
 
 
 async def _is_global_participant(deps: InteractionDeps, guild_id: int) -> bool:
@@ -1523,6 +1845,15 @@ async def handle_review_button(
                 ctx.guild_id, ctx.user_id, "review.confirm_scam", target=str(det.detection_id)
             )
         hashed = [(det, hashes) for det, hashes in resolved if hashes is not None]
+        # A confirmed scam must not stay exempt: lift any whitelist entry
+        # that covers it (an earlier misclick), and say so on the card.
+        lifted = await _lift_whitelist(
+            deps,
+            ctx.guild_id,
+            ctx.user_id,
+            [h.phash for _det, h in hashed],
+            cause=f"Confirm scam on detection #{detection_id}",
+        )
         for det, hashes in hashed:
             # Route the confirmation through the same verdict pipeline a live
             # detection uses. Without this, Confirm deleted the single message
@@ -1542,6 +1873,7 @@ async def handle_review_button(
                 matched_hash_id=f"{hashes.phash:016x}",
                 confirmed_by=ctx.user_id,
                 review_card_id=ctx.card_message_id,
+                whitelist_removed=len(lifted),
             )
         key = "button.confirmed_scam" if hashed else "button.confirmed_no_hash"
         # Confirm doubles as the global promotion vote — but only from servers
@@ -1592,18 +1924,21 @@ async def handle_review_button(
                     uploader_id,
                     reason=reasons.false_positive_reason(detection_id),
                 )
+        created: list[GuildWhitelist] = []
         for det, hashes in resolved:
             if hashes is None:
                 continue
-            await deps.add_whitelist(
-                ctx.guild_id,
-                GuildWhitelist(
-                    phash=hashes.phash,
-                    dhash=hashes.dhash,
-                    whash=hashes.whash,
-                    reason=f"false positive: detection #{det.detection_id}",
-                    added_by=ctx.user_id,
-                ),
+            created.append(
+                await deps.add_whitelist(
+                    ctx.guild_id,
+                    GuildWhitelist(
+                        phash=hashes.phash,
+                        dhash=hashes.dhash,
+                        whash=hashes.whash,
+                        reason=f"false positive: detection #{det.detection_id}",
+                        added_by=ctx.user_id,
+                    ),
+                )
             )
         for det in group:
             await deps.reverse_detection_action(ctx.guild_id, det.detection_id)
@@ -1629,7 +1964,9 @@ async def handle_review_button(
                     key = "button.marked_false_positive_global_revoked"
         note_key = "card.handled" if can_unban else "card.handled_ban_kept"
         return InteractionResponse(
-            key, {"detection_id": detection_id}, **_card_note(action, ctx.user_id, key=note_key)
+            key,
+            {"detection_id": detection_id},
+            **_card_note(action, ctx.user_id, key=note_key, whitelisted=created),
         )
 
     if action is ReviewAction.DISMISS:
@@ -1696,23 +2033,28 @@ async def handle_review_button(
         resolved = [(det, await _resolve_image_hashes(deps, det)) for det in images]
         if all(hashes is None for _det, hashes in resolved):
             return InteractionResponse("button.no_image")
+        created = []
         for det, hashes in resolved:
             if hashes is None:
                 continue
-            await deps.add_whitelist(
-                ctx.guild_id,
-                GuildWhitelist(
-                    phash=hashes.phash,
-                    dhash=hashes.dhash,
-                    whash=hashes.whash,
-                    reason=f"review: detection #{det.detection_id}",
-                    added_by=ctx.user_id,
-                ),
+            created.append(
+                await deps.add_whitelist(
+                    ctx.guild_id,
+                    GuildWhitelist(
+                        phash=hashes.phash,
+                        dhash=hashes.dhash,
+                        whash=hashes.whash,
+                        reason=f"review: detection #{det.detection_id}",
+                        added_by=ctx.user_id,
+                    ),
+                )
             )
             await deps.audit(
                 ctx.guild_id, ctx.user_id, "review.whitelist_image", target=str(det.detection_id)
             )
-        return InteractionResponse("button.image_whitelisted", **_card_note(action, ctx.user_id))
+        return InteractionResponse(
+            "button.image_whitelisted", **_card_note(action, ctx.user_id, whitelisted=created)
+        )
 
     if action is ReviewAction.SUBMIT_GLOBAL:
         # Legacy button on cards rendered before global sharing became

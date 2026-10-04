@@ -18,7 +18,7 @@ handler failure rolls back cleanly and never leaks a half-applied state change.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -293,30 +293,20 @@ class DbDeps:
         # The scanner's own test, against this server's blocklist only: the
         # same image, or a copy the scanner would already flag with
         # confidence (a SCAM verdict -- an ambiguous match still goes to
-        # review, so storing the copy is useful there). Whitelist checked
-        # with the scanner's radius.
+        # review, so storing the copy is useful there). The whitelist is
+        # not consulted: /scamhash add lifts it before asking.
         from optimus.contracts.events import Verdict
         from optimus.services.detection.index import HashIndex, KnownHash, _mirror_dict
-        from optimus.services.detection.matcher import (
-            DEFAULT_WHITELIST_RADIUS,
-            WhitelistEntry,
-            is_whitelisted,
-            match,
-        )
+        from optimus.services.detection.matcher import match
 
-        whitelist = [
-            WhitelistEntry(phash=w.phash)
-            for w in await WhitelistRepository(self._session, guild_id).list()
-        ]
-        whitelisted = is_whitelisted(hashes.phash, whitelist, radius=DEFAULT_WHITELIST_RADIUS)
         rows = {
             r.hash_id: r for r in await GuildHashRepository(self._session, guild_id).list_active()
         }
         exact = rows.get(f"{hashes.phash:016x}")
         if exact is not None:
-            return KnownImage(entry=exact, exact=True, whitelisted=whitelisted)
+            return KnownImage(entry=exact, exact=True)
         if not rows:
-            return KnownImage(whitelisted=whitelisted)
+            return KnownImage()
         guild = await GuildRepository(self._session).get(guild_id)
         sensitivity = (
             Sensitivity(guild.sensitivity)
@@ -350,8 +340,8 @@ class DbDeps:
             sensitivity=sensitivity,
         )
         if outcome.verdict is Verdict.SCAM and outcome.matched_hash_id in rows:
-            return KnownImage(entry=rows[outcome.matched_hash_id], whitelisted=whitelisted)
-        return KnownImage(whitelisted=whitelisted)
+            return KnownImage(entry=rows[outcome.matched_hash_id])
+        return KnownImage()
 
     async def remove_guild_hash(self, guild_id: int, hash_id: str) -> int:
         removed = await GuildHashRepository(self._session, guild_id).remove(hash_id)
@@ -364,6 +354,14 @@ class DbDeps:
 
     async def add_whitelist(self, guild_id: int, entry: GuildWhitelist) -> GuildWhitelist:
         return await WhitelistRepository(self._session, guild_id).add(entry)
+
+    async def list_whitelist(self, guild_id: int) -> list[GuildWhitelist]:
+        return list(await WhitelistRepository(self._session, guild_id).list())
+
+    async def remove_whitelist(self, guild_id: int, entry_ids: Sequence[int]) -> int:
+        # The scanner reads the whitelist from the database for every image,
+        # so a removal takes effect on the next upload; no cache to drop.
+        return await WhitelistRepository(self._session, guild_id).remove(entry_ids)
 
     def auto_act_threshold(self) -> float:
         return self._settings.mod_auto_act_threshold
@@ -936,6 +934,7 @@ class DbDeps:
         matched_hash_id: str,
         confirmed_by: int | None = None,
         review_card_id: int | None = None,
+        whitelist_removed: int = 0,
     ) -> None:
         if self._detection is None:  # pragma: no cover - always wired at app startup
             _log.warning("reviewmsg_no_detection_service", guild_id=guild_id)
@@ -956,6 +955,7 @@ class DbDeps:
             matched_source="guild",
             confirmed_by=confirmed_by,
             review_card_id=review_card_id,
+            whitelist_removed=whitelist_removed,
         )
         # Persist through THIS request's session -- the transaction already
         # holds SQLite's write lock (store_attachment_hash flushed an INSERT

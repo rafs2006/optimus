@@ -96,6 +96,8 @@ class CommandError(StrEnum):
     INVALID_VALUE = "config_invalid_value"
     MESSAGE_NOT_FOUND = "reviewmsg_not_found"
     FETCH_FAILED = "reviewmsg_fetch_failed"
+    #: ``since:`` is not like ``30m``, ``2h``, ``3d`` or ``1w`` (max a year).
+    BAD_SINCE = "whitelist_bad_since"
 
 
 class InteractionRejected(Exception):  # noqa: N818 - control-flow signal, not an error
@@ -167,7 +169,10 @@ def validate_import(raw: str | bytes) -> list[ImportHash]:
         raise InteractionRejected(CommandError.IMPORT_NOT_JSON) from exc
     if not isinstance(doc, dict):
         raise InteractionRejected(CommandError.IMPORT_INVALID)
-    if set(doc) - {"version", "hashes"}:
+    # "whitelist" is written by /scamhash export for people to read. Import
+    # ignores it on purpose: taking another server's whitelist would let a
+    # shared file exempt images from detection here.
+    if set(doc) - {"version", "hashes", "whitelist"}:
         raise InteractionRejected(CommandError.IMPORT_INVALID)
     if doc.get("version") != IMPORT_SCHEMA_VERSION:
         raise InteractionRejected(CommandError.IMPORT_INVALID)
@@ -207,16 +212,22 @@ def _parse_entry(entry: Any) -> ImportHash:
     )
 
 
-def build_export(entries: list[ImportHash]) -> str:
-    """Serialize ``entries`` into a canonical export document string."""
+def build_export(entries: list[ImportHash], whitelist: list[dict[str, Any]] | None = None) -> str:
+    """Serialize ``entries`` into a canonical export document string.
+
+    ``whitelist`` rows, when given, ride along under ``"whitelist"`` for
+    people to review; :func:`validate_import` accepts and ignores them.
+    """
+    doc: dict[str, Any] = {
+        "version": IMPORT_SCHEMA_VERSION,
+        "hashes": [
+            {"phash": e.phash, "dhash": e.dhash, "whash": e.whash, "note": e.note} for e in entries
+        ],
+    }
+    if whitelist:
+        doc["whitelist"] = whitelist
     return json.dumps(
-        {
-            "version": IMPORT_SCHEMA_VERSION,
-            "hashes": [
-                {"phash": e.phash, "dhash": e.dhash, "whash": e.whash, "note": e.note}
-                for e in entries
-            ],
-        },
+        doc,
         separators=(",", ":"),
         sort_keys=True,
     )

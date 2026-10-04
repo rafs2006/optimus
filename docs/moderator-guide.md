@@ -61,12 +61,12 @@ the image is gone — screenshot it first if you need to keep it.
 
 | Button | What it actually does |
 | --- | --- |
-| **Confirm scam** | Adds the image's hash to this server's blocklist (future reposts are caught automatically), deletes the offending message, and marks the detection confirmed. Works even for member reports, which are filed without hashes: the bot re-fetches the image, hashes it, and stores it. |
-| **False positive** | Whitelists the image so it is never flagged again, reverses the recorded action, and — if the uploader was banned and you have **Ban Members** — unbans them. Without Ban Members the ban stays, and the card says so, so someone who has it can press **Unban**. |
+| **Confirm scam** | Adds the image's hash to this server's blocklist (future reposts are caught automatically), deletes the offending message, and marks the detection confirmed. Works even for member reports, which are filed without hashes: the bot re-fetches the image, hashes it, and stores it. Any whitelist entry that covers the image is removed, and the folded card says how many. |
+| **False positive** | Whitelists the image so it is never flagged again (the folded card names the new entry, e.g. `#40`), reverses the recorded action, and — if the uploader was banned and you have **Ban Members** — unbans them. Without Ban Members the ban stays, and the card says so, so someone who has it can press **Unban**. |
 | **Dismiss** | Closes the card and teaches the detector nothing: no hash blocked, no image whitelisted, no action taken or reversed. Use it for a mistaken member report — the one case where you want the report gone but do not want the image made permanently exempt. |
 | **Ban uploader** | Bans the uploader and purges their recent messages (`ban_purge_hours`, default 24h, Discord cap 7 days). If Discord refuses (role hierarchy, missing Ban Members), you get an explicit error — never a silent failure. |
 | **Unban** | Lifts the uploader's ban. |
-| **Whitelist image** | Whitelists the image without touching the detection or the uploader. |
+| **Whitelist image** | Whitelists the image without touching the detection or the uploader. The folded card names the new entry. |
 
 On servers that opted in (`optin_global_db`) **and** are approved for global
 contribution (see below), **Confirm scam** and **False positive** also act on
@@ -104,8 +104,10 @@ Notes on cards:
 - **Fixing a misclick:** `/queue detection:<number>` posts that report again
   as a full card with fresh buttons, covering every image of the message. Press
   the right decision there; the old folded card stays as the record of the
-  first one. If the misclick was **False positive**, its whitelist entry
-  stays and still wins over the blocklist.
+  first one. If the misclick was **False positive** or **Whitelist image**,
+  pressing **Confirm scam** on the reopened card also removes the whitelist
+  entry. To remove it without acting, use `/scamhash unwhitelist entry:<number>`
+  with the number from the folded card or `/scamhash whitelist`.
 - Each button needs the Discord permission that matches what it does, so
   the moderators you already trust with that power can use it — no Manage
   Server needed:
@@ -237,10 +239,12 @@ Moderator commands (require **Manage Server**, except `/queue`, which needs
 | Command | What it does |
 | --- | --- |
 | `/setup [mod_role] [channel]` | Create (or link) the private review channel. |
-| `/scamhash add [image] [message] [url]` | Block scam images without acting on anyone: an upload, every image on a message (`message:` link or ID), and/or one Discord image link (`url:`, right-click the image → Copy Link). Up to 10 per command; future reposts are caught. An image the list already has, or a copy Optimus already catches, is not added again: the reply names the entry that covers it. A whitelisted image is added with a warning that the whitelist wins. |
+| `/scamhash add [image] [message] [url]` | Block scam images without acting on anyone: an upload, every image on a message (`message:` link or ID), and/or one Discord image link (`url:`, right-click the image → Copy Link). Up to 10 per command; future reposts are caught. An image the list already has, or a copy Optimus already catches, is not added again: the reply names the entry that covers it. Whitelist entries that cover the image are removed first (the whitelist wins over the blocklist), and the reply names them. |
 | `/scamhash remove <hash_id>` | Unblock by hash id (from `/scamhash list`). |
 | `/scamhash list` | Show the 10 newest blocked hashes: id, how it was added (Confirm scam, Review as scam, campaign cleanup, `/scamhash add`, import), by whom and when. `/scamhash export` has all of them. |
-| `/scamhash export` | Download this server's hashes as JSON. |
+| `/scamhash whitelist [page] [by] [since]` | Show the images this server exempts from detection, 10 per page, newest first: entry number, the button and detection that created it, by whom and when, and the blocked hashes it overrides. `by:` and `since:` (`30m`, `2h`, `3d`, `1w`) narrow the list. |
+| `/scamhash unwhitelist [entry] [by] [since] [confirm]` | Remove whitelist entries so Optimus flags those images again. `entry:` takes entry numbers or hash ids, comma-separated, and removes them at once. `by:` and/or `since:` select a batch (for example a run of misclicks): the first run only lists it, and the same command with `confirm:True` removes it. |
+| `/scamhash export` | Download this server's hashes as JSON. The file also lists the whitelist for review; `/scamhash import` skips that part. |
 | `/scamhash import <file>` | Load hashes from another server's export. |
 | `/scamhash review <message>` | Mark a posted message as scam by link/ID: blocks its images and applies the action policy. Also available as right-click → Apps → *Review as scam*. |
 | `/config view` | Show all settings. |

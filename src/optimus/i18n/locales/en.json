@@ -46,7 +46,7 @@
     "import_too_large": "The import file has more than {limit} hashes. Split it into smaller files and import each one.",
     "import_file_too_big": "The import file is over {limit_kb} KB. Split it into smaller files and import each one.",
     "import_download_failed": "Couldn't download the uploaded file from Discord. Try the import again; if it keeps failing, export the file again and upload the new one.",
-    "export_ok": "Exported {count} hash(es) — the JSON file is attached below. Load it on another server with `/scamhash import`.",
+    "export_ok": "Exported {count} hash(es) and {whitelisted} whitelist entr(y/ies). The JSON file is attached below. Load the hashes on another server with `/scamhash import`; import skips the whitelist.",
     "export_empty": "This server has no hashes to export yet. Block an image first with `/scamhash add` or `/scamhash review`.",
     "reviewmsg_no_images": "That message has no image attachments to review.",
     "report_ok": "Thanks — that message was sent to this server's moderators for review.",
@@ -134,7 +134,24 @@
     "add_already_listed": "Already in the list as `{hash_id}` — {origin}.",
     "add_already_caught": "Already caught by `{hash_id}` — {origin}. Not added again.",
     "add_known": "{notes}",
-    "add_whitelisted": "Note: `{hash_id}` is on this server's whitelist, which wins over the blocklist. Optimus will not flag it."
+    "add_unwhitelisted": "Removed from the whitelist: {entries}. Optimus flags these images again.",
+    "whitelist_reason_card": "**{action}** on detection #{detection_id}",
+    "whitelist_reason_unknown": "no reason recorded",
+    "whitelist_overrides": "Overrides blocked hash(es): {hash_ids}",
+    "whitelist_overrides_more": "Overrides blocked hash(es): {hash_ids} +{more} more",
+    "whitelist_filter_by": "added by <@{user_id}>",
+    "whitelist_filter_since": "in the last {since}",
+    "whitelist_empty": "This server's whitelist is empty.",
+    "whitelist_none_match": "No whitelist entries{filter}.",
+    "whitelist_page": "This server's whitelist has {count} entr(y/ies){filter}. Page {page}/{pages}, newest first:\n{entries}\nRemove entries with `/scamhash unwhitelist entry:<number>`.",
+    "whitelist_bad_since": "Use `since:` like `30m`, `2h`, `3d` or `1w` (up to one year).",
+    "unwhitelist_entry_or_filter": "Use `entry:`, or `by:` / `since:`. Do not use both.",
+    "unwhitelist_nothing_given": "Give `entry:` (numbers from `/scamhash whitelist`), or `by:` / `since:` to select a batch.",
+    "unwhitelist_not_found": "No whitelist entry matches {entries}.",
+    "unwhitelist_missing": "Not found: {entries}.",
+    "unwhitelist_done": "Removed {count} whitelist entr(y/ies): {entries}. Optimus flags those images again.{notes}",
+    "unwhitelist_preview": "{count} whitelist entr(y/ies){filter}: {entries}.\nNothing is removed yet. Run the same command with `confirm:True` to remove them.",
+    "unwhitelist_preview_more": " +{more} more"
   },
   "button": {
     "confirmed_scam": "Detection #{detection_id} confirmed as scam: the image hash was blocklisted and the message deleted.",
@@ -173,7 +190,10 @@
   "card": {
     "handled": "✅ **{action}** — handled by <@{user_id}>",
     "handled_ban_kept": "✅ **{action}** — handled by <@{user_id}>. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
-    "followups_removed": "Removed {count} later post(s) from this uploader."
+    "followups_removed": "Removed {count} later post(s) from this uploader.",
+    "handled_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}.",
+    "handled_ban_kept_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
+    "whitelist_removed": "Removed {count} whitelist entr(y/ies) that covered this image."
   },
   "failure": {
     "step_delete": "Could not remove the message",

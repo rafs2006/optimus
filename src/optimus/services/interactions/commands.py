@@ -148,6 +148,35 @@ COMMANDS: tuple[Command, ...] = (
                     ),
                 ),
             ),
+            SubCommand(
+                name="whitelist",
+                description="Show the images this server exempts from detection.",
+                options=(
+                    Option("page", "Page number (10 entries per page).", OPT_INTEGER),
+                    Option("by", "Only entries this moderator added.", OPT_USER),
+                    Option(
+                        "since", "Only entries added in the last 30m, 2h, 3d or 1w.", OPT_STRING
+                    ),
+                ),
+            ),
+            SubCommand(
+                name="unwhitelist",
+                description="Remove whitelist entries so Optimus flags those images again.",
+                options=(
+                    Option(
+                        "entry",
+                        "Entry numbers or hash ids, comma-separated (see /scamhash whitelist).",
+                        OPT_STRING,
+                    ),
+                    Option("by", "Remove the entries this moderator added.", OPT_USER),
+                    Option(
+                        "since",
+                        "Remove the entries added in the last 30m, 2h, 3d or 1w.",
+                        OPT_STRING,
+                    ),
+                    Option("confirm", "Set True to remove what by/since selects.", OPT_BOOLEAN),
+                ),
+            ),
         ),
     ),
     Command(
