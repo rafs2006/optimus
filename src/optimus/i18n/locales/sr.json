@@ -156,7 +156,8 @@
   },
   "card": {
     "handled": "✅ **{action}** — obradio/la <@{user_id}>",
-    "handled_ban_kept": "✅ **{action}** — obradio/la <@{user_id}>. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**."
+    "handled_ban_kept": "✅ **{action}** — obradio/la <@{user_id}>. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
+    "followups_removed": "Uklonjeno još {count} kasnijih objava ovog korisnika."
   },
   "failure": {
     "step_delete": "Nije moguće ukloniti poruku",

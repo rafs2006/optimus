@@ -533,7 +533,7 @@ async def _amain() -> None:
         health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
-    bot = hikari.GatewayBot(token=settings.discord_token, intents=GATEWAY_INTENTS)
+    bot = hikari.GatewayBot(token=settings.discord_token, banner=None, intents=GATEWAY_INTENTS)
     health.add_readiness_check(shards_check(bot), name="shards")
 
     async def _fetch(channel_id: int, message_id: int) -> hikari.Message:

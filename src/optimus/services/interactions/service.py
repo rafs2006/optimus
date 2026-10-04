@@ -1638,7 +1638,9 @@ async def _amain() -> None:  # pragma: no cover - runtime entrypoint
         health.add_readiness_check(redis_check(redis), name="redis")
     await health.start()
 
-    bot = hikari.GatewayBot(token=settings.discord_token, intents=hikari.Intents.GUILDS)
+    bot = hikari.GatewayBot(
+        token=settings.discord_token, banner=None, intents=hikari.Intents.GUILDS
+    )
     # The review buttons enforce through Discord REST (delete/ban/unban and
     # re-fetching attachment URLs), so the standalone service wires the bot's
     # REST client in just like the combined app in optimus.app.discord does.

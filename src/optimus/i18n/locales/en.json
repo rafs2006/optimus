@@ -156,7 +156,8 @@
   },
   "card": {
     "handled": "✅ **{action}** — handled by <@{user_id}>",
-    "handled_ban_kept": "✅ **{action}** — handled by <@{user_id}>. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**."
+    "handled_ban_kept": "✅ **{action}** — handled by <@{user_id}>. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
+    "followups_removed": "Removed {count} later post(s) from this uploader."
   },
   "failure": {
     "step_delete": "Could not remove the message",

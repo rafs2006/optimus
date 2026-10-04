@@ -61,7 +61,7 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
     import hikari
 
     config_cache = GuildConfigCache(app.store, app._scope)
-    bot = hikari.GatewayBot(token=settings.discord_token, intents=GATEWAY_INTENTS)
+    bot = hikari.GatewayBot(token=settings.discord_token, banner=None, intents=GATEWAY_INTENTS)
 
     # Let enforcement check its own permissions from the gateway cache before
     # calling Discord. In a channel the bot cannot see, this turns one failed

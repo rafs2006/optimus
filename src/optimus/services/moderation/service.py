@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,13 +57,20 @@ from optimus.db.repositories import (
 from optimus.services.moderation.actions import ActionExecutor, ActionResult
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
-from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
+from optimus.services.moderation.coordinator import (
+    CardCleanup,
+    GuildModConfig,
+    ModerationCoordinator,
+)
 from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.priority import PriorityDispatcher
 from optimus.services.moderation.review import ReportData
 from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
 
 _log = get_logger(__name__)
+
+#: Moderator decisions that close a report; anything else is still open.
+DECIDED_ACTIONS = frozenset({"confirmed", "dismissed", "banned", "reversed"})
 
 #: Audit actor id used when the system (not a human moderator) acts.
 SYSTEM_ACTOR = 0
@@ -299,6 +306,56 @@ def build_coordinator(
                 detection_id, datetime.now(UTC), review_message_id=card_message_id
             )
 
+    async def close_cards(
+        guild_id: int,
+        uploader_id: int,
+        keep_message_id: int,
+        actor_id: int,
+        review_channel_id: int | None,
+    ) -> CardCleanup:
+        """Close a confirmed uploader's other open cards and delete them.
+
+        Same scope as the campaign sweep (that uploader, the sweep window), so
+        a confirmation settles every card the campaign produced. Reads and
+        writes in one short session; the Discord deletions run after it
+        closes, so no transaction is held across REST calls.
+        """
+        since = datetime.now(UTC) - timedelta(hours=settings.mod_sweep_window_hours)
+        async with scope() as session:
+            repo = DetectionRepository(session, guild_id)
+            rows = await repo.list_by_uploader_since(
+                uploader_id, since, limit=settings.mod_sweep_max_messages
+            )
+            open_rows = [
+                r
+                for r in rows
+                if int(r.message_id) != keep_message_id
+                and r.reported_at is not None
+                and r.action_taken not in DECIDED_ACTIONS
+            ]
+            for row in open_rows:
+                await repo.set_action_taken(row.id, "confirmed")
+            if open_rows:
+                await ModActionRepository(session, guild_id).record(
+                    actor_id=actor_id,
+                    action="review.campaign_close",
+                    target=str(uploader_id),
+                    payload={"detections": [r.id for r in open_rows]},
+                )
+            card_ids = sorted({int(r.review_message_id) for r in open_rows if r.review_message_id})
+            message_ids = tuple(sorted({int(r.message_id) for r in open_rows}))
+            closed = len(open_rows)
+        deleted = 0
+        if review_channel_id is not None:
+            for card_id in card_ids:
+                try:
+                    await rest.delete_message(review_channel_id, card_id)  # type: ignore[attr-defined]
+                except Exception:
+                    _log.warning("campaign_card_delete_failed", guild_id=guild_id, card_id=card_id)
+                    continue
+                deleted += 1
+        return CardCleanup(closed=closed, cards_deleted=deleted, message_ids=message_ids)
+
     coordinator = ModerationCoordinator(
         config=config,
         target=target,
@@ -309,6 +366,8 @@ def build_coordinator(
         dispatcher=dispatcher,
         sweep=sweep,
         mark_reported=mark_reported,
+        close_cards=close_cards,
+        campaign_window_seconds=settings.mod_sweep_window_hours * 3600,
     )
     return coordinator, dispatcher
 
