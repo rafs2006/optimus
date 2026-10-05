@@ -28,6 +28,10 @@ class ReviewAction(StrEnum):
     WHITELIST_IMAGE = "whitelist_image"
     SUBMIT_GLOBAL = "submit_global"
     DISMISS = "dismiss"
+    #: On a card the bot settled by itself: reopen it in place for review.
+    REVIEW = "review"
+    #: On such a reopened card: fold it back, changing nothing.
+    REFOLD = "refold"
 
 
 def encode_custom_id(action: ReviewAction, detection_id: int) -> str:
@@ -275,6 +279,8 @@ BUTTON_LABELS: dict[ReviewAction, str] = {
     ReviewAction.WHITELIST_IMAGE: "Whitelist image",
     ReviewAction.SUBMIT_GLOBAL: "Submit to global",
     ReviewAction.DISMISS: "Dismiss",
+    ReviewAction.REVIEW: "Review",
+    ReviewAction.REFOLD: "Dismiss",
 }
 
 
@@ -320,8 +326,22 @@ def build_folded_embed(title: str | None, note: str, url: str | None = None) -> 
     return hikari.Embed(description=folded_text(title, note), url=url, colour=FOLDED_COLOUR)
 
 
-#: The only button left on a card the bot settled by itself: the undo.
-AUTO_HANDLED_BUTTONS: tuple[ReviewAction, ...] = (ReviewAction.FALSE_POSITIVE,)
+#: The only button on a card the bot settled by itself: one small, grey
+#: Review that opens the card in place. Nothing on the folded card acts on the
+#: uploader, so a stray click there cannot unban anyone.
+AUTO_HANDLED_BUTTONS: tuple[ReviewAction, ...] = (ReviewAction.REVIEW,)
+
+
+def reopened_buttons(items: Sequence[ReportData]) -> tuple[ReviewAction, ...]:
+    """Buttons on a reopened auto-handled card: the undos, then fold back.
+
+    Unban is offered only when a ban was part of what the bot did; Dismiss
+    (``REFOLD``) folds the card back without changing anything, for a card
+    opened by accident.
+    """
+    banned = any("ban" in i.action_taken for i in items)
+    undo = (ReviewAction.UNBAN,) if banned else ()
+    return (*undo, ReviewAction.FALSE_POSITIVE, ReviewAction.REFOLD)
 
 
 def build_action_rows(
@@ -380,6 +400,19 @@ def decided_note(data: ReportData) -> str:
         who,
         f"{translate('report.field_action', loc)}: {data.action_taken}",
     ]
+    if data.decided_by is None and data.auto_handled:
+        # The post is gone, so say where it can still be looked up: the ID
+        # finds it in a message-log channel, and the audit log has the rest.
+        lines.append(
+            translate(
+                "card.original_message",
+                loc,
+                url=jump_url(data.guild_id, data.channel_id, data.message_id),
+                message_id=data.message_id,
+                user_id=data.uploader_id,
+            )
+        )
+        lines.append(translate("card.removed_hint", loc, message_id=data.message_id))
     if data.problem:
         lines.append(data.problem)
     if data.whitelist_removed:
@@ -407,3 +440,34 @@ def build_card(items: Sequence[ReportData]) -> tuple[list[Any], list[object]]:
         embeds = [build_folded_embed(report_title(merged), decided_note(merged), url)]
         return embeds, build_action_rows(merged.detection_id, AUTO_HANDLED_BUTTONS)
     return build_embeds(merged), build_action_rows(merged.detection_id)
+
+
+def split_folded(description: str) -> tuple[str | None, str]:
+    """Split a folded card's text into its bold title line and the rest."""
+    first, sep, rest = description.partition("\n")
+    if first.startswith("**") and first.endswith("**") and len(first) > 4:
+        return first[2:-2], rest if sep else ""
+    return None, description
+
+
+def build_reopened_card(
+    items: Sequence[ReportData], summary: str
+) -> tuple[list[Any], list[object]]:
+    """A folded auto-handled card opened back up in place for review.
+
+    The full report (rebuilt from the stored detections) with the folded
+    summary kept as its description, so folding it again -- by Dismiss or by
+    a decision -- loses nothing.
+    """
+    merged = merge_reports(items)
+    embeds = build_embeds(merged)
+    embeds[0].description = summary or None
+    return embeds, build_action_rows(merged.detection_id, reopened_buttons(items))
+
+
+def build_refolded_card(
+    title: str | None, summary: str, url: str | None, detection_id: int
+) -> tuple[list[Any], list[object]]:
+    """Fold a reopened auto-handled card back, with its Review button again."""
+    embed = build_folded_embed(title, summary, url)
+    return [embed], build_action_rows(detection_id, AUTO_HANDLED_BUTTONS)

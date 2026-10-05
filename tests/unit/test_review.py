@@ -39,7 +39,12 @@ def test_decode_rejects_foreign_custom_id() -> None:
 def test_all_buttons_are_offered_except_legacy_submit_global() -> None:
     # SUBMIT_GLOBAL stays in the enum so clicks on old cards still decode,
     # but new cards no longer offer it: Confirm scam casts the global vote.
-    assert set(REVIEW_BUTTONS) == set(ReviewAction) - {ReviewAction.SUBMIT_GLOBAL}
+    # REVIEW / REFOLD only live on cards the bot settled by itself.
+    assert set(REVIEW_BUTTONS) == set(ReviewAction) - {
+        ReviewAction.SUBMIT_GLOBAL,
+        ReviewAction.REVIEW,
+        ReviewAction.REFOLD,
+    }
     assert ReviewAction.SUBMIT_GLOBAL in BUTTON_LABELS
 
 

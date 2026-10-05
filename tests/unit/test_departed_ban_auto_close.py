@@ -313,13 +313,13 @@ def _data(**kw: Any) -> ReportData:
     return ReportData(**base)
 
 
-def test_auto_handled_card_is_folded_with_only_false_positive() -> None:
+def test_auto_handled_card_is_folded_with_only_review() -> None:
     embeds, rows = build_card([_data(auto_handled=True)])
     assert len(embeds) == 1
     assert translate("card.handled_auto", "en") in embeds[0].description
     ids = [c.custom_id for row in rows for c in row.components]  # type: ignore[attr-defined]
     assert ids == [f"om:v1:{a.value}:9" for a in AUTO_HANDLED_BUTTONS]
-    assert AUTO_HANDLED_BUTTONS == (ReviewAction.FALSE_POSITIVE,)
+    assert AUTO_HANDLED_BUTTONS == (ReviewAction.REVIEW,)
 
 
 def test_open_card_keeps_every_button() -> None:

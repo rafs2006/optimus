@@ -84,14 +84,26 @@ Notes on cards:
   said no) is answered privately, and then the card stays open.
 - **A post the bot fully handled is posted already folded.** When an image
   matches *this server's* blocklist and your `action_policy` ran in full (the
-  post is deleted and, for `delete_ban`, the uploader is banned), the card
-  reads `✅ Handled automatically by Optimus` and keeps only **False
-  positive**, to undo a wrong call. That also settles the campaign the way a
-  Confirm does: the uploader's other open cards are closed and their
-  reposts of blocklisted images are deleted without a card. Everything that
-  needs a person keeps a full, open card: a global-only match, a near match
-  below `auto_act_threshold`, safe mode, a member report, a punishment
-  refused by the role hierarchy, or a missing permission.
+  post is deleted and, for `delete_ban`, the uploader is banned), the card is
+  one short report: `✅ Handled automatically by Optimus`, what was done, and
+  an **Original message** link with the message ID and the uploader. The post
+  is gone, so the link itself won't open: search your message-log channel for
+  that ID to see what was removed. Without a log channel, **Server Settings →
+  Audit Log** still shows the deletion and any ban (its reason contains
+  `msg <ID>`), though not the image.
+
+  The folded card has a single grey **Review** button, so nothing on it can
+  unban anyone by accident. **Review** opens the card in place with
+  **Unban** (only when a ban happened), **False positive** and **Dismiss**.
+  **Dismiss** folds it back without changing anything. **Unban** only lifts
+  the ban, for example for a hacked account that was recovered. **False
+  positive** also whitelists the image. All of this also settles the
+  campaign the way a Confirm does: the uploader's other open cards are closed
+  and their reposts of blocklisted images are deleted without a card.
+
+  Everything that needs a person keeps a full, open card: a global-only
+  match, a near match below `auto_act_threshold`, safe mode, a member report,
+  a punishment refused by the role hierarchy, or a missing permission.
 - **Uploaders who already left are still banned.** Scam accounts often post
   and leave within seconds. Discord bans by user ID, member or not, so
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
@@ -132,7 +144,7 @@ Notes on cards:
 
   | Button | Needs |
   | --- | --- |
-  | Confirm scam · False positive · Dismiss · Whitelist image | **Manage Messages** |
+  | Confirm scam · False positive · Dismiss · Whitelist image · Review | **Manage Messages** |
   | Ban uploader · Unban | **Ban Members** |
 
   Administrators can press everything. *False positive* can also lift a ban,
