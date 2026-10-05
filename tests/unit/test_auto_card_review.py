@@ -59,13 +59,11 @@ def _ids(rows: list[object]) -> list[str]:
 # --- The folded card --------------------------------------------------------
 
 
-def test_folded_card_links_the_removed_post_and_says_where_to_look() -> None:
+def test_folded_card_keeps_the_removed_post_as_evidence() -> None:
     note = decided_note(_data(auto_handled=True))
     assert "[Original message](https://discord.com/channels/1/2/3)" in note
+    assert "ID `3`" in note
     assert "<@42>" in note
-    assert "message-log channel" in note
-    assert "Audit Log" in note
-    assert "msg 3" in note
 
 
 def test_moderator_folded_card_has_no_removed_post_hint() -> None:
@@ -235,5 +233,4 @@ async def test_card_edit_rerenders_in_place_without_a_private_reply(
 
 
 def test_hints_are_translated() -> None:
-    for key in ("card.original_message", "card.removed_hint"):
-        assert translate(key, "sr") != translate(key, "en")
+    assert translate("card.original_message", "sr") != translate("card.original_message", "en")

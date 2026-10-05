@@ -401,8 +401,7 @@ def decided_note(data: ReportData) -> str:
         f"{translate('report.field_action', loc)}: {data.action_taken}",
     ]
     if data.decided_by is None and data.auto_handled:
-        # The post is gone, so say where it can still be looked up: the ID
-        # finds it in a message-log channel, and the audit log has the rest.
+        # The post is gone; its ID (and the uploader) stay as evidence.
         lines.append(
             translate(
                 "card.original_message",
@@ -412,7 +411,6 @@ def decided_note(data: ReportData) -> str:
                 user_id=data.uploader_id,
             )
         )
-        lines.append(translate("card.removed_hint", loc, message_id=data.message_id))
     if data.problem:
         lines.append(data.problem)
     if data.whitelist_removed:

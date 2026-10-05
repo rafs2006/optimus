@@ -86,11 +86,8 @@ Notes on cards:
   matches *this server's* blocklist and your `action_policy` ran in full (the
   post is deleted and, for `delete_ban`, the uploader is banned), the card is
   one short report: `✅ Handled automatically by Optimus`, what was done, and
-  an **Original message** link with the message ID and the uploader. The post
-  is gone, so the link itself won't open: search your message-log channel for
-  that ID to see what was removed. Without a log channel, **Server Settings →
-  Audit Log** still shows the deletion and any ban (its reason contains
-  `msg <ID>`), though not the image.
+  an **Original message** link with the message ID and the uploader, kept as
+  evidence of what was removed.
 
   The folded card has a single grey **Review** button, so nothing on it can
   unban anyone by accident. **Review** opens the card in place with

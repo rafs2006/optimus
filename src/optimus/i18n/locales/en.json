@@ -200,8 +200,7 @@
     "handled_ban_kept_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
     "whitelist_removed": "Removed {count} whitelist entr(y/ies) that covered this image.",
     "handled_auto": "✅ **Handled automatically** by Optimus (matched this server's list)",
-    "original_message": "[Original message]({url}) · ID `{message_id}` · posted by <@{user_id}>",
-    "removed_hint": "Deleted, so the link won't open: search your message-log channel for the ID. No log channel? **Server Settings → Audit Log** shows the deletion and any ban (its reason has `msg {message_id}`). It keeps no image."
+    "original_message": "[Original message]({url}) · ID `{message_id}` · posted by <@{user_id}>"
   },
   "failure": {
     "step_delete": "Could not remove the message",

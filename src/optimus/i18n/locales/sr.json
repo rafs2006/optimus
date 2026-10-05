@@ -200,8 +200,7 @@
     "handled_ban_kept_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
     "whitelist_removed": "Uklonjeno stavki bele liste koje su pokrivale ovu sliku: {count}.",
     "handled_auto": "✅ **Automatski obrađeno** — Optimus (poklapanje sa listom ovog servera)",
-    "original_message": "[Originalna poruka]({url}) · ID `{message_id}` · poslao/la <@{user_id}>",
-    "removed_hint": "Obrisano, pa se link neće otvoriti: potražite ID u kanalu sa logovima poruka. Nemate ga? **Server Settings → Audit Log** prikazuje brisanje i eventualni ban (razlog sadrži `msg {message_id}`). Slika se tamo ne čuva."
+    "original_message": "[Originalna poruka]({url}) · ID `{message_id}` · poslao/la <@{user_id}>"
   },
   "failure": {
     "step_delete": "Nije moguće ukloniti poruku",
