@@ -22,7 +22,10 @@
     "field_problem": "Zahteva pažnju",
     "field_partial": "Delimično primenjeno",
     "field_partial_value": "Prekršilac je kažnjen, ali nije sve moglo da se očisti. Vidite **Zahteva pažnju**.",
-    "title_group": "Otkrivanje prevare #{detection_id} — {verdict} · {count} slika"
+    "title_group": "Otkrivanje prevare #{detection_id} — {verdict} · {count} slika",
+    "boundary_departed_banned": "banovan po ID-u: pošiljalac je već napustio server",
+    "boundary_departed": "{action} preskočeno: pošiljalac je već napustio server",
+    "boundary_unverified": "{action} preskočeno: nije moguće proveriti uloge pošiljaoca"
   },
   "command": {
     "no_permission": "Nemate dozvolu da koristite ovu komandu.",
@@ -193,7 +196,8 @@
     "followups_removed": "Uklonjeno još {count} kasnijih objava ovog korisnika.",
     "handled_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}.",
     "handled_ban_kept_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
-    "whitelist_removed": "Uklonjeno stavki bele liste koje su pokrivale ovu sliku: {count}."
+    "whitelist_removed": "Uklonjeno stavki bele liste koje su pokrivale ovu sliku: {count}.",
+    "handled_auto": "✅ **Automatski obrađeno** — Optimus (poklapanje sa listom ovog servera)"
   },
   "failure": {
     "step_delete": "Nije moguće ukloniti poruku",

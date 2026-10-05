@@ -82,6 +82,24 @@ Notes on cards:
   channel stays short. There is no separate "done" message: the folded card is
   the confirmation. Only a refusal or failure (missing permission, Discord
   said no) is answered privately, and then the card stays open.
+- **A post the bot fully handled is posted already folded.** When an image
+  matches *this server's* blocklist and your `action_policy` ran in full (the
+  post is deleted and, for `delete_ban`, the uploader is banned), the card
+  reads `✅ Handled automatically by Optimus` and keeps only **False
+  positive**, to undo a wrong call. That also settles the campaign the way a
+  Confirm does: the uploader's other open cards are closed and their
+  reposts of blocklisted images are deleted without a card. Everything that
+  needs a person keeps a full, open card: a global-only match, a near match
+  below `auto_act_threshold`, safe mode, a member report, a punishment
+  refused by the role hierarchy, or a missing permission.
+- **Uploaders who already left are still banned.** Scam accounts often post
+  and leave within seconds. Discord bans by user ID, member or not, so
+  `delete_ban` (and **Confirm scam** under it) still bans them, and the card
+  says `banned by user ID: the uploader had already left`. A timeout or kick
+  cannot apply to someone who left, so those policies only delete the post
+  and the card says why. If the bot cannot read the uploader's roles at all,
+  it never punishes blind: it deletes the post and the card says the
+  punishment was skipped.
 - After **Confirm scam**, the folded card also shows what enforcement did
   (`Action: …`). Cards from `/scamhash review` are posted already folded,
   since a moderator already made the call.

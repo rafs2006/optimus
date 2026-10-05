@@ -22,7 +22,10 @@
     "field_problem": "Needs attention",
     "field_partial": "Partially applied",
     "field_partial_value": "The offender was punished, but not everything could be cleaned up. See **Needs attention**.",
-    "title_group": "Scam detection #{detection_id} — {verdict} · {count} images"
+    "title_group": "Scam detection #{detection_id} — {verdict} · {count} images",
+    "boundary_departed_banned": "banned by user ID: the uploader had already left",
+    "boundary_departed": "{action} skipped: the uploader had already left",
+    "boundary_unverified": "{action} skipped: could not verify the uploader's roles"
   },
   "command": {
     "no_permission": "You do not have permission to use this command.",
@@ -193,7 +196,8 @@
     "followups_removed": "Removed {count} later post(s) from this uploader.",
     "handled_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}.",
     "handled_ban_kept_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
-    "whitelist_removed": "Removed {count} whitelist entr(y/ies) that covered this image."
+    "whitelist_removed": "Removed {count} whitelist entr(y/ies) that covered this image.",
+    "handled_auto": "✅ **Handled automatically** by Optimus (matched this server's list)"
   },
   "failure": {
     "step_delete": "Could not remove the message",

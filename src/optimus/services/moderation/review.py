@@ -114,6 +114,10 @@ class ReportData:
     followups_removed: int = 0
     #: Whitelist entries the confirmation lifted; shown on the folded card.
     whitelist_removed: int = 0
+    #: Set when the bot fully handled this on its own (a match against this
+    #: server's blocklist, the configured action applied in full): the card is
+    #: folded like a confirmed one but keeps a False positive button.
+    auto_handled: bool = False
 
 
 def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
@@ -204,6 +208,7 @@ def merge_reports(items: Sequence[ReportData]) -> ReportData:
         decided_by=next((i.decided_by for i in items if i.decided_by), None),
         followups_removed=max(i.followups_removed for i in items),
         whitelist_removed=max(i.whitelist_removed for i in items),
+        auto_handled=any(i.auto_handled for i in items),
     )
 
 
@@ -315,14 +320,26 @@ def build_folded_embed(title: str | None, note: str, url: str | None = None) -> 
     return hikari.Embed(description=folded_text(title, note), url=url, colour=FOLDED_COLOUR)
 
 
-def build_action_rows(detection_id: int) -> list[object]:
-    """Build hikari message action rows with the review buttons."""
+#: The only button left on a card the bot settled by itself: the undo.
+AUTO_HANDLED_BUTTONS: tuple[ReviewAction, ...] = (ReviewAction.FALSE_POSITIVE,)
+
+
+def build_action_rows(
+    detection_id: int, buttons: Sequence[ReviewAction] | None = None
+) -> list[object]:
+    """Build hikari message action rows with the review buttons.
+
+    ``buttons`` defaults to :data:`REVIEW_BUTTONS`, read at call time.
+    """
     import hikari
+
+    if buttons is None:
+        buttons = REVIEW_BUTTONS
 
     rows: list[object] = []
     row = hikari.impl.MessageActionRowBuilder()
     buttons_in_row = 0
-    for action in REVIEW_BUTTONS:
+    for action in buttons:
         style = (
             hikari.ButtonStyle.SUCCESS
             if action is ReviewAction.CONFIRM_SCAM
@@ -347,15 +364,20 @@ def build_action_rows(detection_id: int) -> list[object]:
 
 
 def decided_note(data: ReportData) -> str:
-    """The folded body of a card a moderator already confirmed: who, and the outcome."""
+    """The folded body of a decided card: who (a moderator or the bot), and the outcome."""
     loc = data.locale
-    lines = [
-        translate(
+    who = (
+        translate("card.handled_auto", loc)
+        if data.decided_by is None and data.auto_handled
+        else translate(
             "card.handled",
             loc,
             action=BUTTON_LABELS[ReviewAction.CONFIRM_SCAM],
             user_id=data.decided_by,
-        ),
+        )
+    )
+    lines = [
+        who,
         f"{translate('report.field_action', loc)}: {data.action_taken}",
     ]
     if data.problem:
@@ -378,4 +400,10 @@ def build_card(items: Sequence[ReportData]) -> tuple[list[Any], list[object]]:
     if merged.decided_by is not None:
         url = jump_url(merged.guild_id, merged.channel_id, merged.message_id)
         return [build_folded_embed(report_title(merged), decided_note(merged), url)], []
+    if merged.auto_handled:
+        # Settled by the bot itself: folded the same way, keeping only the
+        # one decision left -- undoing a wrong call.
+        url = jump_url(merged.guild_id, merged.channel_id, merged.message_id)
+        embeds = [build_folded_embed(report_title(merged), decided_note(merged), url)]
+        return embeds, build_action_rows(merged.detection_id, AUTO_HANDLED_BUTTONS)
     return build_embeds(merged), build_action_rows(merged.detection_id)
