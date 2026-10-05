@@ -171,6 +171,32 @@ def _unique(values: Sequence[str | None]) -> list[str]:
     return out
 
 
+#: Separates an action from the notes appended to it (boundary, sweep, cleanup).
+_ACTION_NOTE_SEP = " — "
+
+
+def _merge_actions(values: Sequence[str | None]) -> str:
+    """One ``Action taken`` line for a card holding several images.
+
+    Each image's outcome is ``<action>[ — note]...``, and the campaign notes
+    (purged N more, cleared N reports) land on only one of them, so plain
+    de-duplication printed ``delete_ban; delete_ban — purged ...``. Distinct
+    actions are listed once, joined by ``; ``, and distinct notes follow once.
+    """
+    heads: list[str] = []
+    notes: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        head, *rest = value.split(_ACTION_NOTE_SEP)
+        if head not in heads:
+            heads.append(head)
+        for note in rest:
+            if note not in notes:
+                notes.append(note)
+    return _ACTION_NOTE_SEP.join(["; ".join(heads), *notes]) if heads else ""
+
+
 def _clip(text: str) -> str:
     return text if len(text) <= _FIELD_LIMIT else text[: _FIELD_LIMIT - 1] + "\u2026"
 
@@ -197,7 +223,7 @@ def merge_reports(items: Sequence[ReportData]) -> ReportData:
         first,
         verdict=verdict,
         confidence=max(confidences) if confidences else None,
-        action_taken=_clip("; ".join(_unique([i.action_taken for i in items]))),
+        action_taken=_clip(_merge_actions([i.action_taken for i in items])),
         matched_hash_id=", ".join(_unique([i.matched_hash_id for i in items])) or None,
         global_match=any(i.global_match for i in items),
         swarm_guilds=max(swarm) if swarm else None,

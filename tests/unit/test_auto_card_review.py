@@ -234,3 +234,35 @@ async def test_card_edit_rerenders_in_place_without_a_private_reply(
 
 def test_hints_are_translated() -> None:
     assert translate("card.original_message", "sr") != translate("card.original_message", "en")
+
+
+# --- One action line per card ----------------------------------------------
+
+
+def test_merged_card_names_a_repeated_action_once() -> None:
+    from optimus.services.moderation.review import merge_reports
+
+    failed = "delete_ban (failed: missing_permission)"
+    merged = merge_reports(
+        [
+            _data(action_taken=failed),
+            _data(
+                action_taken=f"{failed} — purged 2 more in 2 channels — cleared 4 other report(s)"
+            ),
+        ]
+    )
+    assert (
+        merged.action_taken == f"{failed} — purged 2 more in 2 channels — cleared 4 other report(s)"
+    )
+
+
+def test_merged_card_keeps_distinct_actions() -> None:
+    from optimus.services.moderation.review import merge_reports
+
+    merged = merge_reports(
+        [
+            _data(action_taken="delete_ban — purged 1 more in 1 channels"),
+            _data(action_taken="delete"),
+        ]
+    )
+    assert merged.action_taken == "delete_ban; delete — purged 1 more in 1 channels"
