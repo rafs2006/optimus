@@ -89,14 +89,14 @@ Notes on cards:
   an **Original message** link with the message ID and the uploader, kept as
   evidence of what was removed.
 
-  The folded card has a single grey **Review** button, so nothing on it can
-  unban anyone by accident. **Review** opens the card in place with
-  **Unban** (only when a ban happened), **False positive** and **Dismiss**.
-  **Dismiss** folds it back without changing anything. **Unban** only lifts
-  the ban, for example for a hacked account that was recovered. **False
-  positive** also whitelists the image. All of this also settles the
-  campaign the way a Confirm does: the uploader's other open cards are closed
-  and their reposts of blocklisted images are deleted without a card.
+  The folded card has no buttons, so nothing on it can be misclicked. To
+  review it or undo it, click the `/queue` mention on the card and add the
+  `detection:` number it shows: the report is posted again as a full card,
+  where **Unban** only lifts the ban (for example for a hacked account that
+  was recovered) and **False positive** also whitelists the image. The bot's
+  own action also settles the campaign the way a Confirm does: the uploader's
+  other open cards are closed and their reposts of blocklisted images are
+  deleted without a card.
 
   Everything that needs a person keeps a full, open card: a global-only
   match, a near match below `auto_act_threshold`, safe mode, a member report,
@@ -141,7 +141,7 @@ Notes on cards:
 
   | Button | Needs |
   | --- | --- |
-  | Confirm scam · False positive · Dismiss · Whitelist image · Review | **Manage Messages** |
+  | Confirm scam · False positive · Dismiss · Whitelist image | **Manage Messages** |
   | Ban uploader · Unban | **Ban Members** |
 
   Administrators can press everything. *False positive* can also lift a ban,

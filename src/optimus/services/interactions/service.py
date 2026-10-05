@@ -58,8 +58,6 @@ from optimus.services.interactions.attachment_hash import (
 )
 from optimus.services.interactions.commands import is_enabled
 from optimus.services.interactions.handlers import (
-    CardEdit,
-    CardEditKind,
     ChannelCreation,
     DetectionFacts,
     InteractionContext,
@@ -88,14 +86,7 @@ from optimus.services.moderation.permissions import (
     preflight_punitive,
     punitive_requirement,
 )
-from optimus.services.moderation.review import (
-    ReportData,
-    build_folded_embed,
-    build_refolded_card,
-    build_reopened_card,
-    decode_custom_id,
-    split_folded,
-)
+from optimus.services.moderation.review import ReportData, build_folded_embed, decode_custom_id
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -221,8 +212,6 @@ def _detection_facts(row: Detection) -> DetectionFacts:
         attachment_id=row.attachment_id,
         uploader_id=row.uploader_id,
         hashes=row.hashes,
-        verdict=row.verdict,
-        action_taken=row.action_taken or "",
     )
 
 
@@ -1577,17 +1566,15 @@ def to_context(interaction: Any) -> InteractionContext:
 
 async def run_interaction(  # pragma: no cover - hikari glue
     service: InteractionService, interaction: Any
-) -> tuple[str, str | None, str | None] | tuple[str, str | None, str | None, CardEdit | None]:
+) -> tuple[str, str | None, str | None]:
     """Handle one interaction end-to-end.
 
-    Returns ``(message, attachment_body, card_note, card_edit)`` -- the rendered
+    Returns ``(message, attachment_body, card_note)`` -- the rendered
     ephemeral text, an optional file body (e.g. a ``/scamhash export`` JSON
     document) that :func:`respond_to_interaction` uploads alongside the
     message, and an optional localized status line to append to the review
     card itself so every moderator in the shared review channel sees who
-    handled the report (the ephemeral reply is visible only to the clicker),
-    and an optional in-place re-render of that card (open it for review, or
-    fold it back).
+    handled the report (the ephemeral reply is visible only to the clicker).
     """
     with correlation_context():
         try:
@@ -1623,7 +1610,7 @@ async def run_interaction(  # pragma: no cover - hikari glue
             if response.card_note_key is not None
             else None
         )
-        return render(response, locale), response.attachment, card_note, response.card_edit
+        return render(response, locale), response.attachment, card_note
 
 
 async def respond_to_interaction(service: InteractionService, interaction: Any) -> None:
@@ -1656,14 +1643,7 @@ async def respond_to_interaction(service: InteractionService, interaction: Any) 
         _log.exception("interaction_defer_failed", **log_context)
         return
 
-    outcome = await run_interaction(service, interaction)
-    message, attachment_body, card_note = outcome[0], outcome[1], outcome[2]
-    card_edit = outcome[3] if len(outcome) > 3 else None
-    if card_edit is not None and on_card:
-        # Review / Dismiss on an auto-handled card: the re-rendered card is
-        # the acknowledgement, so no private reply either.
-        await _edit_card(interaction, card_edit, log_context)
-        return
+    message, attachment_body, card_note = await run_interaction(service, interaction)
     if card_note:
         await _fold_card(interaction, card_note, log_context)
         if on_card:
@@ -1711,38 +1691,6 @@ async def _fold_card(interaction: Any, card_note: str, log_context: dict[str, An
         _log.warning("card_fold_failed", **log_context)
 
 
-async def _edit_card(interaction: Any, edit: CardEdit, log_context: dict[str, Any]) -> None:
-    """Re-render the review card in place (best-effort, like :func:`_fold_card`)."""
-    card = getattr(interaction, "message", None)
-    if card is None:  # pragma: no cover - slash commands have no source message
-        return
-    embeds, rows = card_edit_payload(card, edit)
-    try:
-        await card.edit(content=None, embeds=embeds, components=rows)
-    except Exception:
-        _log.warning("card_edit_failed", kind=edit.kind.value, **log_context)
-
-
-def card_edit_payload(card: Any, edit: CardEdit) -> tuple[list[Any], list[object]]:
-    """The embeds and buttons ``card`` becomes for ``edit``.
-
-    Stateless on purpose: the folded summary travels on the card itself (as
-    the reopened report's description), so opening and folding back work for
-    any card, including ones posted before a restart.
-    """
-    embeds = list(getattr(card, "embeds", None) or [])
-    first = embeds[0] if embeds else None
-    url = getattr(first, "url", None)
-    description = str(getattr(first, "description", None) or "")
-    if edit.kind is CardEditKind.REOPEN:
-        _title, summary = split_folded(description)
-        return build_reopened_card(list(edit.items), summary)
-    title = getattr(first, "title", None)
-    if title is None:
-        title, description = split_folded(description)
-    return build_refolded_card(title, description, url, edit.detection_id)
-
-
 def folded_card_embed(card: Any, card_note: str) -> Any:
     """The folded embed for ``card`` after a decision described by ``card_note``.
 
@@ -1755,13 +1703,11 @@ def folded_card_embed(card: Any, card_note: str) -> Any:
     first = embeds[0] if embeds else None
     title = getattr(first, "title", None)
     url = getattr(first, "url", None)
-    if first is not None and getattr(first, "description", None):
-        # Already folded (no title), or a reopened auto-handled card whose
-        # description carries the bot's summary: keep it and add the line.
+    if title is None and first is not None and getattr(first, "description", None):
         body = str(first.description)
         if card_note not in body:
             body = f"{body}\n{card_note}"
-        return build_folded_embed(title, body, url)
+        return build_folded_embed(None, body, url)
     return build_folded_embed(title, card_note, url)
 
 

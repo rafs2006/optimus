@@ -451,15 +451,18 @@ async def _register_commands(  # pragma: no cover - net
         build_command_builders,
         build_context_menu_command_builders,
     )
+    from optimus.services.moderation.review import COMMAND_IDS
 
     try:
-        await rest.set_application_commands(  # type: ignore[attr-defined]
+        registered = await rest.set_application_commands(  # type: ignore[attr-defined]
             hikari.Snowflake(bot_user_id),
             build_command_builders(member_commands) + build_context_menu_command_builders(),
         )
     except Exception:
         _log.warning("command_registration_failed", exc_info=True)
         return
+    # Cards mention /queue as a clickable command, which needs its id.
+    COMMAND_IDS.update({str(cmd.name): int(cmd.id) for cmd in registered})
     _log.info("commands_registered", scope="global")
 
 

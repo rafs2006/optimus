@@ -97,28 +97,6 @@ class InteractionResponse:
     #: ephemeral reply above is visible only to the clicker.
     card_note_key: str | None = None
     card_note_params: dict[str, Any] = field(default_factory=dict)
-    #: When set, the glue layer re-renders the card the button lives on in
-    #: place (open it for review, or fold it back) instead of folding it.
-    card_edit: CardEdit | None = None
-
-
-class CardEditKind(StrEnum):
-    """How a review-card button re-renders the card it lives on."""
-
-    #: Open a folded auto-handled card back into the full report.
-    REOPEN = "reopen"
-    #: Fold such a reopened card back, unchanged.
-    REFOLD = "refold"
-
-
-@dataclass(frozen=True, slots=True)
-class CardEdit:
-    """A request to re-render a review card in place."""
-
-    kind: CardEditKind
-    detection_id: int
-    #: The reports the reopened card shows (``REOPEN`` only).
-    items: tuple[ReportData, ...] = ()
 
 
 class SetupFailure(StrEnum):
@@ -206,9 +184,6 @@ REVIEW_ACTION_PERMISSIONS: dict[ReviewAction, Permission] = {
     ReviewAction.WHITELIST_IMAGE: Permission.MANAGE_MESSAGES,
     ReviewAction.BAN_UPLOADER: Permission.BAN_MEMBERS,
     ReviewAction.UNBAN: Permission.BAN_MEMBERS,
-    # Opening and folding back a card changes nothing by itself.
-    ReviewAction.REVIEW: Permission.MANAGE_MESSAGES,
-    ReviewAction.REFOLD: Permission.MANAGE_MESSAGES,
     # Retired: the handler only answers that the button is gone. Still gated so
     # a stale card left in an old review channel stays mod-only like the rest.
     ReviewAction.SUBMIT_GLOBAL: Permission.MANAGE_MESSAGES,
@@ -236,9 +211,6 @@ class DetectionFacts:
     #: ``HashSet.model_dump()`` captured at detection time; ``None`` for member
     #: reports (never hashed by design) and rows predating migration 0008.
     hashes: dict[str, Any] | None
-    verdict: str = "scam"
-    #: What was done about it (``delete_ban``, ``confirmed``, ...).
-    action_taken: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1829,29 +1801,6 @@ def _distinct_images(dets: Sequence[DetectionFacts]) -> list[DetectionFacts]:
     return out
 
 
-def _reopen_items(
-    group: Sequence[DetectionFacts], guild_id: int, locale: str
-) -> tuple[ReportData, ...]:
-    """The reports a reopened card shows: one per image, from the stored rows."""
-    items: list[ReportData] = []
-    for det in sorted(_distinct_images(group), key=lambda d: d.detection_id):
-        items.append(
-            ReportData(
-                detection_id=det.detection_id,
-                guild_id=guild_id,
-                channel_id=det.channel_id,
-                message_id=det.message_id,
-                uploader_id=det.uploader_id,
-                verdict=det.verdict,
-                # Not persisted on the row, as on /setup replay cards.
-                confidence=None,
-                action_taken=det.action_taken or "",
-                locale=locale,
-            )
-        )
-    return tuple(items)
-
-
 async def handle_review_button(
     ctx: InteractionContext, parsed: ParsedCustomId, deps: InteractionDeps
 ) -> InteractionResponse:
@@ -1878,26 +1827,6 @@ async def handle_review_button(
         return InteractionResponse("button.detection_missing", {"detection_id": detection_id})
     group = await _card_group(ctx, deps, primary)
     images = _distinct_images(group)
-
-    if action is ReviewAction.REVIEW:
-        # A card the bot settled by itself is opened in place, with the undo
-        # buttons. Nothing changes until one of them is pressed.
-        config = await deps.get_config(ctx.guild_id)
-        items = _reopen_items(group, ctx.guild_id, str(config.get("locale") or "en"))
-        await deps.audit(ctx.guild_id, ctx.user_id, "review.reopen", target=str(detection_id))
-        return InteractionResponse(
-            "button.reopened",
-            {"detection_id": detection_id},
-            card_edit=CardEdit(CardEditKind.REOPEN, detection_id, items),
-        )
-
-    if action is ReviewAction.REFOLD:
-        # Opened by accident: fold it back, changing nothing.
-        return InteractionResponse(
-            "button.refolded",
-            {"detection_id": detection_id},
-            card_edit=CardEdit(CardEditKind.REFOLD, detection_id),
-        )
 
     if action is ReviewAction.CONFIRM_SCAM:
         # All REST/network work runs before the first DB write -- see

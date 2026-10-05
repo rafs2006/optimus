@@ -176,9 +176,7 @@
     "detection_missing": "Detection #{detection_id} was not found in this server.",
     "action_failed": "Discord refused that action. Check that the bot has the Ban Members permission and that its role sits above the target user's roles.",
     "no_image": "The original image is no longer available, so there is nothing to whitelist.",
-    "dismissed": "Detection #{detection_id} dismissed: nothing was blocklisted, whitelisted, or actioned. It no longer shows in /queue.",
-    "reopened": "Card opened for review.",
-    "refolded": "Card folded back. Nothing was changed."
+    "dismissed": "Detection #{detection_id} dismissed: nothing was blocklisted, whitelisted, or actioned. It no longer shows in /queue."
   },
   "config_help": {
     "sensitivity": "How close an image must be to a known scam to match: lenient = near-exact only, strict = catches more edits but risks more false positives. Default: balanced.",
@@ -200,7 +198,8 @@
     "handled_ban_kept_whitelisted": "✅ **{action}** — handled by <@{user_id}>. Whitelisted {count} image(s): {entries}. If the uploader was banned, they still are: someone with **Ban Members** can press **Unban**.",
     "whitelist_removed": "Removed {count} whitelist entr(y/ies) that covered this image.",
     "handled_auto": "✅ **Handled automatically** by Optimus (matched this server's list)",
-    "original_message": "[Original message]({url}) · ID `{message_id}` · posted by <@{user_id}>"
+    "original_message": "[Original message]({url}) · ID `{message_id}` · posted by <@{user_id}>",
+    "review_hint": "Review or undo: {command} `detection:{detection_id}` posts it again with **Unban** and **False positive**."
   },
   "failure": {
     "step_delete": "Could not remove the message",

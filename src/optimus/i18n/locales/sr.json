@@ -176,9 +176,7 @@
     "detection_missing": "Otkrivanje #{detection_id} nije pronađeno na ovom serveru.",
     "action_failed": "Discord je odbio tu radnju. Proverite da li bot ima dozvolu Ban Members i da li je njegova uloga iznad uloga ciljanog korisnika.",
     "no_image": "Originalna slika više nije dostupna, pa nema šta da se stavi na belu listu.",
-    "dismissed": "Detekcija #{detection_id} je odbačena: ništa nije dodato na listu blokiranih ni dozvoljenih, i nijedna radnja nije primenjena. Više se ne prikazuje u /queue.",
-    "reopened": "Kartica je otvorena za pregled.",
-    "refolded": "Kartica je ponovo skupljena. Ništa nije promenjeno."
+    "dismissed": "Detekcija #{detection_id} je odbačena: ništa nije dodato na listu blokiranih ni dozvoljenih, i nijedna radnja nije primenjena. Više se ne prikazuje u /queue."
   },
   "config_help": {
     "sensitivity": "Koliko slika mora da liči na poznatu prevaru da bi se poklopila: lenient = samo skoro identične, strict = hvata više izmena ali rizikuje više lažnih uzbuna. Podrazumevano: balanced.",
@@ -200,7 +198,8 @@
     "handled_ban_kept_whitelisted": "✅ **{action}** — obradio/la <@{user_id}>. Na belu listu dodato slika: {count}: {entries}. Ako je pošiljalac bio banovan, i dalje je: neko sa dozvolom **Ban Members** može da pritisne **Unban**.",
     "whitelist_removed": "Uklonjeno stavki bele liste koje su pokrivale ovu sliku: {count}.",
     "handled_auto": "✅ **Automatski obrađeno** — Optimus (poklapanje sa listom ovog servera)",
-    "original_message": "[Originalna poruka]({url}) · ID `{message_id}` · poslao/la <@{user_id}>"
+    "original_message": "[Originalna poruka]({url}) · ID `{message_id}` · poslao/la <@{user_id}>",
+    "review_hint": "Pregled ili poništavanje: {command} `detection:{detection_id}` ponovo objavljuje karticu sa **Unban** i **False positive**."
   },
   "failure": {
     "step_delete": "Nije moguće ukloniti poruku",

@@ -268,9 +268,8 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
 4. **Audit** persists the detection + action row; **report** posts an embed with
    action buttons to the guild's review channel (if configured). A match against
    the guild's own blocklist whose configured action ran in full is posted
-   folded, with a link to the removed post and one *Review* button that
-   reopens it in place (Unban, False positive, Dismiss to fold back), and
-   settles the uploader's other open cards like a moderator's Confirm.
+   folded and without buttons, with the removed post's ID and a `/queue
+   detection:` mention that posts it again as a full card, and settles the uploader's other open cards like a moderator's Confirm.
 
 `ActionExecutor.execute` never raises — rate-limit exhaustion, an open circuit, an
 idempotency replay, or a REST error all return `success=False` so an audit row is
