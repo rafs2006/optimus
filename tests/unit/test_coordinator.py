@@ -254,9 +254,11 @@ async def test_ban_carries_configured_purge_window() -> None:
     assert rest.ban_purges == [86400]
 
 
-async def test_missing_member_still_deletes_the_message() -> None:
-    # The uploader left (or was already banned): the ban is impossible, but the
-    # scam message itself must still be removed — not downgraded to report-only.
+async def test_unverifiable_member_still_deletes_the_message() -> None:
+    # The uploader's roles could not be read (a 403, a transient 5xx): never
+    # punish blind, but the scam message itself must still be removed -- not
+    # downgraded to report-only. (An uploader who *left* is still banned by
+    # id; see test_departed_ban_auto_close.)
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     rest = _FakeRest()
     reports: list[ReportData] = []
@@ -269,7 +271,9 @@ async def test_missing_member_still_deletes_the_message() -> None:
     assert "ban_member" not in rest.calls
     assert audits == [("delete", True)]
     assert len(reports) == 1
-    assert reports[0].action_taken == "delete"
+    assert reports[0].action_taken == (
+        "delete — delete_ban skipped: could not verify the uploader's roles"
+    )
 
 
 async def test_failed_enforcement_is_reported_with_detail() -> None:

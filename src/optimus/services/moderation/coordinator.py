@@ -14,11 +14,13 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
 from prometheus_client import Counter
 
 from optimus.contracts.events import Action, OcrFindings, VerdictEvent
 from optimus.core.logging import get_logger
+from optimus.i18n import translate
 from optimus.services.moderation import reasons
 from optimus.services.moderation.actions import ActionExecutor, ActionRequest, ActionResult
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
@@ -126,6 +128,24 @@ class CardCleanup:
 #: Closes every other open card of a confirmed uploader:
 #: (guild, uploader, message already handled, moderator, review channel).
 CardCloser = Callable[[int, int, int, int, int | None], Awaitable[CardCleanup]]
+
+#: Audit actor recorded when the bot itself settles an uploader's cards.
+_SYSTEM_ACTOR = 0
+
+#: The punitive steps, for spelling out on the card what was skipped and why.
+_PUNITIVE_ACTIONS = (Action.DELETE_TIMEOUT, Action.DELETE_KICK, Action.DELETE_BAN)
+
+
+class Boundary(StrEnum):
+    """What the privilege check did to a punitive action, shown on the card."""
+
+    #: The uploader had already left; banned by user id anyway.
+    DEPARTED_BANNED = "departed_banned"
+    #: The uploader had already left; timeout/kick cannot apply to a non-member.
+    DEPARTED = "departed"
+    #: The uploader's roles could not be read, so nothing punitive ran.
+    UNVERIFIED = "unverified"
+
 
 #: A second confirmed verdict for the same uploader within this many seconds
 #: (the other images of the pressed card) does not run the sweep again.
@@ -245,18 +265,19 @@ class ModerationCoordinator:
 
         action = outcome.action
         decision = outcome.decision
+        boundary: Boundary | None = None
 
-        if decision is Decision.AUTO_ACT and action in (
-            Action.DELETE_TIMEOUT,
-            Action.DELETE_KICK,
-            Action.DELETE_BAN,
-        ):
-            action, decision = await self._apply_boundaries(event, action, decision)
+        if decision is Decision.AUTO_ACT and action in _PUNITIVE_ACTIONS:
+            intended = action
+            action, decision, boundary = await self._apply_boundaries(event, action, decision)
+        else:
+            intended = action
 
         if decision is Decision.NONE:
             return ActionResult(Action.NONE, success=True, detail=outcome.reason)
 
         result = await self._execute(event, cfg, action, decision)
+        auto = _fully_handled(event, cfg, decision, action, result)
         # Enforcement landed on a real scam, so clean up the rest of the
         # campaign. Deliberately NOT gated on ``result.success``: the whole
         # point of the sweep is to cover the case where the punitive half
@@ -265,9 +286,22 @@ class ModerationCoordinator:
         # every other copy standing. That failure mode is precisely what made
         # a delete_ban policy behave like "deleted one message".
         swept = await self._sweep_campaign(event, decision, action)
-        cleanup = await self._close_uploader_cards(event, cfg) if swept is not None else None
+        cleanup = (
+            await self._close_uploader_cards(event, cfg, auto=auto) if swept is not None else None
+        )
         detection_id = await self._audit(event, action.value, result)
-        await self._post_report(event, cfg, action, detection_id, result, swept, cleanup)
+        await self._post_report(
+            event,
+            cfg,
+            action,
+            detection_id,
+            result,
+            swept,
+            cleanup,
+            boundary=boundary,
+            intended=intended,
+            auto=auto,
+        )
         return result
 
     async def _sweep_campaign(
@@ -311,23 +345,29 @@ class ModerationCoordinator:
 
     async def _apply_boundaries(
         self, event: VerdictEvent, action: Action, decision: Decision
-    ) -> tuple[Action, Decision]:
+    ) -> tuple[Action, Decision, Boundary | None]:
         ctx = await self._target(event.guild_id, event.uploader_id)
         if ctx is None:
-            # The uploader is gone (left, or already banned). The punitive half
-            # is impossible, but the scam message itself must still be removed —
-            # downgrading all the way to report-only would leave old scam posts
-            # standing whenever the scammer has already departed.
-            BOUNDARY_REFUSALS.labels(reason="not_in_guild").inc()
-            return Action.DELETE, decision
+            # The uploader's privileges could not be read (a 403, a transient
+            # 5xx). Never punish blind -- they may be an admin -- but the scam
+            # message itself must still come down.
+            BOUNDARY_REFUSALS.labels(reason="unverified").inc()
+            return Action.DELETE, decision, Boundary.UNVERIFIED
         result = check_target(ctx)
         if not result.allowed:
             reason = result.refusal.value if result.refusal else "unknown"
             BOUNDARY_REFUSALS.labels(reason=reason).inc()
             if result.refusal is BoundaryRefusal.NOT_IN_GUILD:
-                return Action.DELETE, decision
-            return Action.REPORT_ONLY, Decision.MOD_QUEUE
-        return action, decision
+                # The uploader already left (scam accounts post and leave).
+                # Discord bans by user id, members or not, and a non-member
+                # holds no roles, so the ban still runs: without it they
+                # simply rejoin. Timeout and kick need a member, so those
+                # policies fall back to deleting the post.
+                if action is Action.DELETE_BAN:
+                    return action, decision, Boundary.DEPARTED_BANNED
+                return Action.DELETE, decision, Boundary.DEPARTED
+            return Action.REPORT_ONLY, Decision.MOD_QUEUE, None
+        return action, decision, None
 
     async def _execute(
         self, event: VerdictEvent, cfg: GuildModConfig, action: Action, decision: Decision
@@ -389,6 +429,10 @@ class ModerationCoordinator:
         result: ActionResult,
         swept: SweepOutcome | None = None,
         cleanup: CardCleanup | None = None,
+        *,
+        boundary: Boundary | None = None,
+        intended: Action | None = None,
+        auto: bool = False,
     ) -> None:
         if cfg.review_channel_id is None or detection_id is None:
             return
@@ -398,6 +442,13 @@ class ModerationCoordinator:
         action_taken = (
             action.value if result.success else f"{action.value} (failed: {result.detail})"
         )
+        if boundary is not None:
+            # Say why the configured punishment did or did not happen, instead
+            # of a bare "delete" that reads like the policy was ignored.
+            note = translate(
+                f"report.boundary_{boundary.value}", cfg.locale, action=(intended or action).value
+            )
+            action_taken = f"{action_taken} — {note}"
         # Whatever could not be applied is spelled out as an instruction on the
         # card. Without this, a channel the bot cannot see produced a report
         # that looked like a silent, inexplicable failure.
@@ -442,10 +493,14 @@ class ModerationCoordinator:
         key = (event.guild_id, event.message_id)
         # A moderator's confirmation is already decided: its card is folded
         # (outcome, no buttons) and kept apart from the message's open card.
-        decided = event.confirmed_by is not None
+        # So is a card the bot settled on its own (see :func:`_fully_handled`):
+        # it is posted folded too, keeping only the False positive button.
+        decided = event.confirmed_by is not None or auto
         card_key = (event.guild_id, event.message_id, decided)
-        if decided:
+        if event.confirmed_by is not None:
             data = replace(data, decided_by=event.confirmed_by)
+        elif auto:
+            data = replace(data, auto_handled=True)
         async with self._card_lock(key):
             if decided:
                 # The open card is settled now; later images must not reopen it.
@@ -570,24 +625,31 @@ class ModerationCoordinator:
         return True
 
     async def _close_uploader_cards(
-        self, event: VerdictEvent, cfg: GuildModConfig
+        self, event: VerdictEvent, cfg: GuildModConfig, *, auto: bool = False
     ) -> CardCleanup | None:
-        """After a moderator confirmed, close and remove the uploader's other cards.
+        """After a confirmation, close and remove the uploader's other cards.
 
         One confirmation settles the whole campaign, so the other cards that
         account produced (one per message, across channels) are marked
         confirmed and deleted from the review channel rather than left for a
-        moderator to click through one by one. Best-effort: a failure leaves
-        the cards open, which is safe.
+        moderator to click through one by one. A post the bot fully handled on
+        its own (``auto``) settles the campaign the same way, recorded under
+        the system actor. Best-effort: a failure leaves the cards open, which
+        is safe.
         """
-        if event.confirmed_by is None or self._close_cards is None:
+        if self._close_cards is None:
+            return None
+        actor = event.confirmed_by if event.confirmed_by is not None else None
+        if actor is None and auto:
+            actor = _SYSTEM_ACTOR
+        if actor is None:
             return None
         try:
             cleanup = await self._close_cards(
                 event.guild_id,
                 event.uploader_id,
                 event.message_id,
-                event.confirmed_by,
+                actor,
                 cfg.review_channel_id,
             )
         except Exception:
@@ -642,6 +704,10 @@ class ModerationCoordinator:
         if time.monotonic() > campaign.expires_at:
             del self._campaigns[key]
             return None
+        if any(i.message_id == event.message_id for i in campaign.items):
+            # Another image of the post already on the card is not a "later
+            # post": it takes the normal path and joins that card.
+            return None
         if cfg.safe_mode or event.matched_source != "guild" or not event.matched_hash_id:
             return None
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
@@ -659,3 +725,30 @@ class ModerationCoordinator:
             with contextlib.suppress(Exception):
                 await self._mark_reported(event.guild_id, detection_id, campaign.card_id)
         return result
+
+
+def _fully_handled(
+    event: VerdictEvent,
+    cfg: GuildModConfig,
+    decision: Decision,
+    action: Action,
+    result: ActionResult,
+) -> bool:
+    """Whether the bot finished the job itself, so no moderator is needed.
+
+    True only for a match against this server's own blocklist that ran the
+    server's configured action in full: the post is gone and every punitive
+    step succeeded (a ban of an uploader who already left counts). Anything a
+    person should look at keeps an open card: a global-only match, a near
+    match queued for review, safe mode, a refused or downgraded punishment, a
+    missing permission, a member report.
+    """
+    if event.confirmed_by is not None or event.reported_by is not None:
+        return False
+    if decision is not Decision.AUTO_ACT or action in (Action.NONE, Action.REPORT_ONLY):
+        return False
+    if event.matched_source != "guild" or not event.matched_hash_id:
+        return False
+    if action is not cfg.configured_action:
+        return False
+    return result.success and bool(result.steps) and result.message_deleted

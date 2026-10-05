@@ -391,14 +391,33 @@ async def _resolve_target(  # pragma: no cover - requires live REST
 
     try:
         member = await rest.fetch_member(guild_id, user_id)  # type: ignore[attr-defined]
+    except hikari.NotFoundError:
+        # Genuinely absent: the uploader left or was already banned. Reported
+        # as an out-of-guild target rather than ``None`` so the caller can tell
+        # "gone" (a ban by user id is still possible and safe: a non-member
+        # holds no roles) from "unverifiable" (never punish blind).
+        _log.info("target_resolve_not_found", guild_id=guild_id, user_id=user_id)
+        return TargetContext(
+            user_id=user_id,
+            guild_owner_id=0,
+            bot_user_id=bot_user_id,
+            is_administrator=False,
+            top_role_position=0,
+            bot_top_role_position=0,
+            in_guild=False,
+        )
+    except Exception:
+        _log.warning(
+            "target_resolve_failed",
+            guild_id=guild_id,
+            user_id=user_id,
+            exc_info=True,
+        )
+        return None
+    try:
         guild = await rest.fetch_guild(guild_id)  # type: ignore[attr-defined]
         roles = await rest.fetch_roles(guild_id)  # type: ignore[attr-defined]
         me = await rest.fetch_member(guild_id, bot_user_id)  # type: ignore[attr-defined]
-    except hikari.NotFoundError:
-        # Genuinely absent: the uploader left or was already banned. The caller
-        # downgrades to delete-only, which is correct.
-        _log.info("target_resolve_not_found", guild_id=guild_id, user_id=user_id)
-        return None
     except Exception:
         # Anything else (a 403 from missing permissions, a transient 5xx) used
         # to propagate out of the coordinator and abandon the verdict entirely:

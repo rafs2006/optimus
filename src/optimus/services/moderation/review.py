@@ -114,6 +114,10 @@ class ReportData:
     followups_removed: int = 0
     #: Whitelist entries the confirmation lifted; shown on the folded card.
     whitelist_removed: int = 0
+    #: Set when the bot fully handled this on its own (a match against this
+    #: server's blocklist, the configured action applied in full): the card is
+    #: folded like a confirmed one but keeps a False positive button.
+    auto_handled: bool = False
 
 
 def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
@@ -163,6 +167,32 @@ def _unique(values: Sequence[str | None]) -> list[str]:
     return out
 
 
+#: Separates an action from the notes appended to it (boundary, sweep, cleanup).
+_ACTION_NOTE_SEP = " — "
+
+
+def _merge_actions(values: Sequence[str | None]) -> str:
+    """One ``Action taken`` line for a card holding several images.
+
+    Each image's outcome is ``<action>[ — note]...``, and the campaign notes
+    (purged N more, cleared N reports) land on only one of them, so plain
+    de-duplication printed ``delete_ban; delete_ban — purged ...``. Distinct
+    actions are listed once, joined by ``; ``, and distinct notes follow once.
+    """
+    heads: list[str] = []
+    notes: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        head, *rest = value.split(_ACTION_NOTE_SEP)
+        if head not in heads:
+            heads.append(head)
+        for note in rest:
+            if note not in notes:
+                notes.append(note)
+    return _ACTION_NOTE_SEP.join(["; ".join(heads), *notes]) if heads else ""
+
+
 def _clip(text: str) -> str:
     return text if len(text) <= _FIELD_LIMIT else text[: _FIELD_LIMIT - 1] + "\u2026"
 
@@ -189,7 +219,7 @@ def merge_reports(items: Sequence[ReportData]) -> ReportData:
         first,
         verdict=verdict,
         confidence=max(confidences) if confidences else None,
-        action_taken=_clip("; ".join(_unique([i.action_taken for i in items]))),
+        action_taken=_clip(_merge_actions([i.action_taken for i in items])),
         matched_hash_id=", ".join(_unique([i.matched_hash_id for i in items])) or None,
         global_match=any(i.global_match for i in items),
         swarm_guilds=max(swarm) if swarm else None,
@@ -204,6 +234,7 @@ def merge_reports(items: Sequence[ReportData]) -> ReportData:
         decided_by=next((i.decided_by for i in items if i.decided_by), None),
         followups_removed=max(i.followups_removed for i in items),
         whitelist_removed=max(i.whitelist_removed for i in items),
+        auto_handled=any(i.auto_handled for i in items),
     )
 
 
@@ -315,14 +346,39 @@ def build_folded_embed(title: str | None, note: str, url: str | None = None) -> 
     return hikari.Embed(description=folded_text(title, note), url=url, colour=FOLDED_COLOUR)
 
 
-def build_action_rows(detection_id: int) -> list[object]:
-    """Build hikari message action rows with the review buttons."""
+#: A card the bot settled by itself has no buttons: nothing on it can be
+#: misclicked. Its text names the ``/queue detection:`` command that posts it
+#: again as a full card, with Unban and False positive.
+AUTO_HANDLED_BUTTONS: tuple[ReviewAction, ...] = ()
+
+#: Application command ids by name, filled in once commands are registered,
+#: so a card can mention ``/queue`` as a clickable command (``</queue:id>``).
+#: Empty until then (or in tests): the card falls back to plain ``/queue``.
+COMMAND_IDS: dict[str, int] = {}
+
+
+def command_mention(name: str) -> str:
+    """``</name:id>`` when the command id is known, else plain ``/name``."""
+    command_id = COMMAND_IDS.get(name)
+    return f"</{name}:{command_id}>" if command_id else f"/{name}"
+
+
+def build_action_rows(
+    detection_id: int, buttons: Sequence[ReviewAction] | None = None
+) -> list[object]:
+    """Build hikari message action rows with the review buttons.
+
+    ``buttons`` defaults to :data:`REVIEW_BUTTONS`, read at call time.
+    """
     import hikari
+
+    if buttons is None:
+        buttons = REVIEW_BUTTONS
 
     rows: list[object] = []
     row = hikari.impl.MessageActionRowBuilder()
     buttons_in_row = 0
-    for action in REVIEW_BUTTONS:
+    for action in buttons:
         style = (
             hikari.ButtonStyle.SUCCESS
             if action is ReviewAction.CONFIRM_SCAM
@@ -347,17 +403,41 @@ def build_action_rows(detection_id: int) -> list[object]:
 
 
 def decided_note(data: ReportData) -> str:
-    """The folded body of a card a moderator already confirmed: who, and the outcome."""
+    """The folded body of a decided card: who (a moderator or the bot), and the outcome."""
     loc = data.locale
-    lines = [
-        translate(
+    who = (
+        translate("card.handled_auto", loc)
+        if data.decided_by is None and data.auto_handled
+        else translate(
             "card.handled",
             loc,
             action=BUTTON_LABELS[ReviewAction.CONFIRM_SCAM],
             user_id=data.decided_by,
-        ),
+        )
+    )
+    lines = [
+        who,
         f"{translate('report.field_action', loc)}: {data.action_taken}",
     ]
+    if data.decided_by is None and data.auto_handled:
+        # The post is gone; its ID (and the uploader) stay as evidence.
+        lines.append(
+            translate(
+                "card.original_message",
+                loc,
+                url=jump_url(data.guild_id, data.channel_id, data.message_id),
+                message_id=data.message_id,
+                user_id=data.uploader_id,
+            )
+        )
+        lines.append(
+            translate(
+                "card.review_hint",
+                loc,
+                command=command_mention("queue"),
+                detection_id=data.detection_id,
+            )
+        )
     if data.problem:
         lines.append(data.problem)
     if data.whitelist_removed:
@@ -378,4 +458,10 @@ def build_card(items: Sequence[ReportData]) -> tuple[list[Any], list[object]]:
     if merged.decided_by is not None:
         url = jump_url(merged.guild_id, merged.channel_id, merged.message_id)
         return [build_folded_embed(report_title(merged), decided_note(merged), url)], []
+    if merged.auto_handled:
+        # Settled by the bot itself: folded the same way, keeping only the
+        # one decision left -- undoing a wrong call.
+        url = jump_url(merged.guild_id, merged.channel_id, merged.message_id)
+        embeds = [build_folded_embed(report_title(merged), decided_note(merged), url)]
+        return embeds, build_action_rows(merged.detection_id, AUTO_HANDLED_BUTTONS)
     return build_embeds(merged), build_action_rows(merged.detection_id)

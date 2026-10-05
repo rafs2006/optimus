@@ -257,13 +257,19 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    action. If **safe mode** is on, an otherwise-auto action is downgraded to
    report-only.
 2. **Boundaries** ([`boundaries.py`](../src/optimus/services/moderation/boundaries.py))
-   apply only to punitive auto-actions (timeout/kick/ban): if the target left the
-   guild, is the owner, has `ADMINISTRATOR`, or sits above the bot in the role
-   hierarchy, the action is downgraded to report-only.
+   apply only to punitive auto-actions (timeout/kick/ban): if the target is the
+   owner, has `ADMINISTRATOR`, or sits above the bot in the role hierarchy, the
+   action is downgraded to report-only. A target who already left holds no
+   roles, so a ban still runs by user id; timeout and kick fall back to
+   delete-only. When the target's roles cannot be read at all, the action falls
+   back to delete-only rather than punishing blind.
 3. **Execution** ([`actions.py`](../src/optimus/services/moderation/actions.py))
    applies the action through layered controls (next section).
 4. **Audit** persists the detection + action row; **report** posts an embed with
-   action buttons to the guild's review channel (if configured).
+   action buttons to the guild's review channel (if configured). A match against
+   the guild's own blocklist whose configured action ran in full is posted
+   folded and without buttons, with the removed post's ID and a `/queue
+   detection:` mention that posts it again as a full card, and settles the uploader's other open cards like a moderator's Confirm.
 
 `ActionExecutor.execute` never raises — rate-limit exhaustion, an open circuit, an
 idempotency replay, or a REST error all return `success=False` so an audit row is
