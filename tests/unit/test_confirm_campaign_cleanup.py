@@ -282,6 +282,9 @@ async def _seed(scope: SessionScope) -> dict[str, int]:
         "open_a": (7, 42, 4, 901, "report_only", True, 1),
         "open_a2": (7, 42, 4, 901, "report_only", True, 1),
         "open_b": (7, 42, 5, 902, "delete", True, 2),
+        # Settled by the bot itself: a record, never closed or removed.
+        "auto_card": (7, 42, 7, 907, "auto:delete_ban", True, 1),
+        "auto_followup": (7, 42, 8, 907, "auto:delete", True, 1),
         "no_card_link": (7, 42, 6, None, "report_only", True, 2),
         "dismissed": (7, 42, 10, 903, "dismissed", True, 1),
         "never_reported": (7, 42, 11, None, "none", False, 1),
@@ -333,7 +336,7 @@ async def test_the_closer_closes_only_that_uploaders_open_cards(scope: SessionSc
     closed = {"open_a", "open_a2", "open_b", "no_card_link"}
     assert cleanup.closed == len(closed)
     assert cleanup.message_ids == (4, 5, 6)
-    assert rest.deleted == [(100, 901)]  # 902 was already gone
+    assert rest.deleted == [(100, 901)]  # 902 was already gone; 907 is kept
     assert cleanup.cards_deleted == 1
 
     async with scope() as s:

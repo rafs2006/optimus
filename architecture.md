@@ -118,6 +118,14 @@ safe mode, hashless risk-scan matches, and other uploaders are unchanged. The
 settled memory is in-process, bounded, and resets on restart. Each image logs a
 `verdict_decided` line with its decision and reason.
 
+Verdicts are serialised per uploader (`_uploader_locks`), so a burst across
+channels settles once: the first image bans and posts the card, later images of
+that post join it as items, and other posts take the follow-up path (delete
+only, counted once per post). A detection the bot settled itself is stored as
+`auto:<action>` (the mod-action audit keeps the plain action), and the campaign
+closer skips those rows, so it never removes the bot's own cards. A card posted
+again from the database reads `<action> (handled automatically)`.
+
 Since [#69](https://github.com/rafs2006/optimus/pull/69), the whitelist is
 visible and correctable through `/scamhash whitelist` and
 `/scamhash unwhitelist`, and a scam call (Confirm scam, Review as scam,
