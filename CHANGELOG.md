@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `/scamhash whitelist` and `/scamhash unwhitelist` (by entry, or by author or age with a preview before `confirm:True`), lift covering whitelist entries on Confirm scam, Review as scam, and `/scamhash add`, carry the removal count on `VerdictEvent.whitelist_removed`, and add a review-only whitelist section to exports that imports ignore; this replaces #68's whitelist-wins warning ([#69](https://github.com/rafs2006/optimus/pull/69), @rafs2006) <!-- pr-log:rafs2006/optimus#69 -->
+
 - Have `/scamhash add` report an image this server already lists, or already catches with a SCAM verdict, instead of storing and auditing it again, and warn when an added image is whitelisted ([#68](https://github.com/rafs2006/optimus/pull/68), @rafs2006) <!-- pr-log:rafs2006/optimus#68 -->
 
 - Let `/scamhash add` block images from a message link or ID on this server or from one Discord image link, as well as an upload, with per-input problems reported separately; `/scamhash list` shows the 10 newest entries with origin, author, and date ([#67](https://github.com/rafs2006/optimus/pull/67), @rafs2006) <!-- pr-log:rafs2006/optimus#67 -->

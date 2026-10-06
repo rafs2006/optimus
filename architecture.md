@@ -104,6 +104,15 @@ audit row), and for the window afterwards deletes their reposts that match this
 server's blocklist without posting new cards. Automatic `report_only` verdicts
 still never sweep. The repost memory is in-process and resets on restart.
 
+Since [#69](https://github.com/rafs2006/optimus/pull/69), the whitelist is
+visible and correctable through `/scamhash whitelist` and
+`/scamhash unwhitelist`, and a scam call (Confirm scam, Review as scam,
+`/scamhash add`) removes whitelist entries that cover the image, with a
+`scamhash.unwhitelist` audit row per removal. `VerdictEvent.whitelist_removed`
+carries the count onto the folded card. A whitelist match still wins over the
+blocklist at scan time. Exports include a whitelist section for review only;
+imports ignore it, so a shared file cannot exempt images on another server.
+
 ## Improvement plan — near term
 
 ### Current member-command boundary
@@ -227,3 +236,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#64 --> Applied: review cards are per message, decided cards fold in place, and card identity is stored on detections and carried on verdict events - from #64.
 
 <!-- decision:rafs2006/optimus#65 --> Applied: a moderator scam confirmation runs the campaign sweep and closes the uploader's other open cards regardless of action policy, while automatic report-only verdicts never sweep - from #65.
+
+<!-- decision:rafs2006/optimus#69 --> Applied: whitelist entries are listable and removable, a moderator scam call lifts covering entries, and exported whitelists are never imported - from #69.

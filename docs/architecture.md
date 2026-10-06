@@ -229,7 +229,9 @@ the guild's sensitivity preset:
 Above the ceiling is `CLEAN`. Confidence decays linearly from 1.0 at distance 0 to
 0 at the ceiling. A **whitelist** match short-circuits to `CLEAN` regardless — the
 zero-false-positive bias that keeps auto-moderation from punishing legitimate
-users. An optional ONNX **embedding** confirmation
+users. Since [#69](https://github.com/rafs2006/optimus/pull/69), a moderator's
+scam call removes whitelist entries that cover the image, so a misclicked
+exemption no longer persists invisibly. An optional ONNX **embedding** confirmation
 ([`hashing/embedding.py`](../src/optimus/hashing/embedding.py)) exists for
 ambiguous matches but is off by default.
 
