@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Have `/scamhash add` report an image this server already lists, or already catches with a SCAM verdict, instead of storing and auditing it again, and warn when an added image is whitelisted ([#68](https://github.com/rafs2006/optimus/pull/68), @rafs2006) <!-- pr-log:rafs2006/optimus#68 -->
+
 - Let `/scamhash add` block images from a message link or ID on this server or from one Discord image link, as well as an upload, with per-input problems reported separately; `/scamhash list` shows the 10 newest entries with origin, author, and date ([#67](https://github.com/rafs2006/optimus/pull/67), @rafs2006) <!-- pr-log:rafs2006/optimus#67 -->
 
 - Fill creation timestamps in the application so `/global approve_server` works on the migrated database, where `global_trusted_guilds.created_at` has no database default; no migration ([#66](https://github.com/rafs2006/optimus/pull/66), @rafs2006) <!-- pr-log:rafs2006/optimus#66 -->
