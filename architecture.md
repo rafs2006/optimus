@@ -104,6 +104,22 @@ audit row), and for the window afterwards deletes their reposts that match this
 server's blocklist without posting new cards. Automatic `report_only` verdicts
 still never sweep. The repost memory is in-process and resets on restart.
 
+Since [#71](https://github.com/rafs2006/optimus/pull/71), the target resolver
+tells an uploader who left the server (a 404 on the member lookup) apart from
+one it cannot verify (403, 5xx, or any other failure). Under `delete_ban`, a
+departed uploader is banned by user ID, on automatic verdicts and on Confirm;
+a non-member holds no roles, so no hierarchy check is skipped. `delete_timeout`
+and `delete_kick` fall back to delete-only for a departed uploader, and an
+unverifiable one still gets delete-only. An already-banned result (40007)
+counts as success; a ban limit (30035) or unknown user (10013) keeps the card
+open with the reason. A card is posted already folded when the match came
+from this server's own list with a hash, the decision was automatic, the
+configured action ran without a downgrade, and every step succeeded; that
+automatic action also settles the uploader's campaign the way Confirm does.
+Global-only and near matches, safe mode, member reports, hashless matches,
+hierarchy refusals, and downgraded or failed steps keep a full, open card.
+`/queue detection:<number>` posts a folded card again for review or undo.
+
 Since [#72](https://github.com/rafs2006/optimus/pull/72), the coordinator marks
 an uploader settled as soon as enforcement runs (a fully auto-handled verdict or
 a successful moderator confirm), before the card is posted. For
@@ -276,6 +292,8 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#65 --> Applied: a moderator scam confirmation runs the campaign sweep and closes the uploader's other open cards regardless of action policy, while automatic report-only verdicts never sweep - from #65.
 
 <!-- decision:rafs2006/optimus#69 --> Applied: whitelist entries are listable and removable, a moderator scam call lifts covering entries, and exported whitelists are never imported - from #69.
+
+<!-- decision:rafs2006/optimus#71 --> Applied: an uploader who already left is banned by user ID under `delete_ban`, and a match the bot fully handled from this server's own list is posted as a folded card and settles the uploader's campaign like Confirm - from #71.
 
 <!-- decision:rafs2006/optimus#72 --> Applied: an uploader settled by auto-handling or a confirm has their other hash matches, including near and global-list matches, deleted without a moderator for 10 minutes, with late open cards closed, while bans still rest only on this server's list - from #72.
 
