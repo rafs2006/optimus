@@ -46,8 +46,9 @@ Every detection — an automatic hash/risk match, a member report, or a
 moderator's `/scamhash review` — posts a **review card** into the review
 channel with the evidence and the buttons below.
 
-There is **one card per message**. A post with several flagged images gets a
-single card that shows up to four of them together and says how many there
+There is **one card per message**, and when the bot handles a scam account on
+its own, one card per uploader (see "One uploader, one card" below). A post
+with several flagged images gets a single card that shows up to four of them together and says how many there
 are, and every button on it acts on all of them: Confirm blocklists every
 image, False positive whitelists every image, Dismiss closes them all, and the
 message is deleted or its uploader banned once.
@@ -98,9 +99,21 @@ Notes on cards:
   other open cards are closed and their reposts of blocklisted images are
   deleted without a card.
 
+  **One uploader, one card.** However many posts a scam account spreads
+  across the server at once, the review channel keeps a single card for it:
+  the first image bans the uploader and posts the card, the other images of
+  that post are added to it ("· 4 images"), and every other post is deleted
+  and counted on it once ("Removed N later post(s) from this uploader."). The
+  uploader is banned once. The bot never removes its own cards; the logs keep
+  every image. To see one of these cards again, use `/queue detection:<number>`:
+  it reads "delete_ban (handled automatically)".
+
   Everything that needs a person keeps a full, open card: a global-only
   match, a near match below `auto_act_threshold`, safe mode, a member report,
-  a punishment refused by the role hierarchy, or a missing permission.
+  a punishment refused by the role hierarchy, or a missing permission. The
+  one exception is an uploader the bot or a moderator already settled in the
+  last 10 minutes: their global and near matches are deleted without a card
+  (see "One confirmation settles the whole campaign" below).
 - **Uploaders who already left are still banned.** Scam accounts often post
   and leave within seconds. Discord bans by user ID, member or not, so
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
@@ -113,7 +126,8 @@ Notes on cards:
   (`Action: …`). Cards from `/scamhash review` are posted already folded,
   since a moderator already made the call.
 - **One confirmation settles the whole campaign.** A scammer usually pastes
-  the same picture into many channels, which gives one card per message.
+  the same picture into many channels; cards that wait for a moderator come
+  one per message.
   **Confirm scam** (or *Review as scam*) on any one of them, whatever your
   `action_policy`:
   - deletes that uploader's other image posts from the last 24 hours in every
@@ -127,9 +141,9 @@ Notes on cards:
     still gets a normal card. This memory resets when the bot restarts;
   - for the first 10 minutes, does the same for their weaker matches too: a
     near match, or a match from the shared global list, which on its own
-    only asks a moderator. A post that was being checked at the same moment
-    and still got an open card has that card closed and removed. The ban
-    itself always rests on this server's own list.
+    only asks a moderator. Posts that arrive at the same moment are handled
+    one after another, so they join that one card instead of getting their
+    own. The ban itself always rests on this server's own list.
 
   Cards from before this change don't record which card they are, so they
   are closed but stay in the channel for you to delete.
@@ -325,10 +339,13 @@ community can ever cause action on your server**:
 
 - **Consuming is opt-in and review-only.** With `optin_global_db: true`, a
   global match posts a review card marked *"Global scam database — needs your
-  confirmation"* — it is **never** auto-deleted or auto-banned, regardless of
-  your `action_policy`. Your moderator presses **Confirm scam** to act, which
-  also adds the hash to your own local blocklist (local matches of it do use
-  your action policy from then on).
+  confirmation"* — it never bans anyone, and it is never auto-deleted,
+  regardless of your `action_policy`. Your moderator presses **Confirm scam**
+  to act, which also adds the hash to your own local blocklist (local matches
+  of it do use your action policy from then on). One exception to the
+  deleting: if this server banned or confirmed the same uploader on its own
+  list in the last 10 minutes, their global match is deleted quietly and
+  counted on that card. It still bans nobody.
 - **Contributing is allowlisted.** Only servers the bot owner approved with
   `/global approve_server` can push toward the shared list. On those servers,
   **Confirm scam** doubles as a vote; a hash goes live globally only after
