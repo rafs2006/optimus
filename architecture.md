@@ -77,6 +77,14 @@ Moderator actions can reference an existing detection. See
 [moderator guide](docs/moderator-guide.md). Removed appeal commands are historical,
 not a current member surface.
 
+## Review cards, blocklist, and whitelist
+
+Per-server blocklist entries are keyed by `(guild_id, hash_id)` since
+[#62](https://github.com/rafs2006/optimus/pull/62) (migration `0011`). The
+`hash_id` is derived from the image, so the same scam image can be listed on
+several servers; adding an image a server already lists returns that server's
+existing row and keeps its original attribution. Every read stays guild-scoped.
+
 ## Improvement plan — near term
 
 ### Current member-command boundary
@@ -194,3 +202,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#49 --> Applied: gate permissionless command registration and dispatch while retaining subsequent removal of appeals and self-service opt-out - from #49.
 
 <!-- decision:rafs2006/optimus#57 --> Applied: review actions are authorized per action by Ban Members or Manage Messages instead of Manage Server, with fail-closed handling for unmapped actions - from #57.
+
+<!-- decision:rafs2006/optimus#62 --> Applied: per-server blocklist rows are keyed by `(guild_id, hash_id)` so one image can be listed on several servers - from #62.

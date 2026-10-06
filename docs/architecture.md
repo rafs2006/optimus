@@ -333,7 +333,9 @@ query filters by `guild_id`; no raw SQL/`text()` interpolation). Key tables:
 - **guilds** — per-guild config: sensitivity, action policy, thresholds, review
   channel, retention, locale, opt-ins, `safe_mode`.
 - **guild_hashes** / **guild_whitelist** — per-guild known-scam hashes and
-  whitelisted images.
+  whitelisted images. `guild_hashes` is keyed by `(guild_id, hash_id)` since
+  migration `0011` ([#62](https://github.com/rafs2006/optimus/pull/62)), so the
+  same image can be listed on more than one server.
 - **global_hashes** / **global_hash_approvals** / **global_submitters** —
   the signed cross-guild promoted-hash database and its approval/reputation
   bookkeeping.

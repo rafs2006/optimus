@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Key `guild_hashes` by `(guild_id, hash_id)` through migration `0011` so the same image can be blocklisted on more than one server; re-adding an image a server already lists keeps the original row, and overlapping imports report skips ([#62](https://github.com/rafs2006/optimus/pull/62), @rafs2006) <!-- pr-log:rafs2006/optimus#62 -->
+
 - Check the review channel first in `/config permissions`, count channels hidden from the bot as private instead of blocked, and make a missing Manage Messages advisory under `report_only` ([#61](https://github.com/rafs2006/optimus/pull/61), @rafs2006) <!-- pr-log:rafs2006/optimus#61 -->
 
 - Download the uploaded attachment for `/scamhash import` instead of parsing its snowflake id, so imports work through Discord; share the bounded fetch path with a new text fetcher and give each import failure its own localized reason ([#60](https://github.com/rafs2006/optimus/pull/60), @rafs2006) <!-- pr-log:rafs2006/optimus#60 -->
