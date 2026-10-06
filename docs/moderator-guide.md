@@ -100,7 +100,10 @@ Notes on cards:
 
   Everything that needs a person keeps a full, open card: a global-only
   match, a near match below `auto_act_threshold`, safe mode, a member report,
-  a punishment refused by the role hierarchy, or a missing permission.
+  a punishment refused by the role hierarchy, or a missing permission. The
+  one exception is an uploader the bot or a moderator already settled in the
+  last 10 minutes: their global and near matches are deleted without a card
+  (see "One confirmation settles the whole campaign" below).
 - **Uploaders who already left are still banned.** Scam accounts often post
   and leave within seconds. Discord bans by user ID, member or not, so
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
@@ -325,10 +328,13 @@ community can ever cause action on your server**:
 
 - **Consuming is opt-in and review-only.** With `optin_global_db: true`, a
   global match posts a review card marked *"Global scam database — needs your
-  confirmation"* — it is **never** auto-deleted or auto-banned, regardless of
-  your `action_policy`. Your moderator presses **Confirm scam** to act, which
-  also adds the hash to your own local blocklist (local matches of it do use
-  your action policy from then on).
+  confirmation"* — it never bans anyone, and it is never auto-deleted,
+  regardless of your `action_policy`. Your moderator presses **Confirm scam**
+  to act, which also adds the hash to your own local blocklist (local matches
+  of it do use your action policy from then on). One exception to the
+  deleting: if this server banned or confirmed the same uploader on its own
+  list in the last 10 minutes, their global match is deleted quietly and
+  counted on that card. It still bans nobody.
 - **Contributing is allowlisted.** Only servers the bot owner approved with
   `/global approve_server` can push toward the shared list. On those servers,
   **Confirm scam** doubles as a vote; a hash goes live globally only after
