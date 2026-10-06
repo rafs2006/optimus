@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let moderators with Manage Messages run every `/scamhash` subcommand and the right-click **Review as scam**, the same bar as Confirm scam, while Manage Server still opens both server-side through `ALSO_ACCEPTED`; setup, settings, `/stats`, `/delete_server_data`, and per-button permissions are unchanged ([#73](https://github.com/rafs2006/optimus/pull/73), @rafs2006) <!-- pr-log:rafs2006/optimus#73 -->
+
 - Settle an uploader as soon as enforcement runs (auto-handled or confirmed), so for 10 minutes (`SETTLED_WINDOW_SECONDS`) their other hash matches, including near and global-list matches, are deleted quietly and counted on the settled card; an open card that lands after the settlement is closed and removed under the system actor (a refused delete keeps it open), the ban still rests only on this server's list, each image logs `verdict_decided`, and multi-image cards sum their cleanup notes ([#72](https://github.com/rafs2006/optimus/pull/72), @rafs2006) <!-- pr-log:rafs2006/optimus#72 -->
 
 - Show the bot's own campaign-cleanup entries as "Optimus" instead of a broken `<@0>` mention in `/scamhash list`, `/scamhash add` replies, and `/scamhash whitelist` ([#70](https://github.com/rafs2006/optimus/pull/70), @rafs2006) <!-- pr-log:rafs2006/optimus#70 -->

@@ -76,7 +76,9 @@ tests in `tests/unit/test_interactions_handlers.py` and
   implying all and no other permission implying any other. Report buttons
   require the permission matching the action on *this* click
   (`REVIEW_ACTION_PERMISSIONS`: `BAN_MEMBERS` for Ban/Unban, `MANAGE_MESSAGES`
-  for the rest; unmapped actions fail closed to `MANAGE_GUILD`). False positive
+  for the rest; unmapped actions fail closed to `MANAGE_GUILD`). `/scamhash`
+  and Review as scam require `MANAGE_MESSAGES` and, through `ALSO_ACCEPTED`,
+  still accept `MANAGE_GUILD` server-side (#73). False positive
   additionally re-checks `BAN_MEMBERS` before its unban, so it is not a second
   route around the Unban gate. Both global-list writes — Confirm's vote and
   False positive's revocation — require the server to be opted in *and*

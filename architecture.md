@@ -156,7 +156,15 @@ enforces. Setup and settings commands remain on Manage Server and
 `/delete_server_data` on Administrator. `mod_role` grants visibility of cards,
 not permission to act. The permission mask is derived from the enum, and an
 action missing from the permission map falls back to Manage Server, never to no
-check. See the [moderator guide](docs/moderator-guide.md) and
+check. Since [#73](https://github.com/rafs2006/optimus/pull/73), every
+`/scamhash` subcommand and the right-click **Review as scam** also require
+Manage Messages, the same bar as Confirm scam, because moderators keep the
+blocklist. As the one exception to "Manage Server implies none of them", those
+two commands still accept Manage Server through `ALSO_ACCEPTED`; that fallback
+is checked server-side only, since Discord's `default_member_permissions` hint
+holds one permission set. `/config`, `/setup`, `/stats`, the per-button
+permissions, and `/delete_server_data` are unchanged. See the
+[moderator guide](docs/moderator-guide.md) and
 [security audit](docs/security-audit.md).
 
 ### Proposed improvements
@@ -256,3 +264,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#69 --> Applied: whitelist entries are listable and removable, a moderator scam call lifts covering entries, and exported whitelists are never imported - from #69.
 
 <!-- decision:rafs2006/optimus#72 --> Applied: an uploader settled by auto-handling or a confirm has their other hash matches, including near and global-list matches, deleted without a moderator for 10 minutes, with late open cards closed, while bans still rest only on this server's list - from #72.
+
+<!-- decision:rafs2006/optimus#73 --> Applied: `/scamhash` and Review as scam are gated on Manage Messages like the review buttons, with Manage Server kept as a server-side fallback for those two commands - from #73.
