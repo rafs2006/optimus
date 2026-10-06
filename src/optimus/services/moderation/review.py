@@ -224,6 +224,9 @@ def _merge_actions(values: Sequence[str | None]) -> str:
         notes[sweep_at] = _sum_sweeps(sweeps)
     if cleared_at is not None:
         notes[cleared_at] = f"cleared {cleared} other report(s) from this uploader"
+    if "delete" in heads and any(h.startswith("delete_") for h in heads):
+        # delete_ban / delete_kick / delete_timeout already include the delete.
+        heads.remove("delete")
     return _ACTION_NOTE_SEP.join(["; ".join(heads), *notes]) if heads else ""
 
 

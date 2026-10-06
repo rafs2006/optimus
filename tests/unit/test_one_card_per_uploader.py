@@ -18,8 +18,10 @@ import asyncio
 
 from optimus.services.moderation.review import (
     _merge_actions,
+    merge_reports,
     stored_action_label,
 )
+from optimus.services.moderation.sweep import SweepOutcome
 from tests.unit.test_departed_ban_auto_close import _departed, _event, _Harness
 
 
@@ -66,6 +68,28 @@ async def test_other_uploaders_are_not_held_up() -> None:
     assert not h.coord._uploader_locks  # lock entries are dropped when idle
 
 
+async def test_joined_images_do_not_repeat_the_cleanup_counts() -> None:
+    # Non-zero sweep and cleanup, as in production: the merged line must show
+    # one sweep and one cleanup, not one per image on the card.
+    h = _Harness(target=_departed())
+
+    async def sweep(_event: object) -> SweepOutcome:
+        return SweepOutcome(deleted=3, channels=2, harvested=("h1",))
+
+    h.coord._sweep = sweep
+    await asyncio.gather(*(h.coord.handle_verdict(e) for e in _burst()))
+    _card_id, items = h.updates[-1]
+    merged = merge_reports(items)
+    assert merged.action_taken == (
+        "delete_ban — banned by user ID: the uploader had already left"
+        " — purged 3 more in 2 channels, +1 hashes blocklisted"
+        " — cleared 4 other report(s) from this uploader"
+    )
+    joined = items[1:]
+    assert all(i.action_taken == "delete" for i in joined)
+    assert all(i.image_url is None and i.evidence_url is None for i in joined)
+
+
 def test_cleared_notes_add_up_on_one_card() -> None:
     merged = _merge_actions(
         [
@@ -79,3 +103,8 @@ def test_cleared_notes_add_up_on_one_card() -> None:
 def test_a_reopened_card_says_the_bot_handled_it() -> None:
     assert stored_action_label("auto:delete_ban") == "delete_ban (handled automatically)"
     assert stored_action_label("confirmed") == "confirmed"
+
+
+def test_a_plain_delete_is_implied_by_delete_ban() -> None:
+    assert _merge_actions(["delete_ban — x", "delete"]) == "delete_ban — x"
+    assert _merge_actions(["delete", "report_only"]) == "delete; report_only"

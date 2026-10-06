@@ -830,15 +830,33 @@ class ModerationCoordinator:
             event, f"{AUTO_ACTION_PREFIX}{Action.DELETE.value}", result
         )
         same_post = any(i.message_id == event.message_id for i in campaign.items)
-        if same_post and campaign.items and detection_id is not None:
+        if same_post and detection_id is None:
+            # Deleted, but with no record to show; the log keeps it.
+            _log.warning(
+                "followup_image_unrecorded",
+                guild_id=event.guild_id,
+                message_id=event.message_id,
+                attachment_id=event.attachment_id,
+            )
+        elif same_post and campaign.items and detection_id is not None:
             # Another image of the post on the card: shown as one more image.
+            # Only this image's own outcome -- a plain delete -- never the
+            # first image's notes, which the card would otherwise add up
+            # once per copy ("purged 12 more" for one sweep of 3).
             campaign.items.append(
                 replace(
                     campaign.items[0],
                     detection_id=detection_id,
                     confidence=event.confidence,
+                    action_taken=Action.DELETE.value,
                     matched_hash_id=event.matched_hash_id,
                     global_match=event.matched_source == "global",
+                    evidence_url=None,
+                    image_url=None,
+                    problem=None,
+                    partial=False,
+                    ocr_summary=_ocr_summary(event.ocr),
+                    whitelist_removed=event.whitelist_removed,
                 )
             )
             card = self._open_cards.get((event.guild_id, event.message_id, True))

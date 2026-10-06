@@ -124,7 +124,13 @@ that post join it as items, and other posts take the follow-up path (delete
 only, counted once per post). A detection the bot settled itself is stored as
 `auto:<action>` (the mod-action audit keeps the plain action), and the campaign
 closer skips those rows, so it never removes the bot's own cards. A card posted
-again from the database reads `<action> (handled automatically)`.
+again from the database reads `<action> (handled automatically)`, and so do
+`/setup` replay cards and the dashboard. `detections.action_taken` can
+therefore hold `auto:`-prefixed values (`String(32)`; the longest is
+`auto:delete_timeout`, 19 characters): queries or exports that match exact
+action strings should strip the prefix. Images that join the card store their
+own plain `delete`, never the first image's cleanup notes, and a card line
+drops `delete` when `delete_ban`/`delete_kick`/`delete_timeout` already says it.
 
 Since [#69](https://github.com/rafs2006/optimus/pull/69), the whitelist is
 visible and correctable through `/scamhash whitelist` and
