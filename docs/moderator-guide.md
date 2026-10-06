@@ -124,7 +124,12 @@ Notes on cards:
     without a new card; the confirmed card counts them instead
     ("Removed N later post(s) from this uploader."). A repost Discord refuses
     to delete, a new image that only looks risky, or anything in safe mode
-    still gets a normal card. This memory resets when the bot restarts.
+    still gets a normal card. This memory resets when the bot restarts;
+  - for the first 10 minutes, does the same for their weaker matches too: a
+    near match, or a match from the shared global list, which on its own
+    only asks a moderator. A post that was being checked at the same moment
+    and still got an open card has that card closed and removed. The ban
+    itself always rests on this server's own list.
 
   Cards from before this change don't record which card they are, so they
   are closed but stay in the channel for you to delete.
@@ -347,7 +352,7 @@ community can ever cause action on your server**:
 | `ban_purge_hours` | `0`–`168` | `24` | How much of a banned user's message history is purged (Discord caps at 7 days; `0` disables). |
 | `locale` | `en` / `sr` | `en` | Language for the bot's replies. |
 | `review_channel` | `#channel` or `none` | unset | Where review cards post. `/setup` manages this for you. |
-| `optin_global_db` | `true` / `false` | `false` | Also match against the shared cross-server scam database. Global matches only ever create review cards — they never auto-act. |
+| `optin_global_db` | `true` / `false` | `false` | Also match against the shared cross-server scam database. Global matches only ever create review cards — they never auto-act, except that an uploader this server already banned or confirmed in the last 10 minutes has them deleted quietly. |
 | `optin_scan_bots` | `true` / `false` | `false` | Also scan images posted by bots and webhooks. Off by default; turn on if scam posts arrive via webhooks. |
 | `safe_mode` | `true` / `false` | `false` | Circuit breaker: detections still post for review, but nothing is auto-deleted or auto-banned. The bot may enable this itself after repeated failures; a button on the notice turns it off. |
 

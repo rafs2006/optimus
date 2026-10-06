@@ -158,6 +158,12 @@ OPEN_CARD_TTL_SECONDS = 15 * 60
 #: Upper bound on remembered open cards (oldest evicted first).
 OPEN_CARD_LIMIT = 512
 
+#: For this long after an uploader is banned or confirmed here, any other
+#: hash match of theirs -- a near match or a global-list match, which on its
+#: own only asks a moderator -- is deleted quietly and counted on the settled
+#: card. The ban itself still rests on this server's own list.
+SETTLED_WINDOW_SECONDS = 10 * 60
+
 
 @dataclass(slots=True)
 class _Campaign:
@@ -235,6 +241,10 @@ class ModerationCoordinator:
         self._campaign_window = campaign_window_seconds
         self._campaigns: OrderedDict[tuple[int, int], _Campaign] = OrderedDict()
         self._recent_sweeps: dict[tuple[int, int], float] = {}
+        #: When each uploader was last settled (auto-handled or confirmed),
+        #: recorded as soon as enforcement ran -- before the card is posted,
+        #: so a post checked at the same moment can see it.
+        self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -262,6 +272,20 @@ class ModerationCoordinator:
             )
         )
         DECISIONS.labels(decision=outcome.decision.value).inc()
+        # One line per image, so "why did this need a moderator?" is answered
+        # by the log rather than guessed.
+        _log.info(
+            "verdict_decided",
+            guild_id=event.guild_id,
+            message_id=event.message_id,
+            uploader_id=event.uploader_id,
+            verdict=event.verdict.value,
+            confidence=event.confidence,
+            matched_source=event.matched_source,
+            decision=outcome.decision.value,
+            reason=outcome.reason,
+            confirmed=event.confirmed_by is not None,
+        )
 
         action = outcome.action
         decision = outcome.decision
@@ -278,6 +302,8 @@ class ModerationCoordinator:
 
         result = await self._execute(event, cfg, action, decision)
         auto = _fully_handled(event, cfg, decision, action, result)
+        if auto or (event.confirmed_by is not None and result.success):
+            self._mark_settled(event)
         # Enforcement landed on a real scam, so clean up the rest of the
         # campaign. Deliberately NOT gated on ``result.success``: the whole
         # point of the sweep is to cover the case where the punitive half
@@ -555,6 +581,71 @@ class ModerationCoordinator:
             if self._mark_reported is not None:
                 with contextlib.suppress(Exception):
                     await self._mark_reported(event.guild_id, detection_id, card_id)
+        if not decided and card_id is not None:
+            await self._settle_late_card(event, cfg)
+
+    async def _settle_late_card(self, event: VerdictEvent, cfg: GuildModConfig) -> None:
+        """Close an open card the uploader's own settlement raced past.
+
+        Two posts checked at the same moment: one is handled and settles the
+        uploader, its cleanup runs, and only then does the other's open card
+        land -- too late for that cleanup. Checked after the card is stamped,
+        so either the settling post's cleanup saw it or this check sees the
+        settlement. The post is deleted (already gone counts) and the card
+        closed and removed exactly as that cleanup would have.
+        """
+        if not self._late_card_eligible(event, cfg):
+            return
+        result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
+        if not result.success:
+            return  # the open card stays: a refused delete must stay visible
+        await self._close_cards_for(event, cfg)
+        campaign = self._campaigns.get((event.guild_id, event.uploader_id))
+        if campaign is None:
+            return
+        campaign.removed += 1
+        if self._update_report is not None and campaign.items:
+            items = [replace(i, followups_removed=campaign.removed) for i in campaign.items]
+            with contextlib.suppress(Exception):
+                await self._update_report(campaign.channel_id, campaign.card_id, items)
+
+    def _late_card_eligible(self, event: VerdictEvent, cfg: GuildModConfig) -> bool:
+        if event.confirmed_by is not None or event.reported_by is not None:
+            return False
+        if cfg.safe_mode or not event.matched_hash_id:
+            return False
+        return self._recently_settled(event)
+
+    async def _close_cards_for(self, event: VerdictEvent, cfg: GuildModConfig) -> None:
+        if self._close_cards is None:
+            return
+        try:
+            # keep_message_id 0 matches no message: every open card of this
+            # uploader goes, including the one just posted.
+            cleanup = await self._close_cards(
+                event.guild_id, event.uploader_id, 0, _SYSTEM_ACTOR, cfg.review_channel_id
+            )
+        except Exception:
+            _log.error(
+                "campaign_card_close_failed",
+                guild_id=event.guild_id,
+                uploader_id=event.uploader_id,
+                exc_info=True,
+            )
+            return
+        for message_id in cleanup.message_ids:
+            self._open_cards.pop((event.guild_id, message_id, False), None)
+
+    def _mark_settled(self, event: VerdictEvent) -> None:
+        key = (event.guild_id, event.uploader_id)
+        self._settled[key] = time.monotonic()
+        self._settled.move_to_end(key)
+        while len(self._settled) > OPEN_CARD_LIMIT:
+            self._settled.popitem(last=False)
+
+    def _recently_settled(self, event: VerdictEvent) -> bool:
+        at = self._settled.get((event.guild_id, event.uploader_id))
+        return at is not None and time.monotonic() - at <= SETTLED_WINDOW_SECONDS
 
     @contextlib.asynccontextmanager
     async def _card_lock(self, key: tuple[int, int]) -> AsyncIterator[None]:
@@ -708,7 +799,9 @@ class ModerationCoordinator:
             # Another image of the post already on the card is not a "later
             # post": it takes the normal path and joins that card.
             return None
-        if cfg.safe_mode or event.matched_source != "guild" or not event.matched_hash_id:
+        if cfg.safe_mode or not event.matched_hash_id:
+            return None
+        if event.matched_source != "guild" and not self._recently_settled(event):
             return None
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
         if not result.success:
