@@ -280,3 +280,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#72 --> Applied: an uploader settled by auto-handling or a confirm has their other hash matches, including near and global-list matches, deleted without a moderator for 10 minutes, with late open cards closed, while bans still rest only on this server's list - from #72.
 
 <!-- decision:rafs2006/optimus#73 --> Applied: `/scamhash` and Review as scam are gated on Manage Messages like the review buttons, with Manage Server kept as a server-side fallback for those two commands - from #73.
+
+<!-- decision:rafs2006/optimus#75 --> Applied: verdicts are serialised per uploader so a burst settles to one card and one ban, and detections the bot settled itself are stored as `auto:<action>` so the campaign closer never removes the bot's own cards - from #75.
