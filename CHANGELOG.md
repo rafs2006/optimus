@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Post one review card per message, updating it as more images of that message are flagged (up to four shown), and fold any decided card to a single handled line; buttons act on every image of the card, `/queue` counts cards, and `/queue detection:<number>` reopens one; migration `0012` adds `detections.review_message_id` and `VerdictEvent` gains optional `confirmed_by` and `review_card_id` ([#64](https://github.com/rafs2006/optimus/pull/64), @rafs2006) <!-- pr-log:rafs2006/optimus#64 -->
+
 - Stop the OCR risk scan from sending ordinary screenshots to the mod queue: URL repair rejoins only explicit obfuscations, a bare link needs a real domain ending, official domains earn no link bonus, and the full link bonus requires a strong signal beside it; the lane still only reports ([#63](https://github.com/rafs2006/optimus/pull/63), @rafs2006) <!-- pr-log:rafs2006/optimus#63 -->
 
 - Key `guild_hashes` by `(guild_id, hash_id)` through migration `0011` so the same image can be blocklisted on more than one server; re-adding an image a server already lists keeps the original row, and overlapping imports report skips ([#62](https://github.com/rafs2006/optimus/pull/62), @rafs2006) <!-- pr-log:rafs2006/optimus#62 -->

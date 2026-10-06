@@ -340,7 +340,8 @@ query filters by `guild_id`; no raw SQL/`text()` interpolation). Key tables:
   the signed cross-guild promoted-hash database and its approval/reputation
   bookkeeping.
 - **detections** — one row per *flagged* image (verdict, distances, action taken,
-  unique `idempotency_key`); the audit backbone. An image that matches nothing
+  unique `idempotency_key`, and since migration `0012` the nullable
+  `review_message_id` of the per-message review card); the audit backbone. An image that matches nothing
   writes no row at all: the coordinator returns on a `Decision.NONE` outcome
   before the audit step, so a clean scan leaves no trace.
 - **appeals**, **mod_actions**, **stats_rollups**, **evidence**, **users_optout** —
