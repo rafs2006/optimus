@@ -78,7 +78,10 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="scamhash",
         description="Manage this server's scam-image blocklist.",
-        required_permission=Permission.MANAGE_GUILD,
+        # Moderators keep the list: Confirm scam already adds to it on Manage
+        # Messages, so adding, fixing and moving it by hand takes the same bar
+        # rather than Manage Server, which most moderators do not hold.
+        required_permission=Permission.MANAGE_MESSAGES,
         subcommands=(
             SubCommand(
                 name="add",
@@ -335,7 +338,8 @@ REPORT_MESSAGE_COMMAND = "report_message"
 MESSAGE_COMMANDS: tuple[ContextMenuCommand, ...] = (
     ContextMenuCommand(
         name=REVIEW_MESSAGE_COMMAND,
-        required_permission=Permission.MANAGE_GUILD,
+        # The same action as ``/scamhash review``, so the same bar.
+        required_permission=Permission.MANAGE_MESSAGES,
     ),
     ContextMenuCommand(
         name=REPORT_MESSAGE_COMMAND,
@@ -377,6 +381,15 @@ MEMBER_COMMANDS: frozenset[str] = frozenset(
 def required_permission(command_name: str) -> Permission | None:
     """Return the server-side permission required for ``command_name``."""
     return COMMAND_PERMISSIONS.get(command_name)
+
+
+#: Commands moved down to Manage Messages that still also accept Manage
+#: Server, so the admins who used them before keep them even without Manage
+#: Messages. Server-side only: Discord's visibility hint takes one set.
+ALSO_ACCEPTED: dict[str, Permission] = {
+    "scamhash": Permission.MANAGE_GUILD,
+    REVIEW_MESSAGE_COMMAND: Permission.MANAGE_GUILD,
+}
 
 
 def is_enabled(command_name: str, member_commands: tuple[str, ...] | None) -> bool:

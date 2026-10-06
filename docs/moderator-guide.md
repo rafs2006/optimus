@@ -265,8 +265,11 @@ decision, deliberately not a member one.
 
 ## Commands
 
-Moderator commands (require **Manage Server**, except `/queue`, which needs
-**Manage Messages** so the moderators working the backlog can see it):
+Moderator commands. `/scamhash` (every subcommand), the right-click
+**Review as scam** and `/queue` need **Manage Messages**, the same bar as the
+review buttons, so the moderators who keep the blocklist can add, fix and
+move it without Manage Server (Manage Server still works for them too). The
+rest need **Manage Server**:
 
 | Command | What it does |
 | --- | --- |

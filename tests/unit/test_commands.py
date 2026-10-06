@@ -30,7 +30,7 @@ def test_builder_sets_permissions_and_guild_only_context() -> None:
     builders = {b.name: b for b in build_command_builders()}
 
     scamhash = builders["scamhash"]
-    assert scamhash.default_member_permissions == int(Permission.MANAGE_GUILD)
+    assert scamhash.default_member_permissions == int(Permission.MANAGE_MESSAGES)
     assert hikari.ApplicationContextType.GUILD in scamhash.context_types
     assert hikari.ApplicationContextType.BOT_DM not in scamhash.context_types
 
@@ -116,7 +116,7 @@ def test_submit_global_removed_and_global_help_present() -> None:
 
 
 def test_required_permission_lookup() -> None:
-    assert required_permission("scamhash") is Permission.MANAGE_GUILD
+    assert required_permission("scamhash") is Permission.MANAGE_MESSAGES
     assert required_permission("delete_server_data") is Permission.ADMINISTRATOR
     assert required_permission("report") is None
     assert required_permission("does_not_exist") is None
@@ -197,7 +197,7 @@ def test_member_commands_error_explains_the_moderator_split() -> None:
         Settings(discord_token="t", member_commands="report,scamhash")
     message = str(privileged.value)
     assert "moderator command" in message
-    assert "MANAGE_GUILD" in message
+    assert "MANAGE_MESSAGES" in message
     assert "narrows the member-facing surface only" in message
 
     with pytest.raises(ValidationError) as typo:

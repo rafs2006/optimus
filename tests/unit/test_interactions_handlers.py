@@ -474,16 +474,33 @@ def _ctx(command: str, *, perms: int = MANAGE, guild_id: int | None = 1, **opts:
 
 
 @pytest.mark.asyncio
-async def test_scamhash_denied_without_manage_guild() -> None:
-    with pytest.raises(InteractionRejected) as exc:
-        await handle_command(_ctx("scamhash", perms=NONE, subcommand="list"), FakeDeps())
-    assert exc.value.reason is CommandError.NO_PERMISSION
+async def test_scamhash_denied_without_manage_messages() -> None:
+    for perms in (NONE, BAN):
+        with pytest.raises(InteractionRejected) as exc:
+            await handle_command(_ctx("scamhash", perms=perms, subcommand="list"), FakeDeps())
+        assert exc.value.reason is CommandError.NO_PERMISSION
 
 
 @pytest.mark.asyncio
-async def test_scamhash_allowed_with_manage_guild() -> None:
+@pytest.mark.parametrize("sub", ["list", "whitelist", "export"])
+async def test_every_scamhash_subcommand_is_open_to_moderators(sub: str) -> None:
+    # Manage Messages alone, no Manage Server: mods keep and fix the list.
+    resp = await handle_command(_ctx("scamhash", perms=MANAGE_MSGS, subcommand=sub), FakeDeps())
+    assert resp.i18n_key
+
+
+@pytest.mark.asyncio
+async def test_manage_server_alone_still_opens_scamhash() -> None:
     resp = await handle_command(_ctx("scamhash", perms=MANAGE, subcommand="list"), FakeDeps())
     assert resp.i18n_key == "command.hash_list_empty"
+
+
+@pytest.mark.asyncio
+async def test_scamhash_remove_is_open_to_moderators() -> None:
+    resp = await handle_command(
+        _ctx("scamhash", perms=MANAGE_MSGS, subcommand="remove", hash_id="nope"), FakeDeps()
+    )
+    assert resp.i18n_key
 
 
 @pytest.mark.asyncio

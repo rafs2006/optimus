@@ -30,7 +30,7 @@ from optimus.services.interactions.attachment_hash import (
     AttachmentHashError,
     AttachmentHashes,
 )
-from optimus.services.interactions.commands import required_permission
+from optimus.services.interactions.commands import ALSO_ACCEPTED, required_permission
 from optimus.services.interactions.logic import (
     AddProblem,
     CommandError,
@@ -509,7 +509,15 @@ def _require(ctx: InteractionContext, permission: Permission | None) -> None:
 
 async def handle_command(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
     """Dispatch a slash command to its handler after the auth gate."""
-    _require(ctx, required_permission(ctx.command))
+    also = ALSO_ACCEPTED.get(ctx.command)
+    if (
+        also is not None
+        and ctx.guild_id is not None
+        and has_permission(ctx.member_permissions, also)
+    ):
+        pass  # e.g. Manage Server still opens a command moved to Manage Messages
+    else:
+        _require(ctx, required_permission(ctx.command))
     handler = _COMMAND_HANDLERS.get(ctx.command)
     if handler is None:  # pragma: no cover - registration guarantees coverage
         raise InteractionRejected(CommandError.UNKNOWN_FIELD)
@@ -517,7 +525,7 @@ async def handle_command(ctx: InteractionContext, deps: InteractionDeps) -> Inte
 
 
 async def _cmd_scamhash(ctx: InteractionContext, deps: InteractionDeps) -> InteractionResponse:
-    assert ctx.guild_id is not None  # guaranteed by _require (MANAGE_GUILD => guild-only)
+    assert ctx.guild_id is not None  # guaranteed by _require (any permission => guild-only)
     sub = ctx.subcommand
     if sub == "add":
         return await _scamhash_add(ctx, deps)
@@ -1066,7 +1074,7 @@ async def _cmd_review_message(
     """Entry point for the "Review as scam" message context-menu command.
 
     ``required_permission("review_message")`` gates this the same as
-    ``/scamhash review`` (``MANAGE_GUILD``); the glue layer has already
+    ``/scamhash review`` (Manage Messages, or Manage Server); the glue layer has already
     resolved the target message's attachments/author into ``ctx.options``
     since a context-menu command carries no typed options of its own.
     """
@@ -1101,7 +1109,7 @@ async def _review_message(ctx: InteractionContext, deps: InteractionDeps) -> Int
     only ever held for the sum of the fast DB calls, not the fetch+decode
     time too.
     """
-    assert ctx.guild_id is not None  # guaranteed by _require (MANAGE_GUILD => guild-only)
+    assert ctx.guild_id is not None  # guaranteed by _require (any permission => guild-only)
     if not await deps.hash_rate_ok(ctx.user_id):
         raise InteractionRejected(CommandError.RATE_LIMITED)
     channel_id = int(ctx.options["channel_id"])

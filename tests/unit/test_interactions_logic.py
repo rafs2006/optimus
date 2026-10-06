@@ -60,8 +60,9 @@ def test_command_permission_table_matches_declarations() -> None:
         assert required_permission(cmd.name) == cmd.required_permission
 
 
-def test_scamhash_requires_manage_guild() -> None:
-    assert required_permission("scamhash") == Permission.MANAGE_GUILD
+def test_scamhash_requires_manage_messages() -> None:
+    # Moderators keep the blocklist, the same bar as the Confirm scam button.
+    assert required_permission("scamhash") == Permission.MANAGE_MESSAGES
 
 
 def test_delete_server_requires_administrator() -> None:
@@ -75,9 +76,9 @@ def test_appeal_requires_no_permission() -> None:
 # --- context-menu commands ("Review as scam") -----------------------------------
 
 
-def test_review_message_requires_manage_guild() -> None:
-    assert COMMAND_PERMISSIONS[REVIEW_MESSAGE_COMMAND] == Permission.MANAGE_GUILD
-    assert required_permission(REVIEW_MESSAGE_COMMAND) == Permission.MANAGE_GUILD
+def test_review_message_requires_manage_messages() -> None:
+    assert COMMAND_PERMISSIONS[REVIEW_MESSAGE_COMMAND] == Permission.MANAGE_MESSAGES
+    assert required_permission(REVIEW_MESSAGE_COMMAND) == Permission.MANAGE_MESSAGES
 
 
 def test_build_context_menu_command_builders_has_review_as_scam() -> None:
@@ -87,13 +88,13 @@ def test_build_context_menu_command_builders_has_review_as_scam() -> None:
     assert "Review as scam" in names
 
 
-def test_build_context_menu_command_builders_sets_manage_guild_permission() -> None:
+def test_build_context_menu_command_builders_sets_manage_messages_permission() -> None:
     import hikari
 
     builders = build_context_menu_command_builders()
     review = next(b for b in builders if b.name == "Review as scam")
     assert review.type is hikari.CommandType.MESSAGE
-    assert review.default_member_permissions == int(Permission.MANAGE_GUILD)
+    assert review.default_member_permissions == int(Permission.MANAGE_MESSAGES)
 
 
 # --- hash hex parsing ----------------------------------------------------------
