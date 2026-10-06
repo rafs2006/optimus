@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Download the uploaded attachment for `/scamhash import` instead of parsing its snowflake id, so imports work through Discord; share the bounded fetch path with a new text fetcher and give each import failure its own localized reason ([#60](https://github.com/rafs2006/optimus/pull/60), @rafs2006) <!-- pr-log:rafs2006/optimus#60 -->
+
 - Point the warning DM, `/help`, and member docs to the published Optimus privacy policy and this instance's privacy contact instead of the upstream author's address; text only ([#59](https://github.com/rafs2006/optimus/pull/59), @rafs2006) <!-- pr-log:rafs2006/optimus#59 -->
 
 - Refuse a `mod_queue_threshold` above the deployment auto-act threshold and clamp stored values so a cautious setting can no longer disable detection, correct the setting's description, and remove the non-functional `optin_evidence_storage` switch from `/config` ([#58](https://github.com/rafs2006/optimus/pull/58), @rafs2006) <!-- pr-log:rafs2006/optimus#58 -->
