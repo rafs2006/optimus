@@ -98,13 +98,6 @@ Notes on cards:
   other open cards are closed and their reposts of blocklisted images are
   deleted without a card.
 
-  One uploader, one card. However many posts a scam account spreads across
-  the server at once, the review channel keeps a single card for it: the
-  first image bans and posts the card, the other images of that post are
-  added to it, and every other post is deleted and counted on it ("Removed N
-  later post(s) from this uploader."). The bot never removes its own cards;
-  the logs keep every image.
-
   Everything that needs a person keeps a full, open card: a global-only
   match, a near match below `auto_act_threshold`, safe mode, a member report,
   a punishment refused by the role hierarchy, or a missing permission.
