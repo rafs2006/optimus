@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let `/scamhash add` block images from a message link or ID on this server or from one Discord image link, as well as an upload, with per-input problems reported separately; `/scamhash list` shows the 10 newest entries with origin, author, and date ([#67](https://github.com/rafs2006/optimus/pull/67), @rafs2006) <!-- pr-log:rafs2006/optimus#67 -->
+
 - Fill creation timestamps in the application so `/global approve_server` works on the migrated database, where `global_trusted_guilds.created_at` has no database default; no migration ([#66](https://github.com/rafs2006/optimus/pull/66), @rafs2006) <!-- pr-log:rafs2006/optimus#66 -->
 
 - Let a moderator's Confirm scam or Review as scam run the uploader's campaign sweep under any `action_policy`, close that uploader's other open cards in the window with one `review.campaign_close` audit row, and delete their later blocklist-matching reposts for the window without new cards; automatic `report_only` verdicts still never sweep ([#65](https://github.com/rafs2006/optimus/pull/65), @rafs2006) <!-- pr-log:rafs2006/optimus#65 -->
