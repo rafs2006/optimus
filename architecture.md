@@ -96,6 +96,14 @@ optional `confirmed_by` and `review_card_id`. Grouping is held in memory per
 process: exact in `simple` mode, but two images finishing at the same instant in
 `distributed` mode can still produce two cards.
 
+Since [#65](https://github.com/rafs2006/optimus/pull/65), a moderator's
+**Confirm scam** or **Review as scam** settles the uploader's campaign whatever
+the `action_policy`: it runs the existing campaign sweep once, closes that
+uploader's other open cards in the sweep window (one `review.campaign_close`
+audit row), and for the window afterwards deletes their reposts that match this
+server's blocklist without posting new cards. Automatic `report_only` verdicts
+still never sweep. The repost memory is in-process and resets on restart.
+
 ## Improvement plan — near term
 
 ### Current member-command boundary
@@ -217,3 +225,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#62 --> Applied: per-server blocklist rows are keyed by `(guild_id, hash_id)` so one image can be listed on several servers - from #62.
 
 <!-- decision:rafs2006/optimus#64 --> Applied: review cards are per message, decided cards fold in place, and card identity is stored on detections and carried on verdict events - from #64.
+
+<!-- decision:rafs2006/optimus#65 --> Applied: a moderator scam confirmation runs the campaign sweep and closes the uploader's other open cards regardless of action policy, while automatic report-only verdicts never sweep - from #65.
