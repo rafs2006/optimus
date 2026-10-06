@@ -262,7 +262,7 @@ def _build_moderation_service(
         await det_repo.set_action_taken(detection.id, action)
         await ModActionRepository(session, event.guild_id).record(
             actor_id=0,
-            action=action,
+            action=action.removeprefix("auto:"),  # as the production audit does
             target=str(event.uploader_id),
             payload={"success": result.success, "detail": result.detail},
         )
@@ -352,7 +352,7 @@ async def test_known_scam_image_flows_to_ban_action_and_review(
     detection = await DetectionRepository(db_session, GUILD_ID).get_by_idempotency_key("scam-1")
     assert detection is not None
     assert detection.verdict == "scam"
-    assert detection.action_taken == "delete_ban"
+    assert detection.action_taken == "auto:delete_ban"  # settled by the bot itself
     # The hash ensemble rides along on the row so the review-card buttons
     # (Confirm scam / Whitelist / Submit to global) can act without re-fetching
     # an image Discord may have deleted by then.
@@ -458,7 +458,7 @@ async def test_appeal_flow_owner_succeeds_nonowner_rejected_then_mod_reverses(
         ),
     )
     detection = await DetectionRepository(db_session, GUILD_ID).get_by_idempotency_key("appeal-1")
-    assert detection is not None and detection.action_taken == "delete_ban"
+    assert detection is not None and detection.action_taken == "auto:delete_ban"
 
     # A process-local limiter avoids the Redis Lua EVAL the appeal-cooldown check
     # would otherwise issue (fakeredis has no EVAL); the cooldown semantics are
@@ -788,7 +788,7 @@ async def test_submit_confirmed_match_drives_same_moderation_pipeline(
     )
     assert detection is not None
     assert detection.verdict == "scam"
-    assert detection.action_taken == "delete_ban"
+    assert detection.action_taken == "delete_ban"  # a moderator's call, not auto
 
 
 async def test_submit_confirmed_match_is_idempotent_on_resubmission(

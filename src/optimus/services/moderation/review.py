@@ -171,6 +171,17 @@ def _unique(values: Sequence[str | None]) -> list[str]:
 #: Separates an action from the notes appended to it (boundary, sweep, cleanup).
 _ACTION_NOTE_SEP = " — "
 
+#: Stored on a detection the bot settled itself (``auto:delete_ban``), so a
+#: campaign cleanup never takes its card for one waiting on a moderator.
+AUTO_ACTION_PREFIX = "auto:"
+
+
+def stored_action_label(value: str) -> str:
+    """How a stored action reads on a card posted again from the database."""
+    if value.startswith(AUTO_ACTION_PREFIX):
+        return f"{value.removeprefix(AUTO_ACTION_PREFIX)} (handled automatically)"
+    return value
+
 
 def _merge_actions(values: Sequence[str | None]) -> str:
     """One ``Action taken`` line for a card holding several images.
@@ -184,6 +195,8 @@ def _merge_actions(values: Sequence[str | None]) -> str:
     notes: list[str] = []
     sweeps: list[re.Match[str]] = []
     sweep_at: int | None = None
+    cleared = 0
+    cleared_at: int | None = None
     for value in values:
         if not value:
             continue
@@ -192,7 +205,13 @@ def _merge_actions(values: Sequence[str | None]) -> str:
             heads.append(head)
         for note in rest:
             swept = _SWEEP_NOTE.fullmatch(note)
-            if swept is not None:
+            closed = _CLEARED_NOTE.fullmatch(note)
+            if closed is not None:
+                if cleared_at is None:
+                    cleared_at = len(notes)
+                    notes.append("")  # filled with the total below
+                cleared += int(closed.group(1))
+            elif swept is not None:
                 # Each image's cleanup ran on its own; one total reads better
                 # than "purged 1 more ... — purged 1 more ...".
                 if sweep_at is None:
@@ -203,8 +222,16 @@ def _merge_actions(values: Sequence[str | None]) -> str:
                 notes.append(note)
     if sweep_at is not None:
         notes[sweep_at] = _sum_sweeps(sweeps)
+    if cleared_at is not None:
+        notes[cleared_at] = f"cleared {cleared} other report(s) from this uploader"
+    if "delete" in heads and any(h.startswith("delete_") for h in heads):
+        # delete_ban / delete_kick / delete_timeout already include the delete.
+        heads.remove("delete")
     return _ACTION_NOTE_SEP.join(["; ".join(heads), *notes]) if heads else ""
 
+
+#: The coordinator's card-closing note (see ``_post_report``).
+_CLEARED_NOTE = re.compile(r"cleared (\d+) other report\(s\) from this uploader")
 
 #: The coordinator's cleanup note (see ``_post_report``).
 _SWEEP_NOTE = re.compile(

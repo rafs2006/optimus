@@ -33,7 +33,7 @@ from optimus.services.moderation.priority import (
     QueueFullError,
     classify_action,
 )
-from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.review import AUTO_ACTION_PREFIX, ReportData
 from optimus.services.moderation.sweep import SweepOutcome
 
 _log = get_logger(__name__)
@@ -174,6 +174,8 @@ class _Campaign:
     items: list[ReportData]
     expires_at: float
     removed: int = 0
+    #: Posts counted in ``removed``: one post with four images counts once.
+    removed_messages: set[int] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -234,6 +236,10 @@ class ModerationCoordinator:
         #: (guild, message, decided).
         self._open_cards: OrderedDict[tuple[int, int, bool], _OpenCard] = OrderedDict()
         self._card_locks: dict[tuple[int, int], _KeyedLock] = {}
+        #: One verdict at a time per uploader, so a burst across channels
+        #: settles once: the first image bans and posts the card, the rest
+        #: find the uploader settled and only add to that card.
+        self._uploader_locks: dict[tuple[int, int], _KeyedLock] = {}
         # After a moderator confirms an uploader, their other open cards are
         # closed and their later blocklisted posts are deleted without a card
         # of their own (counted on the confirmed card instead).
@@ -255,7 +261,17 @@ class ModerationCoordinator:
         self._executor.attach_probe(probe)
 
     async def handle_verdict(self, event: VerdictEvent) -> ActionResult:
-        """Process one verdict end-to-end and return the action outcome."""
+        """Process one verdict end-to-end and return the action outcome.
+
+        Serialised per uploader. Two posts of one scam account seconds apart
+        used to run side by side: each banned, each posted a card, and each
+        settlement then removed the other's card. One at a time, the first
+        image settles the uploader and every later one joins its card.
+        """
+        async with self._keyed_lock(self._uploader_locks, (event.guild_id, event.uploader_id)):
+            return await self._handle_verdict(event)
+
+    async def _handle_verdict(self, event: VerdictEvent) -> ActionResult:
         cfg = await self._config(event.guild_id)
         followup = await self._remove_followup(event, cfg)
         if followup is not None:
@@ -315,7 +331,10 @@ class ModerationCoordinator:
         cleanup = (
             await self._close_uploader_cards(event, cfg, auto=auto) if swept is not None else None
         )
-        detection_id = await self._audit(event, action.value, result)
+        # A card the bot settled itself is stored as settled, so a later
+        # cleanup never mistakes it for one still waiting on a moderator.
+        stored = f"{AUTO_ACTION_PREFIX}{action.value}" if auto else action.value
+        detection_id = await self._audit(event, stored, result)
         await self._post_report(
             event,
             cfg,
@@ -527,7 +546,7 @@ class ModerationCoordinator:
             data = replace(data, decided_by=event.confirmed_by)
         elif auto:
             data = replace(data, auto_handled=True)
-        async with self._card_lock(key):
+        async with self._keyed_lock(self._card_locks, key):
             if decided:
                 # The open card is settled now; later images must not reopen it.
                 self._open_cards.pop((event.guild_id, event.message_id, False), None)
@@ -648,15 +667,17 @@ class ModerationCoordinator:
         return at is not None and time.monotonic() - at <= SETTLED_WINDOW_SECONDS
 
     @contextlib.asynccontextmanager
-    async def _card_lock(self, key: tuple[int, int]) -> AsyncIterator[None]:
-        """Serialise card posting per message, so its images share one card.
+    async def _keyed_lock(
+        self, locks: dict[tuple[int, int], _KeyedLock], key: tuple[int, int]
+    ) -> AsyncIterator[None]:
+        """Serialise work per key: card posting per message, verdicts per uploader.
 
-        Without it, two images of one post finishing together would both see
-        "no card yet" and post two. Per message rather than global so one busy
-        campaign does not queue every other server's cards behind it. The lock
-        entry is dropped once nobody holds or waits on it.
+        Without the card lock, two images of one post finishing together
+        would both see "no card yet" and post two. Keyed rather than global
+        so one busy campaign does not queue every other server behind it. The
+        lock entry is dropped once nobody holds or waits on it.
         """
-        entry = self._card_locks.setdefault(key, _KeyedLock())
+        entry = locks.setdefault(key, _KeyedLock())
         entry.users += 1
         try:
             async with entry.lock:
@@ -667,7 +688,7 @@ class ModerationCoordinator:
             # dropping the entry then would hand a newcomer a second lock.
             entry.users -= 1
             if entry.users == 0:
-                del self._card_locks[key]
+                del locks[key]
 
     def _remember_card(
         self, key: tuple[int, int, bool], channel_id: int, card_id: int, data: ReportData
@@ -795,19 +816,55 @@ class ModerationCoordinator:
         if time.monotonic() > campaign.expires_at:
             del self._campaigns[key]
             return None
-        if any(i.message_id == event.message_id for i in campaign.items):
-            # Another image of the post already on the card is not a "later
-            # post": it takes the normal path and joins that card.
-            return None
         if cfg.safe_mode or not event.matched_hash_id:
             return None
         if event.matched_source != "guild" and not self._recently_settled(event):
             return None
+        # The uploader is settled: the ban (or the moderator's call) already
+        # happened, so this image needs only its post gone -- no second ban
+        # racing the first into a rate limit, and no card of its own.
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
         if not result.success:
-            return None
-        detection_id = await self._audit(event, Action.DELETE.value, result)
-        campaign.removed += 1
+            return None  # a refused delete must stay visible on a card
+        detection_id = await self._audit(
+            event, f"{AUTO_ACTION_PREFIX}{Action.DELETE.value}", result
+        )
+        same_post = any(i.message_id == event.message_id for i in campaign.items)
+        if same_post and detection_id is None:
+            # Deleted, but with no record to show; the log keeps it.
+            _log.warning(
+                "followup_image_unrecorded",
+                guild_id=event.guild_id,
+                message_id=event.message_id,
+                attachment_id=event.attachment_id,
+            )
+        elif same_post and campaign.items and detection_id is not None:
+            # Another image of the post on the card: shown as one more image.
+            # Only this image's own outcome -- a plain delete -- never the
+            # first image's notes, which the card would otherwise add up
+            # once per copy ("purged 12 more" for one sweep of 3).
+            campaign.items.append(
+                replace(
+                    campaign.items[0],
+                    detection_id=detection_id,
+                    confidence=event.confidence,
+                    action_taken=Action.DELETE.value,
+                    matched_hash_id=event.matched_hash_id,
+                    global_match=event.matched_source == "global",
+                    evidence_url=None,
+                    image_url=None,
+                    problem=None,
+                    partial=False,
+                    ocr_summary=_ocr_summary(event.ocr),
+                    whitelist_removed=event.whitelist_removed,
+                )
+            )
+            card = self._open_cards.get((event.guild_id, event.message_id, True))
+            if card is not None and card.card_id == campaign.card_id:
+                card.items = list(campaign.items)
+        elif event.message_id not in campaign.removed_messages:
+            campaign.removed_messages.add(event.message_id)
+            campaign.removed = len(campaign.removed_messages)
         if self._update_report is not None and campaign.items:
             items = [replace(i, followups_removed=campaign.removed) for i in campaign.items]
             with contextlib.suppress(Exception):

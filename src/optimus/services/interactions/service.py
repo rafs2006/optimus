@@ -86,7 +86,12 @@ from optimus.services.moderation.permissions import (
     preflight_punitive,
     punitive_requirement,
 )
-from optimus.services.moderation.review import ReportData, build_folded_embed, decode_custom_id
+from optimus.services.moderation.review import (
+    ReportData,
+    build_folded_embed,
+    decode_custom_id,
+    stored_action_label,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -600,7 +605,7 @@ class DbDeps:
                     verdict=row.verdict,
                     # Not persisted on the row, as on /setup replay cards.
                     confidence=None,
-                    action_taken=row.action_taken,
+                    action_taken=stored_action_label(row.action_taken),
                     locale=guild.locale,
                 )
             )

@@ -64,7 +64,7 @@ from optimus.services.moderation.coordinator import (
 )
 from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.priority import PriorityDispatcher
-from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.review import AUTO_ACTION_PREFIX, ReportData
 from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
 
 _log = get_logger(__name__)
@@ -248,7 +248,9 @@ def build_coordinator(
             await det_repo.set_action_taken(detection.id, action)
             await ModActionRepository(session, event.guild_id).record(
                 actor_id=SYSTEM_ACTOR,
-                action=action,
+                # The audit trail keeps the plain action; only the detection
+                # row carries the settled marker.
+                action=action.removeprefix(AUTO_ACTION_PREFIX),
                 target=str(event.uploader_id),
                 payload={"success": result.success, "detail": result.detail},
             )
@@ -332,6 +334,9 @@ def build_coordinator(
                 if int(r.message_id) != keep_message_id
                 and r.reported_at is not None
                 and r.action_taken not in DECIDED_ACTIONS
+                # A card the bot settled itself is a record, not a question:
+                # removing it left the review channel with nothing at all.
+                and not r.action_taken.startswith(AUTO_ACTION_PREFIX)
             ]
             for row in open_rows:
                 await repo.set_action_taken(row.id, "confirmed")

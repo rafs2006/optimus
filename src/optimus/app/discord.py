@@ -41,7 +41,7 @@ from optimus.services.moderation.explain import (
     explain_setup_replay_summary,
 )
 from optimus.services.moderation.rest_adapter import HikariRestActions
-from optimus.services.moderation.review import ReportData
+from optimus.services.moderation.review import ReportData, stored_action_label
 from optimus.services.moderation.service import _post_report
 
 if TYPE_CHECKING:
@@ -220,7 +220,7 @@ async def run_discord_edges(  # pragma: no cover - requires a live gateway
                     # Confidence is a runtime property of the verdict -- not
                     # persisted on the row -- so replayed cards omit the line.
                     confidence=None,
-                    action_taken=detection.action_taken,
+                    action_taken=stored_action_label(detection.action_taken),
                     locale=locale,
                 )
                 for detection in group

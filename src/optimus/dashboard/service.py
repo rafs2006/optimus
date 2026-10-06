@@ -35,6 +35,7 @@ from optimus.dashboard.auth import (
 )
 from optimus.db.engine import SessionScope
 from optimus.db.repositories import GuildListRepository
+from optimus.services.moderation.review import stored_action_label
 
 _log = get_logger(__name__)
 
@@ -340,7 +341,7 @@ class DashboardService:
                     f'<a href="/dash/guild/{guild_id}/detection/{d.id}">#{d.id}</a>',
                     render.esc(d.created_at.strftime("%Y-%m-%d %H:%M")),
                     render.verdict_badge(d.verdict),
-                    render.esc(d.action_taken),
+                    render.esc(stored_action_label(d.action_taken)),
                     f"<code>{d.uploader_id}</code>",
                     f"<code>{d.channel_id}</code>",
                 ]
@@ -402,7 +403,8 @@ class DashboardService:
             + f"<dt>Detection</dt><dd>#{detection.id}</dd>"
             + f"<dt>When (UTC)</dt><dd>{render.esc(detection.created_at.isoformat())}</dd>"
             + f"<dt>Verdict</dt><dd>{render.verdict_badge(detection.verdict)}</dd>"
-            + f"<dt>Action taken</dt><dd>{render.esc(detection.action_taken)}</dd>"
+            + "<dt>Action taken</dt>"
+            + f"<dd>{render.esc(stored_action_label(detection.action_taken))}</dd>"
             + f"<dt>Uploader</dt><dd><code>{detection.uploader_id}</code></dd>"
             + f"<dt>Channel</dt><dd><code>{detection.channel_id}</code></dd>"
             + f"<dt>Message</dt><dd><code>{detection.message_id}</code></dd>"

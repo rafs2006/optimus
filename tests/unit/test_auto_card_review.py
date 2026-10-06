@@ -89,7 +89,18 @@ def test_merged_card_keeps_distinct_actions() -> None:
     merged = merge_reports(
         [
             _data(action_taken="delete_ban — purged 1 more in 1 channels"),
+            _data(action_taken="report_only"),
+        ]
+    )
+    assert merged.action_taken == "delete_ban; report_only — purged 1 more in 1 channels"
+
+
+def test_merged_card_drops_a_delete_the_ban_already_covers() -> None:
+    # A ban is per user: once one image banned, "delete" adds nothing.
+    merged = merge_reports(
+        [
+            _data(action_taken="delete_ban — purged 1 more in 1 channels"),
             _data(action_taken="delete"),
         ]
     )
-    assert merged.action_taken == "delete_ban; delete — purged 1 more in 1 channels"
+    assert merged.action_taken == "delete_ban — purged 1 more in 1 channels"

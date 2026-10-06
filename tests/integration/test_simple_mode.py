@@ -215,7 +215,7 @@ async def test_synthetic_image_flows_end_to_end_then_clean_shutdown(
     # The detection was persisted to the shared SQLite with the action recorded.
     async with application._scope() as session:  # type: ignore[attr-defined]
         detections = await DetectionRepository(session, GUILD_ID).list_recent()
-    assert any(d.action_taken == "delete_ban" for d in detections)
+    assert any(d.action_taken == "auto:delete_ban" for d in detections)
 
 
 async def test_boot_counter_survives_restarts_on_same_database(tmp_path) -> None:  # type: ignore[no-untyped-def]
