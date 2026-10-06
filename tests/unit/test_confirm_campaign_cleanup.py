@@ -170,7 +170,6 @@ async def test_a_later_blocklisted_repost_is_removed_without_a_card() -> None:
     "kw",
     [
         {},  # no hash match: a fresh risk scan still gets a card
-        {"matched_hash_id": "aa", "matched_source": "global"},
         {"matched_hash_id": "aa", "matched_source": "guild", "uploader_id": 43},
     ],
 )
@@ -178,6 +177,15 @@ async def test_other_reposts_take_the_normal_path(kw: dict[str, Any]) -> None:
     h = _Harness()
     await h.coord.handle_verdict(_event(3, confirmed_by=77))
     await h.coord.handle_verdict(_event(20, **kw))
+    assert len(h.reports) == 2
+
+
+async def test_global_repost_gets_a_card_once_the_settled_window_passed() -> None:
+    # Within the window it is removed quietly (see test_settled_uploader.py).
+    h = _Harness()
+    await h.coord.handle_verdict(_event(3, confirmed_by=77))
+    h.coord._settled.clear()
+    await h.coord.handle_verdict(_event(20, matched_hash_id="aa", matched_source="global"))
     assert len(h.reports) == 2
 
 

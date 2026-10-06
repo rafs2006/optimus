@@ -8,6 +8,7 @@ provisioning REST calls live behind thin adapters at the bottom of the module.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -181,6 +182,8 @@ def _merge_actions(values: Sequence[str | None]) -> str:
     """
     heads: list[str] = []
     notes: list[str] = []
+    sweeps: list[re.Match[str]] = []
+    sweep_at: int | None = None
     for value in values:
         if not value:
             continue
@@ -188,9 +191,45 @@ def _merge_actions(values: Sequence[str | None]) -> str:
         if head not in heads:
             heads.append(head)
         for note in rest:
-            if note not in notes:
+            swept = _SWEEP_NOTE.fullmatch(note)
+            if swept is not None:
+                # Each image's cleanup ran on its own; one total reads better
+                # than "purged 1 more ... — purged 1 more ...".
+                if sweep_at is None:
+                    sweep_at = len(notes)
+                    notes.append("")  # filled with the total below
+                sweeps.append(swept)
+            elif note not in notes:
                 notes.append(note)
+    if sweep_at is not None:
+        notes[sweep_at] = _sum_sweeps(sweeps)
     return _ACTION_NOTE_SEP.join(["; ".join(heads), *notes]) if heads else ""
+
+
+#: The coordinator's cleanup note (see ``_post_report``).
+_SWEEP_NOTE = re.compile(
+    r"purged (\d+) more in (\d+) channels(?:, (\d+) unreachable)?"
+    r"(?:, \+(\d+) hashes blocklisted)?"
+)
+
+
+def _sum_sweeps(sweeps: Sequence[re.Match[str]]) -> str:
+    """Total several cleanup notes.
+
+    Deleted, unreachable and harvested counts add up. Channels take the
+    largest count: the cleanups cover the same uploader, so their channels
+    mostly overlap and a sum would overstate the spread.
+    """
+
+    def total(group: int) -> int:
+        return sum(int(m.group(group) or 0) for m in sweeps)
+
+    text = f"purged {total(1)} more in {max(int(m.group(2)) for m in sweeps)} channels"
+    if total(3):
+        text += f", {total(3)} unreachable"
+    if total(4):
+        text += f", +{total(4)} hashes blocklisted"
+    return text
 
 
 def _clip(text: str) -> str:
