@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Check the review channel first in `/config permissions`, count channels hidden from the bot as private instead of blocked, and make a missing Manage Messages advisory under `report_only` ([#61](https://github.com/rafs2006/optimus/pull/61), @rafs2006) <!-- pr-log:rafs2006/optimus#61 -->
+
 - Download the uploaded attachment for `/scamhash import` instead of parsing its snowflake id, so imports work through Discord; share the bounded fetch path with a new text fetcher and give each import failure its own localized reason ([#60](https://github.com/rafs2006/optimus/pull/60), @rafs2006) <!-- pr-log:rafs2006/optimus#60 -->
 
 - Point the warning DM, `/help`, and member docs to the published Optimus privacy policy and this instance's privacy contact instead of the upstream author's address; text only ([#59](https://github.com/rafs2006/optimus/pull/59), @rafs2006) <!-- pr-log:rafs2006/optimus#59 -->
