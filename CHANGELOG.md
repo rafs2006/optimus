@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show the bot's own campaign-cleanup entries as "Optimus" instead of a broken `<@0>` mention in `/scamhash list`, `/scamhash add` replies, and `/scamhash whitelist` ([#70](https://github.com/rafs2006/optimus/pull/70), @rafs2006) <!-- pr-log:rafs2006/optimus#70 -->
+
 - Add `/scamhash whitelist` and `/scamhash unwhitelist` (by entry, or by author or age with a preview before `confirm:True`), lift covering whitelist entries on Confirm scam, Review as scam, and `/scamhash add`, carry the removal count on `VerdictEvent.whitelist_removed`, and add a review-only whitelist section to exports that imports ignore; this replaces #68's whitelist-wins warning ([#69](https://github.com/rafs2006/optimus/pull/69), @rafs2006) <!-- pr-log:rafs2006/optimus#69 -->
 
 - Have `/scamhash add` report an image this server already lists, or already catches with a SCAM verdict, instead of storing and auditing it again, and warn when an added image is whitelisted ([#68](https://github.com/rafs2006/optimus/pull/68), @rafs2006) <!-- pr-log:rafs2006/optimus#68 -->
