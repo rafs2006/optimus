@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Settle an uploader as soon as enforcement runs (auto-handled or confirmed), so for 10 minutes (`SETTLED_WINDOW_SECONDS`) their other hash matches, including near and global-list matches, are deleted quietly and counted on the settled card; an open card that lands after the settlement is closed and removed under the system actor (a refused delete keeps it open), the ban still rests only on this server's list, each image logs `verdict_decided`, and multi-image cards sum their cleanup notes ([#72](https://github.com/rafs2006/optimus/pull/72), @rafs2006) <!-- pr-log:rafs2006/optimus#72 -->
+
 - Show the bot's own campaign-cleanup entries as "Optimus" instead of a broken `<@0>` mention in `/scamhash list`, `/scamhash add` replies, and `/scamhash whitelist` ([#70](https://github.com/rafs2006/optimus/pull/70), @rafs2006) <!-- pr-log:rafs2006/optimus#70 -->
 
 - Add `/scamhash whitelist` and `/scamhash unwhitelist` (by entry, or by author or age with a preview before `confirm:True`), lift covering whitelist entries on Confirm scam, Review as scam, and `/scamhash add`, carry the removal count on `VerdictEvent.whitelist_removed`, and add a review-only whitelist section to exports that imports ignore; this replaces #68's whitelist-wins warning ([#69](https://github.com/rafs2006/optimus/pull/69), @rafs2006) <!-- pr-log:rafs2006/optimus#69 -->
