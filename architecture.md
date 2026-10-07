@@ -63,7 +63,10 @@ Authoritative version with tables, subjects, and stream config lives at
 - **At-least-once + idempotency**: Redis-backed per-attachment idempotency keys
   make redelivery safe.
 - **Discord-side controls** live in `moderation`: circuit breaker, per-guild
-  rate limiter, cooldown, safe mode.
+  rate limiter, cooldown, safe mode. Since #76 the rate-limit token is taken
+  before the idempotency key, an empty bucket waits (bounded) rather than failing
+  fast, and a `rate_limited` enforcement is retried with a fresh key before it
+  falls to a moderator; see [`docs/architecture.md`](docs/architecture.md#resilience-controls-and-where-they-sit).
 
 ## Moderation audit contract
 
@@ -300,3 +303,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#73 --> Applied: `/scamhash` and Review as scam are gated on Manage Messages like the review buttons, with Manage Server kept as a server-side fallback for those two commands - from #73.
 
 <!-- decision:rafs2006/optimus#75 --> Applied: verdicts are serialised per uploader so a burst settles to one card and one ban, and detections the bot settled itself are stored as `auto:<action>` so the campaign closer never removes the bot's own cards - from #75.
+
+<!-- decision:rafs2006/optimus#76 --> Applied: enforcement takes the per-server rate token before the idempotency key, waits a bounded time for it, honours Discord's `retry_after`, and retries a `rate_limited` enforcement with a fresh key before leaving it for a moderator - from #76.

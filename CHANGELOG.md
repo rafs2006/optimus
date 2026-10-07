@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make enforcement wait up to `mod_action_rate_wait_seconds` (5 s) for a per-server action token instead of failing fast, take the token before the idempotency key so a rate-limited attempt is not later rejected as `duplicate`, honour Discord's 429 `retry_after` (over 10 s comes back `rate_limited`), retry a `rate_limited` enforcement `mod_action_requeue_attempts` times (2, `mod_action_requeue_delay_seconds` 5 s apart) with a fresh key before it falls to a moderator, raise `mod_action_rate_capacity` to 10, show "banned by user ID" only when the ban succeeded, and say in `message:` hints and not-found replies that a bare ID works only in its own channel ([#76](https://github.com/rafs2006/optimus/pull/76), @rafs2006) <!-- pr-log:rafs2006/optimus#76 -->
+
 - Serialise verdicts per uploader so a multi-post burst leaves one card and one ban (later images of the post join the card, other posts are deleted and counted once per post), store the bot's own settled detections as `auto:<action>` so the campaign closer never removes its own cards (the mod-action audit keeps the plain action; reopened, `/setup` replay, and dashboard views read "(handled automatically)"), and sum cleared-report notes on one card ([#75](https://github.com/rafs2006/optimus/pull/75), @rafs2006) <!-- pr-log:rafs2006/optimus#75 -->
 
 - Let moderators with Manage Messages run every `/scamhash` subcommand and the right-click **Review as scam**, the same bar as Confirm scam, while Manage Server still opens both server-side through `ALSO_ACCEPTED`; setup, settings, `/stats`, `/delete_server_data`, and per-button permissions are unchanged ([#73](https://github.com/rafs2006/optimus/pull/73), @rafs2006) <!-- pr-log:rafs2006/optimus#73 -->

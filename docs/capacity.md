@@ -224,7 +224,7 @@ A raid generating, say, 100 protect actions/min (~1.67/s) offers faster than the
 
 So during a raid, member-protecting actions (deletes, bans) are always admitted and
 served first, and an empty bucket delays them rather than failing them at once.
-A raid that outruns the bucket for longer than the wait and retries (about 20 s)
+A raid that outruns the bucket for longer than the wait and retries (about 25 s: a 5 s wait, then two 5 s pauses each followed by another 5 s wait)
 still ends `rate_limited` and leaves an open card for a moderator, so raise the
 bucket for a large server. The
 **recommendation for an 800k server** is to raise the per-guild bucket so protect
