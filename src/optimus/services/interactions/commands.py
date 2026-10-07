@@ -95,7 +95,8 @@ COMMANDS: tuple[Command, ...] = (
                     ),
                     Option(
                         "message",
-                        "Message link or ID: blocks every image on it (nobody is acted on).",
+                        "Message link (an ID works only in its own channel):"
+                        " blocks every image on it.",
                         OPT_STRING,
                         required=False,
                     ),
@@ -145,7 +146,8 @@ COMMANDS: tuple[Command, ...] = (
                 options=(
                     Option(
                         "message",
-                        "Message link or ID (right-click the message > Copy Message Link).",
+                        "Message link (Copy Message Link)."
+                        " A bare ID works only in its own channel.",
                         OPT_STRING,
                         required=True,
                     ),

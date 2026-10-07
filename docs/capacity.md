@@ -200,9 +200,12 @@ on one 800k server blow it?
 **The global limit is not the binding constraint for a single guild — the
 per-guild action rate limiter is.** Moderation actions go through a token bucket
 keyed `modact:{guild_id}` ([`actions.py`](../src/optimus/services/moderation/actions.py))
-with **capacity 5, refill 1/s** (`mod_action_rate_capacity=5.0`,
-`mod_action_rate_refill=1.0`). For one guild that is a burst of 5 then a sustained
-**1 action/s**. Discord's 50 req/s global is enforced transparently by hikari's
+with **capacity 10, refill 1/s** (`mod_action_rate_capacity=10.0`,
+`mod_action_rate_refill=1.0`). For one guild that is a burst of 10 then a sustained
+**1 action/s**. An action that finds the bucket empty **waits** for a token for up
+to `mod_action_rate_wait_seconds` (5 s); if it still ends `rate_limited`, the
+coordinator tries it again `mod_action_requeue_attempts` times (2), each after
+`mod_action_requeue_delay_seconds` (5 s). Only then does it fall to a moderator. Discord's 50 req/s global is enforced transparently by hikari's
 own REST client; optimus adds no separate global throttle.
 
 A raid generating, say, 100 protect actions/min (~1.67/s) offers faster than the
@@ -211,14 +214,19 @@ A raid generating, say, 100 protect actions/min (~1.67/s) offers faster than the
 * The [`PriorityDispatcher`](../src/optimus/services/moderation/priority.py)
   classifies DELETE/BAN/KICK as **PROTECT** (priority 0). PROTECT actions are
   **always admitted past `mod_dispatch_max_queue`** (1000) — only droppable
-  NOTIFY/COURTESY are rejected when full.
+  NOTIFY/COURTESY are rejected when full. The dispatcher only orders work; it
+  does not hold work back until the bucket refills. The executor's bounded
+  wait and the coordinator's retries do that.
 * An **aging guard** (`mod_dispatch_aging_seconds=5.0`) promotes waiting items one
   class per interval, so nothing starves; PROTECT is rescored to the front before
   each pop.
 * `mod_dispatch_concurrency=4` workers drain the heap.
 
-So during a raid, member-protecting actions (deletes, bans) are never dropped and
-are always served first; lower-priority notifications shed load gracefully. The
+So during a raid, member-protecting actions (deletes, bans) are always admitted and
+served first, and an empty bucket delays them rather than failing them at once.
+A raid that outruns the bucket for longer than the wait and retries (about 20 s)
+still ends `rate_limited` and leaves an open card for a moderator, so raise the
+bucket for a large server. The
 **recommendation for an 800k server** is to raise the per-guild bucket so protect
 actions keep pace with a sustained raid:
 
@@ -302,8 +310,9 @@ here and scale the one axis that turns red:
   outstanding work, tracked as improvement plan item #1 in
   [the root architecture doc](../architecture.md).
 * **Per-guild action rate, not the Discord global limit, throttles one big
-  guild.** Tune `mod_action_rate_*` for the server; PROTECT actions are never
-  dropped regardless.
+  guild.** Tune `mod_action_rate_*` for the server. PROTECT actions are always
+  admitted and wait for a token, but a raid that outlasts the wait and retries
+  still ends `rate_limited`.
 * **Retention is off by default.** Detections accumulate one row per image
   (including CLEAN) forever until you enable a retention window.
 * These index numbers are a single-replica, worst-case (uniform-random hash)
