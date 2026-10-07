@@ -22,10 +22,15 @@ from optimus.contracts.events import Action, OcrFindings, VerdictEvent
 from optimus.core.logging import get_logger
 from optimus.i18n import translate
 from optimus.services.moderation import reasons
-from optimus.services.moderation.actions import ActionExecutor, ActionRequest, ActionResult
+from optimus.services.moderation.actions import (
+    ActionExecutor,
+    ActionRequest,
+    ActionResult,
+    Step,
+)
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
 from optimus.services.moderation.explain import explain_result
-from optimus.services.moderation.failures import classify
+from optimus.services.moderation.failures import FailureKind, classify
 from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.policy import Decision, PolicyInput, decide
 from optimus.services.moderation.priority import (
@@ -218,8 +223,14 @@ class ModerationCoordinator:
         update_report: ReportUpdater | None = None,
         close_cards: CardCloser | None = None,
         campaign_window_seconds: int = 24 * 3600,
+        requeue_attempts: int = 0,
+        requeue_delay_seconds: float = 0.0,
     ) -> None:
         self._config = config
+        #: Extra tries for an enforcement that ended ``rate_limited`` (0 = off,
+        #: the default for direct construction in tests).
+        self._requeue_attempts = max(0, requeue_attempts)
+        self._requeue_delay = max(0.0, requeue_delay_seconds)
         self._target = target
         self._executor = executor
         self._report = report
@@ -443,6 +454,22 @@ class ModerationCoordinator:
             ),
         )
         result = await self._dispatch(action, request)
+        for attempt in range(1, self._requeue_attempts + 1):
+            if not _rate_limited(result):
+                break
+            # Being rate limited is "not yet", never "no": try again shortly
+            # rather than leave a confirmed scam for a moderator to finish.
+            # A fresh key, since a step-level 429 already claimed the first.
+            _log.info(
+                "moderation_action_requeued",
+                guild_id=event.guild_id,
+                message_id=event.message_id,
+                action=action.value,
+                attempt=attempt,
+            )
+            await asyncio.sleep(self._requeue_delay)
+            retry = replace(request, idempotency_key=f"{request.idempotency_key}:r{attempt}")
+            result = await self._dispatch(action, retry)
         ACTIONS_TAKEN.labels(action=action.value, success=str(result.success).lower()).inc()
         return result
 
@@ -487,6 +514,10 @@ class ModerationCoordinator:
         action_taken = (
             action.value if result.success else f"{action.value} (failed: {result.detail})"
         )
+        if boundary is Boundary.DEPARTED_BANNED and not _banned(result):
+            # "banned by user ID" next to a failed ban told moderators the
+            # opposite of what happened; the failure text says it alone.
+            boundary = None
         if boundary is not None:
             # Say why the configured punishment did or did not happen, instead
             # of a bare "delete" that reads like the policy was ignored.
@@ -902,3 +933,20 @@ def _fully_handled(
     if action is not cfg.configured_action:
         return False
     return result.success and bool(result.steps) and result.message_deleted
+
+
+def _banned(result: ActionResult) -> bool:
+    """Whether the ban step of ``result`` actually succeeded."""
+    return any(s.step is Step.BAN and s.success for s in result.steps)
+
+
+def _rate_limited(result: ActionResult) -> bool:
+    """Whether ``result`` failed only for want of rate budget (ours or Discord's)."""
+    if result.success:
+        return False
+    if result.detail == "rate_limited":
+        return True
+    return any(
+        s.failure is not None and s.failure.kind is FailureKind.RATE_LIMITED
+        for s in result.failed_steps
+    )

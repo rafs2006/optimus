@@ -316,9 +316,18 @@ class Settings(BaseSettings):
     mod_queue_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     #: Confidence at or above which the configured action is auto-applied.
     mod_auto_act_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    #: Per-guild Discord REST action budget (token bucket).
-    mod_action_rate_capacity: float = 5.0
+    #: Per-guild Discord REST action budget (token bucket). The burst covers
+    #: a multi-image scam post plus its follow-ups without running dry.
+    mod_action_rate_capacity: float = 10.0
     mod_action_rate_refill: float = 1.0
+    #: How long an enforcement action waits for a token before it gives up
+    #: with ``rate_limited`` (seconds). Waiting, not failing fast, is what
+    #: keeps a burst from leaving a scam up for a moderator to finish.
+    mod_action_rate_wait_seconds: float = Field(default=5.0, ge=0.0)
+    #: Extra tries for an enforcement that still ended ``rate_limited``, and
+    #: the pause before each one.
+    mod_action_requeue_attempts: int = Field(default=2, ge=0)
+    mod_action_requeue_delay_seconds: float = Field(default=5.0, ge=0.0)
     #: Cooldown between DM warnings to the same user (seconds).
     mod_dm_cooldown_seconds: int = Field(default=3600, ge=1)
     #: Default timeout applied by DELETE_TIMEOUT (seconds).

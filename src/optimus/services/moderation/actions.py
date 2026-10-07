@@ -221,6 +221,10 @@ class ActionResult:
         return any(s.step is Step.DELETE and s.success for s in self.steps)
 
 
+#: Longest Discord ``retry_after`` the executor sleeps through inline.
+MAX_RETRY_AFTER_SECONDS = 10.0
+
+
 class ActionExecutor:
     """Applies moderation actions with rate-limiting, breaker, backoff, idempotency."""
 
@@ -236,12 +240,16 @@ class ActionExecutor:
         breaker: CircuitBreaker | None = None,
         backoff: BackoffPolicy | None = None,
         probe: PermissionProbe | None = None,
+        rate_wait_seconds: float = 0.0,
     ) -> None:
         self._rest = rest
         self._probe = probe
         self._rl = rate_limiter
         self._bot_user_id = bot_user_id
         self._rate = rate
+        #: How long to wait for a token before giving up as ``rate_limited``.
+        #: 0 keeps the old fail-fast behaviour for direct test construction.
+        self._rate_wait = max(0.0, rate_wait_seconds)
         self._acquire = idempotency_acquire
         self._dm_cooldown = dm_cooldown
         self._breaker = breaker or CircuitBreaker()
@@ -275,11 +283,14 @@ class ActionExecutor:
         if req.action in (Action.NONE, Action.REPORT_ONLY):
             return ActionResult(req.action, success=True, detail="no_enforcement")
 
+        # The token comes first: claiming the idempotency key and then finding
+        # the bucket empty burned the key, so a retry or redelivery of the
+        # same action was rejected as a "duplicate" and nothing ever ran.
+        if not await self._take_token(req.guild_id):
+            return ActionResult(req.action, success=False, detail="rate_limited")
+
         if not await self._acquire(req.idempotency_key):  # type: ignore[operator]
             return ActionResult(req.action, success=False, detail="duplicate")
-
-        if not await self._rl.acquire(f"modact:{req.guild_id}", self._rate):
-            return ActionResult(req.action, success=False, detail="rate_limited")
 
         steps = await self._apply(req)
         failed = tuple(s for s in steps if not s.success and s.step is not Step.DM)
@@ -299,6 +310,31 @@ class ActionExecutor:
                 missing=[name for s in failed for name in s.missing],
             )
         return ActionResult(req.action, success=not failed, detail=detail, steps=steps)
+
+    async def _take_token(self, guild_id: int) -> bool:
+        """Take one action token for ``guild_id``, waiting up to the deadline.
+
+        Every action here is protective (delete, timeout, kick, ban), so an
+        empty bucket means "a moment later", not "never": failing fast left
+        the scam up and the card waiting on a moderator. The wait is bounded
+        so a sustained raid still ends in ``rate_limited`` instead of piling
+        up callers.
+        """
+        key = f"modact:{guild_id}"
+        if await self._rl.acquire(key, self._rate):
+            return True
+        if self._rate_wait <= 0:
+            return False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._rate_wait
+        step = 1.0 / self._rate.refill_rate
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(step, remaining))
+            if await self._rl.acquire(key, self._rate):
+                return True
 
     async def _apply(self, req: ActionRequest) -> tuple[StepOutcome, ...]:
         """Run every step of ``req`` independently, collecting outcomes.
@@ -420,7 +456,16 @@ class ActionExecutor:
                     return StepOutcome(step, success=False, failure=root or last)
                 if attempt + 1 >= self._backoff.max_attempts:
                     break
-                await asyncio.sleep(self._backoff.delay(attempt))
+                delay = self._backoff.delay(attempt)
+                if last.retry_after > 0:
+                    if last.retry_after > MAX_RETRY_AFTER_SECONDS:
+                        # Discord wants a long pause: retrying sooner is a
+                        # guaranteed repeat 429, so hand back the failure.
+                        break
+                    # Honour Discord's own pause instead of a 0.1 s jitter
+                    # that only produced more 429s.
+                    delay = max(delay, last.retry_after)
+                await asyncio.sleep(delay)
                 continue
             return StepOutcome(step, success=True)
         return StepOutcome(step, success=False, failure=root or last)

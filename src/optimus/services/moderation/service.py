@@ -181,6 +181,7 @@ def build_coordinator(
         idempotency_acquire=guard.acquire,
         dm_cooldown=cooldown,
         breaker=breaker,
+        rate_wait_seconds=settings.mod_action_rate_wait_seconds,
     )
 
     dispatcher: PriorityDispatcher[ActionResult] = PriorityDispatcher(
@@ -373,6 +374,8 @@ def build_coordinator(
         mark_reported=mark_reported,
         close_cards=close_cards,
         campaign_window_seconds=settings.mod_sweep_window_hours * 3600,
+        requeue_attempts=settings.mod_action_requeue_attempts,
+        requeue_delay_seconds=settings.mod_action_requeue_delay_seconds,
     )
     return coordinator, dispatcher
 

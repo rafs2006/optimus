@@ -76,6 +76,8 @@ class Failure:
     code: int = 0
     #: Exception type name, for logs and audit detail.
     exception: str = ""
+    #: Seconds Discord asked us to wait before retrying (429), 0 when unknown.
+    retry_after: float = 0.0
 
     @property
     def satisfied(self) -> bool:
@@ -198,6 +200,16 @@ def classify(exc: BaseException) -> Failure:
     if status >= 500:
         return Failure(FailureKind.TRANSIENT, code=code, exception=exception)
     kind = _BY_STATUS.get(status)
+    if kind is FailureKind.RATE_LIMITED:
+        return Failure(kind, code=code, exception=exception, retry_after=_retry_after(exc))
     if kind is not None:
         return Failure(kind, code=code, exception=exception)
     return Failure(FailureKind.UNKNOWN, code=code, exception=exception)
+
+
+def _retry_after(exc: BaseException) -> float:
+    """Discord's ``retry_after`` (seconds) from a 429, or 0 when absent."""
+    value = getattr(exc, "retry_after", None)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return 0.0
+    return max(0.0, float(value))

@@ -279,17 +279,19 @@ always recorded.
 
 ## Resilience controls and where they sit
 
-These three controls protect Discord's REST API and the bot's standing in a guild.
-They are layered in `ActionExecutor.execute` in this order:
+These controls protect Discord's REST API and the bot's standing in a guild.
+They are layered in `ActionExecutor.execute` in this order. The token is taken
+before the idempotency key, so an action that runs out of tokens has not claimed
+its key and can still run when it is tried again:
 
 ```mermaid
 flowchart LR
     V[verdict.v1] --> P[policy decision]
-    P --> Idem{"idempotency<br/>SET NX EX"}
+    P --> RL{"token-bucket rate limit<br/>modact:guild<br/>(waits up to 5 s)"}
+    RL -- still empty --> Lim["success=false: rate_limited<br/>(coordinator retries)"]
+    RL -- token --> Idem{"idempotency<br/>SET NX EX"}
     Idem -- replay --> Dup["success=false: duplicate"]
-    Idem -- first --> RL{"token-bucket rate limit<br/>modact:guild"}
-    RL -- empty --> Lim["success=false: rate_limited"]
-    RL -- ok --> CB{circuit breaker}
+    Idem -- first --> CB{circuit breaker}
     CB -- open --> Open["success=false: circuit_open"]
     CB -- closed / half-open --> BO["backoff retry<br/>(max_attempts=3)"]
     BO --> REST["Discord REST:<br/>delete / timeout / kick / ban / DM"]
@@ -299,8 +301,11 @@ flowchart LR
   a Redis `SET NX EX` on `modact:<idempotency_key>:<action>` makes redelivery
   safe: a replayed verdict cannot double-act.
 - **Rate limiting** ([`core/ratelimit.py`](../src/optimus/core/ratelimit.py)) — a
-  per-guild **token bucket** (`modact:<guild_id>`, capacity 5 / refill 1/s by
-  default) bounds the Discord action rate. The Redis implementation is a single
+  per-guild **token bucket** (`modact:<guild_id>`, capacity 10 / refill 1/s by
+  default) bounds the Discord action rate. An empty bucket makes the action wait
+  up to `mod_action_rate_wait_seconds` (5 s). If it still ends `rate_limited`,
+  the coordinator tries again `mod_action_requeue_attempts` times (2), after
+  `mod_action_requeue_delay_seconds` (5 s) each, with a fresh idempotency key. The Redis implementation is a single
   atomic Lua script; an `InMemoryRateLimiter` fallback (with `evict_idle` to bound
   its map, driven by a time-gated opportunistic sweep in the ingest fallback) is
   used when Redis is unavailable. Ingest applies the same primitive to per-guild
@@ -313,7 +318,9 @@ flowchart LR
   re-opens. State transitions feed a Prometheus gauge for observability.
 - **Backoff** ([`core/backoff.py`](../src/optimus/core/backoff.py)) — the guarded
   REST call is wrapped in a jittered exponential retry (`max_attempts=3`) *inside*
-  the breaker.
+  the breaker. On a Discord 429 the pause is at least Discord's `retry_after`;
+  a `retry_after` over 10 s is not slept through inline and comes back as
+  `rate_limited` for the coordinator's retry.
 
 **Safe mode** ([`safemode.py`](../src/optimus/services/moderation/safemode.py))
 sits one level up, in policy. A `SafeModeTracker` keeps an EWMA baseline of
