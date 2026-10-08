@@ -108,7 +108,21 @@ Notes on cards:
   every image. To see one of these cards again, use `/queue detection:<number>`:
   it reads "delete_ban (handled automatically)".
 
-  Everything that needs a person keeps a full, open card: a global-only
+  **Near matches spread across channels.** A near match below
+  `auto_act_threshold` on this server's own list normally waits for a
+  moderator. When one uploader posts a near match of the same blocklist entry
+  in 3 different channels within 10 minutes (the defaults), the bot applies your `action_policy` to them as if the
+  match were strong: it bans once, sweeps the campaign and closes the earlier
+  cards, the same as **Confirm scam**. The card keeps the real match score and
+  says `near match posted in N channels within M min`. Global matches, member
+  reports and risk-scan cards never count; a channel where a moderator pressed
+  **False positive**, **Whitelist image** or **Dismiss** on that uploader's card
+  stops counting; safe mode and `report_only` turn it off; moderators and
+  admins are never banned by it. The host sets the numbers
+  with `OPTIMUS_MOD_SPREAD_CHANNELS` (0 turns it off) and
+  `OPTIMUS_MOD_SPREAD_WINDOW_SECONDS`.
+
+  Everything else that needs a person keeps a full, open card: a global-only
   match, a near match below `auto_act_threshold`, safe mode, a member report,
   a punishment refused by the role hierarchy, or a missing permission. The
   one exception is an uploader the bot or a moderator already settled in the

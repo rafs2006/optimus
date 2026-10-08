@@ -375,3 +375,24 @@ async def test_list_open_is_oldest_first_scoped_and_capped(session: AsyncSession
 
     other = DetectionRepository(session, guild_id=6)
     assert await other.list_open(limit=25) == ([], 0)
+
+
+async def test_mod_action_targets_since_filters_action_target_guild_and_time(
+    session: AsyncSession,
+) -> None:
+    from optimus.db.repositories import ModActionRepository
+
+    await _make_guild(session, 1)
+    await _make_guild(session, 2)
+    repo = ModActionRepository(session, 1)
+    await repo.record(actor_id=5, action="review.whitelist_image", target="11")
+    await repo.record(actor_id=5, action="review.confirm", target="12")
+    await ModActionRepository(session, 2).record(
+        actor_id=5, action="review.whitelist_image", target="13"
+    )
+    since = datetime.now(UTC) - timedelta(minutes=5)
+    found = await repo.targets_since(["review.whitelist_image"], ["11", "12", "13"], since)
+    assert found == {"11"}
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    assert await repo.targets_since(["review.whitelist_image"], ["11"], future) == set()
+    assert await repo.targets_since([], ["11"], since) == set()

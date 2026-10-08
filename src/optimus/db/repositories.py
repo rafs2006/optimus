@@ -667,6 +667,20 @@ class ModActionRepository:
         await self._session.flush()
         return row
 
+    async def targets_since(
+        self, actions: Sequence[str], targets: Sequence[str], since: datetime
+    ) -> set[str]:
+        """The ``targets`` that have one of ``actions`` recorded since ``since``."""
+        if not actions or not targets:
+            return set()
+        stmt = select(ModAction.target).where(
+            ModAction.guild_id == self._guild_id,
+            ModAction.action.in_(list(actions)),
+            ModAction.target.in_(list(targets)),
+            ModAction.created_at >= since,
+        )
+        return {t for t in (await self._session.execute(stmt)).scalars().all() if t}
+
     async def list_recent(self, limit: int = 100) -> Sequence[ModAction]:
         """Return the most recent audit rows for this guild."""
         stmt = (

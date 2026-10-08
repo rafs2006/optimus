@@ -60,6 +60,11 @@ class PolicyOutcome:
     reason: str
 
 
+#: Reason for a near match that clears the queue bar but not the auto-act bar.
+#: The coordinator's spread-across-channels rule keys on it, so it is shared.
+QUEUED_FOR_REVIEW = "queued_for_review"
+
+
 def _decidable(verdict: Verdict) -> bool:
     return verdict in (Verdict.SCAM, Verdict.AMBIGUOUS)
 
@@ -85,7 +90,7 @@ def decide(inp: PolicyInput) -> PolicyOutcome:
     # At/above the queue bar. Decide whether it also clears the auto-act bar.
     auto = inp.confidence >= inp.auto_act_threshold and inp.verdict is Verdict.SCAM
     if not auto:
-        return PolicyOutcome(Decision.MOD_QUEUE, Action.REPORT_ONLY, "queued_for_review")
+        return PolicyOutcome(Decision.MOD_QUEUE, Action.REPORT_ONLY, QUEUED_FOR_REVIEW)
 
     if inp.safe_mode:
         return PolicyOutcome(Decision.MOD_QUEUE, Action.REPORT_ONLY, "safe_mode_report_only")

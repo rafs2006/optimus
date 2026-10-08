@@ -345,6 +345,16 @@ class Settings(BaseSettings):
     #: Hard cap on messages examined per sweep, bounding the REST burst.
     mod_sweep_max_messages: int = Field(default=500, ge=1, le=5000)
 
+    # Spread across channels. A near match on this server's own list only asks
+    # a moderator. When the same uploader posts such matches in this many
+    # different channels inside the window, the spread itself is the scam
+    # pattern: the bot applies the server's action_policy as if the match
+    # were strong. The match confidence on the card is left as it was.
+    #: Distinct channels that trigger the action (0 turns this off).
+    mod_spread_channels: int = Field(default=3, ge=0, le=50)
+    #: How long the channels are counted for (seconds).
+    mod_spread_window_seconds: int = Field(default=600, ge=1, le=86400)
+
     # Priority-aware action dispatch (single-replica scheduler in front of the
     # action executor). Protective work (delete scam / timeout / ban) is
     # dispatched ahead of courtesy work (appeal DMs, notifications) under load.
