@@ -133,6 +133,9 @@ class CardCleanup:
 #: Closes every other open card of a confirmed uploader:
 #: (guild, uploader, message already handled, moderator, review channel).
 CardCloser = Callable[[int, int, int, int, int | None], Awaitable[CardCleanup]]
+#: Records a stored action on detection rows: (guild, detection ids, action).
+#: Used when a post's earlier, queued images are settled with the post.
+DetectionSettler = Callable[[int, Sequence[int], str], Awaitable[None]]
 
 #: Audit actor recorded when the bot itself settles an uploader's cards.
 _SYSTEM_ACTOR = 0
@@ -222,6 +225,7 @@ class ModerationCoordinator:
         mark_reported: ReportedStamper | None = None,
         update_report: ReportUpdater | None = None,
         close_cards: CardCloser | None = None,
+        settle_detections: DetectionSettler | None = None,
         campaign_window_seconds: int = 24 * 3600,
         requeue_attempts: int = 0,
         requeue_delay_seconds: float = 0.0,
@@ -255,6 +259,7 @@ class ModerationCoordinator:
         # closed and their later blocklisted posts are deleted without a card
         # of their own (counted on the confirmed card instead).
         self._close_cards = close_cards
+        self._settle_detections = settle_detections
         self._campaign_window = campaign_window_seconds
         self._campaigns: OrderedDict[tuple[int, int], _Campaign] = OrderedDict()
         self._recent_sweeps: dict[tuple[int, int], float] = {}
@@ -580,7 +585,13 @@ class ModerationCoordinator:
         async with self._keyed_lock(self._card_locks, key):
             if decided:
                 # The open card is settled now; later images must not reopen it.
-                self._open_cards.pop((event.guild_id, event.message_id, False), None)
+                stale = self._open_cards.pop((event.guild_id, event.message_id, False), None)
+                if auto and stale is not None and card_key not in self._open_cards:
+                    # Near matches of this post went first and opened a card;
+                    # this image handled the post on its own. The post is gone
+                    # with all its images, so that card is this one: fold it
+                    # in place instead of leaving its buttons on a dead post.
+                    await self._adopt_open_card(event, card_key, stale)
                 if event.review_card_id is not None and card_key not in self._open_cards:
                     # Confirm was pressed on a card: write the outcome onto it.
                     self._open_cards[card_key] = _OpenCard(
@@ -633,6 +644,46 @@ class ModerationCoordinator:
                     await self._mark_reported(event.guild_id, detection_id, card_id)
         if not decided and card_id is not None:
             await self._settle_late_card(event, cfg)
+
+    async def _adopt_open_card(
+        self, event: VerdictEvent, card_key: tuple[int, int, bool], card: _OpenCard
+    ) -> None:
+        """Take over a post's open card when a later image of it was auto-handled.
+
+        The earlier images are recorded as deleted with the post (``auto:delete``,
+        like a joined image), so no cleanup, ``/queue`` or replay treats them as
+        still waiting on a moderator. The card then joins the auto-handled
+        image and renders folded.
+        """
+        card.items = [
+            replace(
+                i,
+                action_taken=Action.DELETE.value,
+                auto_handled=True,
+                image_url=None,
+                extra_image_urls=(),
+                evidence_url=None,
+                problem=None,
+            )
+            for i in card.items
+        ]
+        self._open_cards[card_key] = card
+        if self._settle_detections is None:
+            return
+        ids = [i.detection_id for i in card.items]
+        try:
+            await self._settle_detections(
+                event.guild_id, ids, f"{AUTO_ACTION_PREFIX}{Action.DELETE.value}"
+            )
+        except Exception:
+            # The card still folds; the rows stay open for /queue, which is safe.
+            _log.warning(
+                "same_post_settle_failed",
+                guild_id=event.guild_id,
+                message_id=event.message_id,
+                detections=ids,
+                exc_info=True,
+            )
 
     async def _settle_late_card(self, event: VerdictEvent, cfg: GuildModConfig) -> None:
         """Close an open card the uploader's own settlement raced past.
