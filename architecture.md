@@ -119,7 +119,8 @@ open with the reason. A card is posted already folded when the match came
 from this server's own list with a hash, the decision was automatic, the
 configured action ran without a downgrade, and every step succeeded; that
 automatic action also settles the uploader's campaign the way Confirm does.
-Global-only and near matches, safe mode, member reports, hashless matches,
+Global-only and near matches (except a near match spread across channels,
+since #78, below), safe mode, member reports, hashless matches,
 hierarchy refusals, and downgraded or failed steps keep a full, open card.
 `/queue detection:<number>` posts a folded card again for review or undo.
 
@@ -161,6 +162,30 @@ detection rows are stored as `auto:delete` through the coordinator's optional
 replay no longer treat them as open. If that hook fails, the card still folds
 and the rows stay visible to `/queue`. A refused or partial enforcement leaves
 the card open, as before.
+
+Since [#78](https://github.com/rafs2006/optimus/pull/78), a near match is
+acted on when its spread across channels shows a scam run. After the policy, the
+coordinator counts, per uploader and matched blocklist entry, the distinct
+channels where a `SCAM` near match on the server's own list was queued for
+review (`queued_for_review`). When that entry reaches `mod_spread_channels`
+(`OPTIMUS_MOD_SPREAD_CHANNELS`, default 3; 0 turns it off) within
+`mod_spread_window_seconds` (`OPTIMUS_MOD_SPREAD_WINDOW_SECONDS`, default 600),
+the decision becomes `AUTO_ACT` with the configured `action_policy` (reason
+`spread_channels`, log `spread_escalated`) and follows the normal strong-match
+path: privilege boundaries, one ban, campaign sweep, earlier cards closed, later
+posts deleted quietly. The match confidence is unchanged; the card adds
+`near match posted in N channels within M min`. Moderator calls win: before
+acting, the database is read and any channel where a moderator pressed False
+positive, Whitelist image or Dismiss on that uploader's card in the window is
+dropped for good (row `reversed`/`dismissed`, or a `review.false_positive`,
+`review.whitelist_image` or `review.dismiss` audit row via
+`ModActionRepository.targets_since`). It is read rather than kept in memory
+because the interactions service may be another process; a failed read leaves
+the post to a moderator. Global matches, member reports, risk scans, safe mode,
+`report_only`/`none`, and an already-settled uploader never count. Channel
+tracking is in memory (resets on restart), bounded by `SPREAD_TRACK_LIMIT`
+(4096). The rule is on by default for every server and set per deployment; there
+is no per-server `/config` switch.
 
 Since [#69](https://github.com/rafs2006/optimus/pull/69), the whitelist is
 visible and correctable through `/scamhash whitelist` and
@@ -276,6 +301,10 @@ the plan is versioned with the code.
   eventually auto-block after N confirmations from N distinct guilds? If yes,
   it changes the fail-closed posture in `docs/architecture.md` and needs its
   own section here.
+- The spread-across-channels rule (#78) is on for every server by default and
+  set only per deployment (`OPTIMUS_MOD_SPREAD_CHANNELS`,
+  `OPTIMUS_MOD_SPREAD_WINDOW_SECONDS`). Should servers get a `/config` switch
+  or their own threshold?
 - Default preset on join is `strict`. Balanced gives 0.979 recall at zero FP on
   the eval corpus (see `docs/eval/detection-eval-report.md`); worth revisiting
   once the OCR/QR lane is measured (item 1).
@@ -318,3 +347,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#76 --> Applied: enforcement takes the per-server rate token before the idempotency key, waits a bounded time for it, honours Discord's `retry_after`, and retries a `rate_limited` enforcement with a fresh key before leaving it for a moderator - from #76.
 
 <!-- decision:rafs2006/optimus#77 --> Applied: an auto-handled image adopts and folds its post's already-open card, and the post's earlier queued detections are stored as `auto:delete` - from #77.
+
+<!-- decision:rafs2006/optimus#78 --> Applied: a `SCAM` near match on the server's own list is auto-acted under the configured action once one uploader spreads the same blocklist entry across 3 channels in 10 minutes (deployment-configurable), excluding channels a moderator cleared - from #78.
