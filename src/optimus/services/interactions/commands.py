@@ -287,6 +287,34 @@ COMMANDS: tuple[Command, ...] = (
                 name="servers",
                 description="List the servers approved to contribute global confirmations.",
             ),
+            SubCommand(
+                name="link_server",
+                description="Link this server with another: both keep one blocklist.",
+                options=(
+                    Option(
+                        "server_id",
+                        "The server (guild) ID to link with this one.",
+                        OPT_STRING,
+                        required=True,
+                    ),
+                ),
+            ),
+            SubCommand(
+                name="unlink_server",
+                description="Take a server out of its linked group; its entries stay.",
+                options=(
+                    Option(
+                        "server_id",
+                        "The server (guild) ID to unlink.",
+                        OPT_STRING,
+                        required=True,
+                    ),
+                ),
+            ),
+            SubCommand(
+                name="links",
+                description="List the groups of linked servers.",
+            ),
         ),
     ),
     Command(

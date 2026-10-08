@@ -288,16 +288,18 @@ def build_coordinator(
         if outcome.harvested and bus is not None:
             # The harvest is worthless until the detection worker reloads its
             # index -- otherwise the variants just blocklisted stay invisible
-            # to the matcher and the next post sails through again.
-            with contextlib.suppress(Exception):
-                await bus.publish(
-                    SUBJECT_INDEX_INVALIDATE,
-                    IndexInvalidateEvent(
-                        correlation_id=event.correlation_id,
-                        occurred_at=datetime.now(UTC),
-                        guild_id=event.guild_id,
-                    ),
-                )
+            # to the matcher and the next post sails through again. Linked
+            # servers got copies, so their indexes reload too.
+            for guild_id in (event.guild_id, *outcome.linked):
+                with contextlib.suppress(Exception):
+                    await bus.publish(
+                        SUBJECT_INDEX_INVALIDATE,
+                        IndexInvalidateEvent(
+                            correlation_id=event.correlation_id,
+                            occurred_at=datetime.now(UTC),
+                            guild_id=guild_id,
+                        ),
+                    )
         return outcome
 
     async def mark_reported(

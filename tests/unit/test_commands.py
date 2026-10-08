@@ -112,6 +112,9 @@ def test_submit_global_removed_and_global_help_present() -> None:
         "approve_server",
         "revoke_server",
         "servers",
+        "link_server",
+        "unlink_server",
+        "links",
     }
 
 

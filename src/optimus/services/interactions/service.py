@@ -43,10 +43,14 @@ from optimus.db.repositories import (
     GlobalSubmitterRepository,
     GlobalTrustedGuildRepository,
     GuildHashRepository,
+    GuildLinkRepository,
     GuildPurgeRepository,
     GuildRepository,
     ModActionRepository,
     WhitelistRepository,
+    copy_hash_to_peers,
+    remove_hash_from_peers,
+    sync_group,
 )
 from optimus.globaldb.service import GlobalHashService, SubmissionDenied
 from optimus.i18n import translate
@@ -63,6 +67,7 @@ from optimus.services.interactions.handlers import (
     InteractionContext,
     InteractionResponse,
     KnownImage,
+    LinkResult,
     ModerationRest,
     SetupFailure,
     handle_command,
@@ -292,7 +297,14 @@ class DbDeps:
             return existing
         stored = await repo.add(gh)
         self.pending_index_invalidations.add(guild_id)
+        await self._copy_to_linked(guild_id, stored)
         return stored
+
+    async def _copy_to_linked(self, guild_id: int, gh: GuildHash) -> None:
+        """Mirror a new entry to linked servers; their indexes reload after commit."""
+        self.pending_index_invalidations.update(
+            await copy_hash_to_peers(self._session, guild_id, gh)
+        )
 
     async def known_image(self, guild_id: int, hashes: AttachmentHashes) -> KnownImage:
         # The scanner's own test, against this server's blocklist only: the
@@ -352,6 +364,11 @@ class DbDeps:
         removed = await GuildHashRepository(self._session, guild_id).remove(hash_id)
         if removed:
             self.pending_index_invalidations.add(guild_id)
+        # Linked servers keep one list: the entry goes from all of them, even
+        # if this server had already lost its own copy.
+        self.pending_index_invalidations.update(
+            await remove_hash_from_peers(self._session, guild_id, hash_id)
+        )
         return removed
 
     async def list_guild_hashes(self, guild_id: int) -> list[GuildHash]:
@@ -843,6 +860,19 @@ class DbDeps:
         rows = await GlobalTrustedGuildRepository(self._session).list_all()
         return [row.guild_id for row in rows]
 
+    async def link_guilds(self, guild_id: int, other_id: int, *, added_by: int) -> LinkResult:
+        repo = GuildLinkRepository(self._session)
+        group = await repo.link(guild_id, other_id, added_by=added_by)
+        gained = await sync_group(self._session, group)
+        self.pending_index_invalidations.update(g for g, n in gained.items() if n)
+        return LinkResult(members=tuple(await repo.members(group)), gained=gained)
+
+    async def unlink_guild(self, guild_id: int) -> bool:
+        return await GuildLinkRepository(self._session).unlink(guild_id)
+
+    async def list_links(self) -> list[list[int]]:
+        return list((await GuildLinkRepository(self._session).groups()).values())
+
     async def global_vote(
         self,
         *,
@@ -912,7 +942,7 @@ class DbDeps:
         if existing is not None:
             return existing
         self.pending_index_invalidations.add(guild_id)
-        return await repo.add(
+        stored = await repo.add(
             GuildHash(
                 hash_id=hash_id,
                 phash=hashes.phash,
@@ -927,6 +957,8 @@ class DbDeps:
                 added_by=added_by,
             )
         )
+        await self._copy_to_linked(guild_id, stored)
+        return stored
 
     async def submit_confirmed_scam(
         self,

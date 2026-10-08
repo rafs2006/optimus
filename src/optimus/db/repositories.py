@@ -27,6 +27,7 @@ from optimus.db.models import (
     Guild,
     GuildChannelIgnored,
     GuildHash,
+    GuildLink,
     GuildRoleIgnored,
     GuildTrustedUser,
     GuildWhitelist,
@@ -170,6 +171,153 @@ class WhitelistRepository:
         )
         result = await self._session.execute(stmt)
         return cast("CursorResult[Any]", result).rowcount or 0
+
+
+#: ``guild_hashes.source`` of an entry copied in from a linked server.
+LINKED_SOURCE = "linked"
+
+
+class GuildLinkRepository:
+    """Owner-managed groups of servers that keep one blocklist.
+
+    Not guild-scoped on purpose: a link spans servers. Every write to one
+    member's blocklist is mirrored to the others by :func:`copy_hash_to_peers`
+    and :func:`remove_hash_from_peers`.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def group_of(self, guild_id: int) -> str | None:
+        row = await self._session.get(GuildLink, guild_id)
+        return None if row is None else row.group_id
+
+    async def members(self, group_id: str) -> list[int]:
+        stmt = select(GuildLink.guild_id).where(GuildLink.group_id == group_id)
+        return sorted(int(g) for g in (await self._session.execute(stmt)).scalars().all())
+
+    async def peers(self, guild_id: int) -> list[int]:
+        """The other servers linked to ``guild_id`` (empty when not linked)."""
+        group = await self.group_of(guild_id)
+        if group is None:
+            return []
+        return [g for g in await self.members(group) if g != guild_id]
+
+    async def link(self, a: int, b: int, *, added_by: int) -> str:
+        """Put ``a`` and ``b`` in one group; returns the group id.
+
+        Joins an existing group of either server. Two different groups merge.
+        """
+        import uuid
+
+        group_a, group_b = await self.group_of(a), await self.group_of(b)
+        group = group_a or group_b or uuid.uuid4().hex
+        if group_a and group_b and group_a != group_b:
+            stmt = select(GuildLink).where(GuildLink.group_id == group_b)
+            for moved in (await self._session.execute(stmt)).scalars().all():
+                moved.group_id = group
+        for guild_id in (a, b):
+            row = await self._session.get(GuildLink, guild_id)
+            if row is None:
+                self._session.add(GuildLink(guild_id=guild_id, group_id=group, added_by=added_by))
+            else:
+                row.group_id = group
+        await self._session.flush()
+        return group
+
+    async def unlink(self, guild_id: int) -> bool:
+        """Take one server out of its group; ``False`` if it was not linked.
+
+        A group left with a single server is dissolved. Entries already
+        copied stay: they are that server's own entries now.
+        """
+        row = await self._session.get(GuildLink, guild_id)
+        if row is None:
+            return False
+        group = row.group_id
+        await self._session.delete(row)
+        await self._session.flush()
+        rest = await self.members(group)
+        if len(rest) == 1:
+            last = await self._session.get(GuildLink, rest[0])
+            if last is not None:
+                await self._session.delete(last)
+                await self._session.flush()
+        return True
+
+    async def groups(self) -> dict[str, list[int]]:
+        rows = (await self._session.execute(select(GuildLink))).scalars().all()
+        out: dict[str, list[int]] = {}
+        for row in rows:
+            out.setdefault(row.group_id, []).append(int(row.guild_id))
+        return {g: sorted(m) for g, m in sorted(out.items(), key=lambda kv: min(kv[1]))}
+
+
+def _linked_copy(gh: GuildHash) -> GuildHash:
+    return GuildHash(
+        hash_id=gh.hash_id,
+        phash=gh.phash,
+        dhash=gh.dhash,
+        whash=gh.whash,
+        ahash=gh.ahash,
+        mphash=gh.mphash,
+        mdhash=gh.mdhash,
+        mwhash=gh.mwhash,
+        mahash=gh.mahash,
+        source=LINKED_SOURCE,
+        added_by=gh.added_by,
+    )
+
+
+async def copy_hash_to_peers(session: AsyncSession, guild_id: int, gh: GuildHash) -> list[int]:
+    """Copy one of ``guild_id``'s blocklist entries to its linked servers.
+
+    Returns the servers that got a new entry (their indexes need a reload).
+    A server that already lists the image keeps its own entry.
+    """
+    changed: list[int] = []
+    for peer in await GuildLinkRepository(session).peers(guild_id):
+        repo = GuildHashRepository(session, peer)
+        if await repo.get(gh.hash_id) is not None:
+            continue
+        await GuildRepository(session).get_or_create(peer)
+        await repo.add(_linked_copy(gh))
+        changed.append(peer)
+    return changed
+
+
+async def remove_hash_from_peers(session: AsyncSession, guild_id: int, hash_id: str) -> list[int]:
+    """Remove an entry from ``guild_id``'s linked servers; returns those changed."""
+    changed: list[int] = []
+    for peer in await GuildLinkRepository(session).peers(guild_id):
+        if await GuildHashRepository(session, peer).remove(hash_id):
+            changed.append(peer)
+    return changed
+
+
+async def sync_group(session: AsyncSession, group_id: str) -> dict[int, int]:
+    """Give every server in a group the union of the group's entries.
+
+    Run when servers are linked. Returns how many entries each server gained.
+    """
+    members = await GuildLinkRepository(session).members(group_id)
+    entries: dict[str, GuildHash] = {}
+    for guild_id in members:
+        for gh in await GuildHashRepository(session, guild_id).list_active():
+            entries.setdefault(gh.hash_id, gh)
+    gained: dict[int, int] = {}
+    for guild_id in members:
+        await GuildRepository(session).get_or_create(guild_id)
+        repo = GuildHashRepository(session, guild_id)
+        have = {gh.hash_id for gh in await repo.list_active()}
+        added = 0
+        for hash_id, gh in entries.items():
+            if hash_id in have or await repo.get(hash_id) is not None:
+                continue  # listed already (an inactive row keeps its slot too)
+            await repo.add(_linked_copy(gh))
+            added += 1
+        gained[guild_id] = added
+    return gained
 
 
 class GlobalTrustedGuildRepository:
