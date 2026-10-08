@@ -113,6 +113,8 @@
     "global_servers_none": "Nijedan server još nije odobren za globalne potvrde.",
     "global_invalid_server": "`{value}` nije važeći ID servera (samo brojevi).",
     "global_linked": "Povezano sa `{server_id}`. {count} servera sada imaju jednu listu blokiranih: stavka dodata ili uklonjena na jednom dodaje se ili uklanja na svima i primenjuje kao sopstvena. Sada kopirano: {gained}.",
+    "global_link_not_member": "Bot nije na serveru `{server_id}` (ili je ID pogrešan). Prvo ga pozovite tamo, pa povežite.",
+    "global_link_unverified": "Nije moguće proveriti sa Discordom da li je bot na serveru `{server_id}`. Pokušajte ponovo za minut.",
     "global_link_self": "To je ovaj server. Pokrenite ovo na jednom serveru sa ID-jem drugog servera.",
     "global_unlinked": "Server `{server_id}` više nije povezan. Stavke koje već ima ostaju na njegovoj listi.",
     "global_not_linked": "Server `{server_id}` nije povezan ni sa jednim serverom.",

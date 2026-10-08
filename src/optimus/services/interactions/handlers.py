@@ -278,6 +278,8 @@ class ModerationRest(Protocol):
 
     async def fetch_owner_ids(self) -> set[int]: ...
 
+    async def is_member_of(self, guild_id: int) -> bool | None: ...
+
     async def post_review_card(self, channel_id: int, items: Sequence[ReportData]) -> int:
         """Post one (grouped) review card with its buttons; return its message id."""
         ...
@@ -392,6 +394,10 @@ class InteractionDeps(Protocol):
 
     async def list_trusted_guilds(self) -> list[int]:
         """Ids of all approved contributor guilds, oldest first."""
+        ...
+
+    async def rest_bot_in_guild(self, guild_id: int) -> bool | None:
+        """Whether the bot is in ``guild_id`` (``None``: Discord could not say)."""
         ...
 
     async def link_guilds(self, guild_id: int, other_id: int, *, added_by: int) -> LinkResult:
@@ -1497,6 +1503,16 @@ async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> Interac
             raise InteractionRejected(CommandError.GUILD_ONLY)
         if server_id == ctx.guild_id:
             return InteractionResponse("command.global_link_self")
+        # A typo'd id must not create a guild row and a copy of the list for
+        # a server the bot is not in. Unknown (Discord outage) refuses too.
+        member = await deps.rest_bot_in_guild(server_id)
+        if member is not True:
+            key = (
+                "command.global_link_not_member"
+                if member is False
+                else "command.global_link_unverified"
+            )
+            return InteractionResponse(key, {"server_id": raw})
         result = await deps.link_guilds(ctx.guild_id, server_id, added_by=ctx.user_id)
         await deps.audit(ctx.guild_id, ctx.user_id, "global.link_server", target=raw)
         gained = ", ".join(f"`{g}` +{result.gained.get(g, 0)}" for g in result.members)

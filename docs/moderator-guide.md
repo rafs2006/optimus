@@ -356,12 +356,19 @@ For servers run by the same people. Linked servers keep **one blocklist**:
   with the full list. The reply says how many entries each server gained.
 - From then on, an entry added on one server is added on all of them: by
   `/scamhash add`, `/scamhash import`, **Confirm scam**, or the campaign sweep.
-  `/scamhash remove` on one server removes it from all of them.
+  `/scamhash remove` removes the entry there and the other servers' copies
+  of it. An entry another server added itself stays on that server's list:
+  each server's own entries can only be removed on that server.
 - A copied entry is a local entry on each server, so it is acted on with that
   server's own `action_policy`, like any entry of its own. This is the
   difference from the global database, which only ever asks a moderator.
 - The whitelist, settings and review cards stay per server.
 - `/global unlink_server` stops the copying. Entries already copied stay.
+- The bot must be in both servers to link them. `/delete_server_data` takes a
+  server out of its group before erasing its data.
+- A copied entry is acted on with this server's `action_policy`, so the other
+  server's moderators can trigger automatic deletes or bans here. Link only
+  servers you run yourselves.
 
 A server is in one group at most; linking servers from two groups merges the
 groups.

@@ -113,6 +113,8 @@
     "global_servers_none": "No servers are approved to contribute global confirmations yet.",
     "global_invalid_server": "`{value}` is not a valid server ID (numbers only).",
     "global_linked": "Linked with `{server_id}`. {count} servers now keep one blocklist: an entry added or removed on one is added or removed on all, and acted on like each server's own. Entries copied now: {gained}.",
+    "global_link_not_member": "The bot is not in server `{server_id}` (or that ID is wrong). Invite it there first, then link.",
+    "global_link_unverified": "Couldn't check with Discord whether the bot is in server `{server_id}`. Try again in a minute.",
     "global_link_self": "That is this server. Run this in one server with the other server's ID.",
     "global_unlinked": "Server `{server_id}` is no longer linked. The entries it already has stay on its list.",
     "global_not_linked": "Server `{server_id}` is not linked to any server.",

@@ -107,6 +107,21 @@ async def test_copy_and_remove_reach_peers_only(session: AsyncSession) -> None:
     assert await _ids(session, B) == set()
 
 
+async def test_removal_never_takes_a_peers_own_entry(session: AsyncSession) -> None:
+    # B listed the image itself before the link: A's moderators removing it
+    # on A must not take it off B's list. Copies (source "linked") do go.
+    await _seed(session, A, 7)
+    await _seed(session, B, 7)
+    await _seed(session, C)
+    group = await GuildLinkRepository(session).link(A, B, added_by=9)
+    await GuildLinkRepository(session).link(A, C, added_by=9)
+    await sync_group(session, group)  # C gets a copy
+
+    assert await remove_hash_from_peers(session, A, f"{7:016x}") == [C]
+    assert await _ids(session, B) == {f"{7:016x}"}
+    assert await _ids(session, C) == set()
+
+
 async def test_an_unlinked_server_copies_nothing(session: AsyncSession) -> None:
     await _seed(session, A)
     gh = await GuildHashRepository(session, A).add(_gh(7))
@@ -147,9 +162,24 @@ async def test_a_removed_entry_goes_from_linked_servers(session: AsyncSession) -
     await deps.link_guilds(A, B, added_by=9)
     deps.pending_index_invalidations.clear()
 
-    assert await deps.remove_guild_hash(B, f"{42:016x}") == 1
-    assert await _ids(session, A) == set()
+    # Removed where it was added: the copy on B goes too.
+    assert await deps.remove_guild_hash(A, f"{42:016x}") == 1
+    assert await _ids(session, B) == set()
     assert deps.pending_index_invalidations == {A, B}
+
+
+async def test_removing_a_copy_keeps_the_owners_entry(session: AsyncSession) -> None:
+    await _seed(session, A, 42)
+    await _seed(session, B)
+    deps = _deps(session)
+    await deps.link_guilds(A, B, added_by=9)
+    deps.pending_index_invalidations.clear()
+
+    # B drops its copy; A's own entry is A's decision.
+    assert await deps.remove_guild_hash(B, f"{42:016x}") == 1
+    assert await _ids(session, B) == set()
+    assert await _ids(session, A) == {f"{42:016x}"}
+    assert deps.pending_index_invalidations == {B}
 
 
 async def test_unlink_keeps_the_copied_entries(session: AsyncSession) -> None:
@@ -161,6 +191,46 @@ async def test_unlink_keeps_the_copied_entries(session: AsyncSession) -> None:
     assert await _ids(session, B) == {f"{1:016x}"}
     await deps.add_guild_hash(A, _gh(2))
     assert f"{2:016x}" not in await _ids(session, B)  # no longer linked
+
+
+async def test_delete_server_data_unlinks_first(session: AsyncSession) -> None:
+    """/delete_server_data must leave the group, or copies would refill it."""
+    from optimus.db.repositories import GuildPurgeRepository
+
+    await _seed(session, A, 1)
+    await _seed(session, B)
+    deps = _deps(session)
+    await deps.link_guilds(A, B, added_by=9)
+    await GuildPurgeRepository(session, B).purge()
+
+    assert await GuildLinkRepository(session).group_of(B) is None
+    assert await GuildLinkRepository(session).group_of(A) is None  # a group of one dissolves
+    await _deps(session).add_guild_hash(A, _gh(2))
+    assert await GuildRepository(session).get(B) is None  # nothing recreated
+    assert await _ids(session, B) == set()
+
+
+async def test_an_import_looks_the_link_up_once(session: AsyncSession) -> None:
+    await _seed(session, A)
+    await _seed(session, B)
+    deps = _deps(session)
+    await deps.link_guilds(A, B, added_by=9)
+    calls = 0
+    real = GuildLinkRepository.peers
+
+    async def counting(self: GuildLinkRepository, guild_id: int) -> list[int]:
+        nonlocal calls
+        calls += 1
+        return await real(self, guild_id)
+
+    GuildLinkRepository.peers = counting  # type: ignore[method-assign]
+    try:
+        for p in range(1, 21):
+            await deps.add_guild_hash(A, _gh(p))
+    finally:
+        GuildLinkRepository.peers = real  # type: ignore[method-assign]
+    assert calls == 1
+    assert len(await _ids(session, B)) == 20
 
 
 # --- The campaign sweep's harvest ------------------------------------------

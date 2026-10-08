@@ -269,14 +269,19 @@ def _linked_copy(gh: GuildHash) -> GuildHash:
     )
 
 
-async def copy_hash_to_peers(session: AsyncSession, guild_id: int, gh: GuildHash) -> list[int]:
+async def copy_hash_to_peers(
+    session: AsyncSession, guild_id: int, gh: GuildHash, *, peers: Sequence[int] | None = None
+) -> list[int]:
     """Copy one of ``guild_id``'s blocklist entries to its linked servers.
 
     Returns the servers that got a new entry (their indexes need a reload).
-    A server that already lists the image keeps its own entry.
+    A server that already lists the image keeps its own entry. Pass ``peers``
+    when copying many entries, so the link is looked up once.
     """
+    if peers is None:
+        peers = await GuildLinkRepository(session).peers(guild_id)
     changed: list[int] = []
-    for peer in await GuildLinkRepository(session).peers(guild_id):
+    for peer in peers:
         repo = GuildHashRepository(session, peer)
         if await repo.get(gh.hash_id) is not None:
             continue
@@ -286,11 +291,23 @@ async def copy_hash_to_peers(session: AsyncSession, guild_id: int, gh: GuildHash
     return changed
 
 
-async def remove_hash_from_peers(session: AsyncSession, guild_id: int, hash_id: str) -> list[int]:
-    """Remove an entry from ``guild_id``'s linked servers; returns those changed."""
+async def remove_hash_from_peers(
+    session: AsyncSession, guild_id: int, hash_id: str, *, peers: Sequence[int] | None = None
+) -> list[int]:
+    """Remove the linked servers' *copies* of an entry; returns those changed.
+
+    Only rows that came from a link (``source == LINKED_SOURCE``) go. An entry
+    a peer added itself is that server's own decision, the same rule as on
+    the add side, where an existing entry is never overwritten: one server's
+    moderators can never take another server's own entries off its list.
+    """
+    if peers is None:
+        peers = await GuildLinkRepository(session).peers(guild_id)
     changed: list[int] = []
-    for peer in await GuildLinkRepository(session).peers(guild_id):
-        if await GuildHashRepository(session, peer).remove(hash_id):
+    for peer in peers:
+        repo = GuildHashRepository(session, peer)
+        row = await repo.get(hash_id)
+        if row is not None and row.source == LINKED_SOURCE and await repo.remove(hash_id):
             changed.append(peer)
     return changed
 
@@ -998,7 +1015,10 @@ class GuildPurgeRepository:
         are torn down with it.
         """
         gid = self._guild_id
-        total = 0
+        # Leave any link group first. Otherwise the next entry a linked server
+        # adds would recreate this guild's row and copy hashes (with other
+        # people's user ids) straight back in, undoing the erasure.
+        total = int(await GuildLinkRepository(self._session).unlink(gid))
         for stmt in (
             delete(Appeal).where(Appeal.guild_id == gid),
             delete(Detection).where(Detection.guild_id == gid),
