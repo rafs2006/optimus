@@ -127,6 +127,9 @@ ignore_imports = [
     "optimus.services.interactions.service -> optimus.services.detection.matcher",
     # Wiring: the interactions service builds moderation's REST adapter.
     "optimus.services.interactions.service -> optimus.services.moderation.rest_adapter",
+    # Needed here too, not only in the contract below: every service imports
+    # core.config, so without it each one "imports" interactions through it.
+    "optimus.core.config -> optimus.services.interactions.commands",
 ]
 
 [[tool.importlinter.contracts]]
