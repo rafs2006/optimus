@@ -14,6 +14,7 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from prometheus_client import Counter
@@ -32,7 +33,13 @@ from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContex
 from optimus.services.moderation.explain import explain_result
 from optimus.services.moderation.failures import FailureKind, classify
 from optimus.services.moderation.permissions import PermissionProbe
-from optimus.services.moderation.policy import Decision, PolicyInput, PolicyOutcome, decide
+from optimus.services.moderation.policy import (
+    QUEUED_FOR_REVIEW,
+    Decision,
+    PolicyInput,
+    PolicyOutcome,
+    decide,
+)
 from optimus.services.moderation.priority import (
     PriorityDispatcher,
     QueueFullError,
@@ -140,6 +147,10 @@ CardCloser = Callable[[int, int, int, int, int | None], Awaitable[CardCleanup]]
 #: Records a stored action on detection rows: (guild, detection ids, action).
 #: Used when a post's earlier, queued images are settled with the post.
 DetectionSettler = Callable[[int, Sequence[int], str], Awaitable[None]]
+#: Channels, among those given, where a moderator cleared one of the uploader's
+#: cards (False positive, Whitelist image, Dismiss) since a time:
+#: (guild, uploader, since, channels) -> cleared channels.
+SpreadClearedChannels = Callable[[int, int, datetime, Sequence[int]], Awaitable[set[int]]]
 
 #: Audit actor recorded when the bot itself settles an uploader's cards.
 _SYSTEM_ACTOR = 0
@@ -175,6 +186,11 @@ OPEN_CARD_LIMIT = 512
 #: own only asks a moderator -- is deleted quietly and counted on the settled
 #: card. The ban itself still rests on this server's own list.
 SETTLED_WINDOW_SECONDS = 10 * 60
+
+#: Upper bound on (uploader, matched hash) entries the spread-across-channels
+#: rule remembers (oldest evicted first). Generous: a raid is a handful of
+#: accounts, and an entry only lives for the spread window.
+SPREAD_TRACK_LIMIT = 4096
 
 
 @dataclass(slots=True)
@@ -230,6 +246,7 @@ class ModerationCoordinator:
         update_report: ReportUpdater | None = None,
         close_cards: CardCloser | None = None,
         settle_detections: DetectionSettler | None = None,
+        spread_cleared: SpreadClearedChannels | None = None,
         campaign_window_seconds: int = 24 * 3600,
         requeue_attempts: int = 0,
         requeue_delay_seconds: float = 0.0,
@@ -264,6 +281,7 @@ class ModerationCoordinator:
         # of their own (counted on the confirmed card instead).
         self._close_cards = close_cards
         self._settle_detections = settle_detections
+        self._spread_cleared = spread_cleared
         self._campaign_window = campaign_window_seconds
         self._campaigns: OrderedDict[tuple[int, int], _Campaign] = OrderedDict()
         self._recent_sweeps: dict[tuple[int, int], float] = {}
@@ -271,9 +289,9 @@ class ModerationCoordinator:
         #: recorded as soon as enforcement ran -- before the card is posted,
         #: so a post checked at the same moment can see it.
         self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
-        #: Per uploader, the channels their near matches were seen in and
-        #: when, for the spread-across-channels rule.
-        self._spread: OrderedDict[tuple[int, int], dict[int, float]] = OrderedDict()
+        #: Per (guild, uploader, matched hash), the channels that near match
+        #: was seen in and when, for the spread-across-channels rule.
+        self._spread: OrderedDict[tuple[int, int, str], dict[int, float]] = OrderedDict()
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -310,7 +328,7 @@ class ModerationCoordinator:
                 global_match=event.matched_source == "global",
             )
         )
-        spread = self._spread_channels(event, cfg, outcome)
+        spread = await self._spread_channels(event, cfg, outcome)
         if spread:
             outcome = PolicyOutcome(Decision.AUTO_ACT, cfg.configured_action, "spread_channels")
         DECISIONS.labels(decision=outcome.decision.value).inc()
@@ -377,18 +395,20 @@ class ModerationCoordinator:
         )
         return result
 
-    def _spread_channels(
+    async def _spread_channels(
         self, event: VerdictEvent, cfg: GuildModConfig, outcome: PolicyOutcome
     ) -> int:
-        """Channels this uploader spread near matches across, once that triggers action.
+        """Channels one near match was spread across, once that triggers action.
 
         Returns 0 unless the rule fires. Counts only what would otherwise ask a
         moderator about this server's own list: a near match, not a global
-        match, a member report or a risk scan. Never fires in safe mode or
-        under a report-only policy, and the privilege boundaries still apply
-        to the action, so a moderator posting in many channels is not banned.
+        match, a member report or a risk scan. Channels are counted per matched
+        blocklist entry, so it takes the same scam pasted around (#1561), not
+        assorted lookalikes. Never fires in safe mode or under a report-only
+        policy, and the privilege boundaries still apply to the action, so a
+        moderator posting in many channels is not banned.
         """
-        if cfg.spread_channels <= 0 or outcome.reason != "queued_for_review":
+        if cfg.spread_channels <= 0 or outcome.reason != QUEUED_FOR_REVIEW:
             return 0
         if event.verdict is not Verdict.SCAM or event.confirmed_by is not None:
             return 0
@@ -403,7 +423,7 @@ class ModerationCoordinator:
             # (see :meth:`_remove_followup`). One that reached here had its
             # delete refused, and that must stay visible on an open card.
             return 0
-        key = (event.guild_id, event.uploader_id)
+        key = (event.guild_id, event.uploader_id, event.matched_hash_id)
         now = time.monotonic()
         seen = {
             c: t
@@ -413,8 +433,16 @@ class ModerationCoordinator:
         seen[event.channel_id] = now
         self._spread[key] = seen
         self._spread.move_to_end(key)
-        while len(self._spread) > OPEN_CARD_LIMIT:
+        while len(self._spread) > SPREAD_TRACK_LIMIT:
             self._spread.popitem(last=False)
+        if len(seen) < cfg.spread_channels:
+            return 0
+        cleared = await self._cleared_channels(event, cfg, seen)
+        if cleared is None:
+            return 0  # could not check: leave it to a moderator
+        for channel in cleared:
+            # A moderator said no in that channel; it never counts again.
+            seen.pop(channel, None)
         if len(seen) < cfg.spread_channels:
             return 0
         _log.info(
@@ -422,10 +450,36 @@ class ModerationCoordinator:
             guild_id=event.guild_id,
             uploader_id=event.uploader_id,
             message_id=event.message_id,
+            matched_hash_id=event.matched_hash_id,
             channels=len(seen),
             window_seconds=cfg.spread_window_seconds,
         )
         return len(seen)
+
+    async def _cleared_channels(
+        self, event: VerdictEvent, cfg: GuildModConfig, seen: dict[int, float]
+    ) -> set[int] | None:
+        """Channels where a moderator cleared this uploader's card; ``None`` on failure.
+
+        Read from the database when the rule is about to fire, not kept in
+        memory: the buttons are handled by the interactions service, which may
+        be another process, and the decision must survive that and a restart.
+        """
+        if self._spread_cleared is None:
+            return set()
+        since = datetime.now(UTC) - timedelta(seconds=cfg.spread_window_seconds)
+        try:
+            return await self._spread_cleared(
+                event.guild_id, event.uploader_id, since, sorted(seen)
+            )
+        except Exception:
+            _log.warning(
+                "spread_check_failed",
+                guild_id=event.guild_id,
+                uploader_id=event.uploader_id,
+                exc_info=True,
+            )
+            return None
 
     async def _sweep_campaign(
         self, event: VerdictEvent, decision: Decision, action: Action

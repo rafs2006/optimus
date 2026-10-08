@@ -18,6 +18,7 @@ from typing import Any
 from optimus.contracts.events import Action
 from optimus.i18n import translate
 from optimus.services.moderation.review import merge_reports
+from tests.unit.test_confirm_campaign_cleanup import scope as _scope_fixture
 from tests.unit.test_coordinator import _target
 from tests.unit.test_departed_ban_auto_close import _departed, _event, _Harness
 
@@ -123,3 +124,117 @@ async def test_a_moderator_posting_around_is_not_banned() -> None:
     h = _h(target=_target(is_administrator=True))
     await _run(h, [_post(m, 200 + m) for m in range(10, 14)])
     assert "ban_member" not in h.rest.calls
+
+
+async def test_different_blocklist_entries_do_not_add_up() -> None:
+    h = _h()
+    await _run(
+        h,
+        [
+            _post(10, 201, matched_hash_id="h1")[:1],
+            _post(11, 202, matched_hash_id="h2")[:1],
+            _post(12, 203, matched_hash_id="h3")[:1],
+        ],
+    )
+    assert "ban_member" not in h.rest.calls
+
+
+async def test_a_channel_a_moderator_cleared_stops_counting() -> None:
+    # Review case: a moderator marks the cards in channels 201 and 202 as
+    # false positives; the same person posting in 203 must not be banned.
+    h = _h()
+    asked: list[tuple[Any, ...]] = []
+
+    async def cleared(guild: int, uploader: int, since: Any, channels: Any) -> set[int]:
+        asked.append((guild, uploader, tuple(channels)))
+        return {201, 202}
+
+    h.coord._spread_cleared = cleared
+    await _run(h, [_post(10, 201)[:1], _post(11, 202)[:1], _post(12, 203)[:1]])
+    assert "ban_member" not in h.rest.calls
+    assert asked == [(1, 42, (201, 202, 203))]
+    # The cleared channels are gone for good; two fresh ones still trigger.
+    await _run(h, [_post(13, 204)[:1], _post(14, 205)[:1]])
+    assert h.rest.calls.count("ban_member") == 1
+
+
+async def test_one_cleared_channel_out_of_four_still_triggers() -> None:
+    h = _h()
+
+    async def cleared(*_a: Any) -> set[int]:
+        return {201}
+
+    h.coord._spread_cleared = cleared
+    await _run(h, [_post(m, 191 + m)[:1] for m in range(10, 14)])
+    assert h.rest.calls.count("ban_member") == 1
+    note = translate("report.spread_channels", "en", channels=3, minutes=10)
+    assert note in h.reports[-1].action_taken
+
+
+async def test_a_failed_check_leaves_it_to_a_moderator() -> None:
+    h = _h()
+
+    async def broken(*_a: Any) -> set[int]:
+        raise RuntimeError("db down")
+
+    h.coord._spread_cleared = broken
+    await _run(h, [_post(m, 200 + m)[:1] for m in range(10, 14)])
+    assert "ban_member" not in h.rest.calls
+
+
+# --- The database check, wired as in production -----------------------------
+
+db_scope = _scope_fixture
+
+
+async def test_the_wired_check_finds_false_positive_whitelist_and_dismiss(
+    db_scope: Any,
+) -> None:
+    scope = db_scope
+    from datetime import UTC, datetime, timedelta
+
+    import fakeredis.aioredis
+
+    from optimus.core.config import get_settings
+    from optimus.db.models import Detection, Guild, ModAction
+    from optimus.services.moderation.service import build_coordinator
+
+    now = datetime.now(UTC)
+    async with scope() as s:
+        s.add(Guild(guild_id=7))
+        rows = {
+            201: ("reversed", None),  # False positive
+            202: ("report_only", "review.whitelist_image"),  # Whitelist image
+            203: ("dismissed", None),  # Dismiss
+            204: ("report_only", "review.confirm"),  # still a scam call
+            205: ("report_only", None),  # untouched
+        }
+        for n, (channel, (action, audit)) in enumerate(rows.items()):
+            det = Detection(
+                guild_id=7,
+                channel_id=channel,
+                message_id=10 + n,
+                attachment_id=n,
+                uploader_id=42,
+                distances={},
+                verdict="scam",
+                idempotency_key=f"spread-{n}",
+                action_taken=action,
+                created_at=now,
+            )
+            s.add(det)
+            await s.flush()
+            if audit:
+                s.add(ModAction(guild_id=7, actor_id=5, action=audit, target=str(det.id)))
+    coord, _dispatcher = build_coordinator(
+        get_settings(),
+        scope,
+        rest=object(),
+        redis=fakeredis.aioredis.FakeRedis(decode_responses=True),
+        bot_user_id=999,
+    )
+    assert coord._spread_cleared is not None
+    since = now - timedelta(minutes=10)
+    found = await coord._spread_cleared(7, 42, since, [201, 202, 203, 204, 205])
+    assert found == {201, 202, 203}
+    assert await coord._spread_cleared(7, 43, since, [201]) == set()  # other uploader
