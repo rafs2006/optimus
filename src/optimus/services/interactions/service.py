@@ -72,7 +72,6 @@ from optimus.services.interactions.handlers import (
     SetupFailure,
     handle_command,
     handle_component,
-    handle_review_button,
 )
 from optimus.services.interactions.logic import (
     MAX_IMPORT_BYTES,
@@ -81,8 +80,9 @@ from optimus.services.interactions.logic import (
     InteractionRejected,
     decode_component_id,
 )
-from optimus.services.moderation.explain import explain_preflight
-from optimus.services.moderation.permissions import (
+from optimus.services.interactions.review_buttons import handle_review_button
+from optimus.shared.explain import explain_preflight
+from optimus.shared.permissions import (
     AccessReport,
     ChannelInventory,
     PermissionProbe,
@@ -91,7 +91,7 @@ from optimus.services.moderation.permissions import (
     preflight_punitive,
     punitive_requirement,
 )
-from optimus.services.moderation.review import (
+from optimus.shared.review import (
     ReportData,
     build_folded_embed,
     decode_custom_id,

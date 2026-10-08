@@ -419,6 +419,56 @@ The two places untrusted input enters the system are hardened in depth; the
   ([`globaldb/promotion.py`](../src/optimus/globaldb/promotion.py)), and
   verification is fail-closed.
 
+## Code boundaries and size
+
+CI enforces the shape described above. Both gates run in `.github/workflows/ci.yml`.
+
+### Who may import what
+
+`uv run lint-imports` checks the contracts in `pyproject.toml`
+(`[tool.importlinter]`):
+
+- **Services do not import each other.** `detection`, `gateway`, `ingest`,
+  `interactions`, `moderation` and `scheduler` talk through events on the bus.
+  Code more than one service needs lives in
+  [`shared/`](../src/optimus/shared/): the review-card format (`review`),
+  permission maths (`permissions`), failure classification (`failures`),
+  action outcomes (`outcomes`), audit reasons (`reasons`), their
+  plain-language explanations (`explain`), `SYSTEM_ACTOR` and
+  `DEFAULT_WHITELIST_RADIUS`.
+- **`shared`, `contracts`, `core` and `db` import no service.**
+- The few places that still break a rule are listed in `ignore_imports`, each
+  with the reason. That list is debt to pay down. Don't add to it without
+  review.
+
+### Keeping files small
+
+`uv run python scripts/check_structure.py` checks against
+[`structure-baseline.json`](../structure-baseline.json):
+
+- A file may not grow past its ceiling. A file without one, which means every
+  new file, stays at or under 500 lines.
+- A function ruff flags as too complex (C901, over 10) or too long (PLR0915,
+  over 50 statements) must already be in the baseline and may not get worse.
+- Ceilings only go down. When code shrinks, `--update` locks the gain in. It
+  never raises or adds a ceiling.
+- Function ceilings are keyed by `path::qualified_name`. Moving or renaming a
+  function that already has one, which is what a split does, makes it a new
+  offender. If it still exceeds the limits after the move, the PR needs
+  `--update --allow-raise` and the label. Better: split it as you move it.
+
+When something outgrows its limit, split it by feature, not by layer. The
+review buttons are the model: `interactions/review_buttons.py` holds one
+function per button behind a dispatch table, out of `handlers.py`. The next
+splits are scam-image list (`/scamhash`), setup and queue modules out of
+`handlers.py`, and `ModerationCoordinator._post_report`.
+
+**Urgent fix in a big file.** A fix shouldn't wait for a refactor. Run
+`scripts/check_structure.py --update --allow-raise`, commit the baseline and
+put the `structure-exception` label on the PR. Without the label, CI fails any
+PR that raises a ceiling. With it, the raise is reported as a warning and
+stays visible in the diff.
+
 ## Where to look next
 
 - Event contracts and subjects: [`contracts/events.py`](../src/optimus/contracts/events.py)

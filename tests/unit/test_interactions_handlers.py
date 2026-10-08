@@ -29,7 +29,6 @@ from optimus.services.interactions.handlers import (
     _format_age,
     handle_command,
     handle_component,
-    handle_review_button,
     review_action_permission,
 )
 from optimus.services.interactions.logic import (
@@ -38,14 +37,15 @@ from optimus.services.interactions.logic import (
     InteractionRejected,
     Permission,
 )
+from optimus.services.interactions.review_buttons import handle_review_button
 from optimus.services.interactions.service import render
-from optimus.services.moderation.permissions import (
+from optimus.shared.permissions import (
     MANAGE_MESSAGES,
     VIEW_CHANNEL,
     build_access_report,
 )
-from optimus.services.moderation.reasons import confirmed_reason
-from optimus.services.moderation.review import ParsedCustomId, ReviewAction
+from optimus.shared.reasons import confirmed_reason
+from optimus.shared.review import ParsedCustomId, ReviewAction
 
 ADMIN = int(Permission.ADMINISTRATOR)
 MANAGE = int(Permission.MANAGE_GUILD)

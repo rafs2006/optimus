@@ -24,10 +24,10 @@ from optimus.core.config import Sensitivity
 from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit
 from optimus.hashing.ensemble import PRESETS, compare
 from optimus.hashing.perceptual import HASH_BITS
-from optimus.services.moderation import review as review_mod
 from optimus.services.moderation.policy import Decision, PolicyInput, decide
-from optimus.services.moderation.review import REVIEW_BUTTONS, ReviewAction, build_action_rows
 from optimus.services.moderation.safemode import Baseline, evaluate, update_baseline
+from optimus.shared import review as review_mod
+from optimus.shared.review import REVIEW_BUTTONS, ReviewAction, build_action_rows
 
 # --- rate limiter --------------------------------------------------------------
 

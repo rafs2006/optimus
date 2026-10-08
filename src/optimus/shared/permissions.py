@@ -14,7 +14,7 @@ Two deliberate properties:
 * **Fails open.** When permissions cannot be resolved (cache miss, unknown
   channel) the preflight returns :attr:`PreflightResult.ok`, so a stale cache
   can never silently stop enforcement. A real ``403`` is still classified by
-  :mod:`optimus.services.moderation.failures`.
+  :mod:`optimus.shared.failures`.
 * **Pure and hikari-free.** Bit values are declared locally (asserted against
   hikari in tests) so this logic is unit-testable without a live gateway.
 """
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from optimus.contracts.events import Action
-from optimus.services.moderation.failures import Failure, FailureKind
+from optimus.shared.failures import Failure, FailureKind
 
 #: Discord permission bits. Values are pinned by a test against
 #: ``hikari.Permissions`` so a hikari change cannot silently skew a preflight.

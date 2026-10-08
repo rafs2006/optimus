@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 
 from optimus.contracts.events import Action
-from optimus.services.moderation.actions import ActionResult, Step, StepOutcome
-from optimus.services.moderation.explain import explain_preflight, explain_result, explain_step
-from optimus.services.moderation.failures import Failure, FailureKind
-from optimus.services.moderation.permissions import PreflightResult
+from optimus.shared.explain import explain_preflight, explain_result, explain_step
+from optimus.shared.failures import Failure, FailureKind
+from optimus.shared.outcomes import ActionResult, Step, StepOutcome
+from optimus.shared.permissions import PreflightResult
 
 _CHANNEL = 1402887429324673035
 

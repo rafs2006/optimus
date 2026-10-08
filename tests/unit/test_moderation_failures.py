@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from optimus.core.circuit import CircuitOpenError
-from optimus.services.moderation.failures import Failure, FailureKind, classify
+from optimus.shared.failures import Failure, FailureKind, classify
 
 
 class _DiscordError(Exception):

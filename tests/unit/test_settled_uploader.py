@@ -18,7 +18,7 @@ from structlog.testing import capture_logs
 
 from optimus.contracts.events import Action
 from optimus.services.moderation import coordinator as coordinator_module
-from optimus.services.moderation.review import merge_reports
+from optimus.shared.review import merge_reports
 from tests.unit.test_departed_ban_auto_close import _data, _departed, _event, _Harness
 
 # --- Within the settled window ----------------------------------------------

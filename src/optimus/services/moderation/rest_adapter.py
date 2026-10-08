@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 import hikari
 
 if TYPE_CHECKING:
-    from optimus.services.moderation.review import ReportData
+    from optimus.shared.review import ReportData
 
 
 class HikariRestActions:

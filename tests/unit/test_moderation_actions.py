@@ -9,14 +9,10 @@ from optimus.contracts.events import Action
 from optimus.core.backoff import BackoffPolicy
 from optimus.core.circuit import CircuitBreaker
 from optimus.core.ratelimit import InMemoryRateLimiter, RateLimit
-from optimus.services.moderation.actions import (
-    ActionExecutor,
-    ActionRequest,
-    Step,
-    render_dm,
-)
+from optimus.services.moderation.actions import ActionExecutor, ActionRequest, render_dm
 from optimus.services.moderation.cooldown import Cooldown
-from optimus.services.moderation.reasons import REASON_PREFIX
+from optimus.shared.outcomes import Step
+from optimus.shared.reasons import REASON_PREFIX
 
 
 class _FakeRest:
@@ -388,7 +384,7 @@ class _StubProbe:
 
 
 def _probe(*, channel: int | None = None, guild: int | None = None) -> _StubProbe:
-    from optimus.services.moderation import permissions as perms
+    from optimus.shared import permissions as perms
 
     return _StubProbe(
         channel=perms.DELETE_REQUIRES if channel is None else channel,

@@ -35,7 +35,7 @@ from optimus.dashboard.auth import (
 )
 from optimus.db.engine import SessionScope
 from optimus.db.repositories import GuildListRepository
-from optimus.services.moderation.review import stored_action_label
+from optimus.shared.review import stored_action_label
 
 _log = get_logger(__name__)
 

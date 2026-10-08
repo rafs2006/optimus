@@ -13,8 +13,8 @@ import hikari
 import pytest
 
 from optimus.contracts.events import Action
-from optimus.services.moderation import permissions as perms
-from optimus.services.moderation.failures import FailureKind
+from optimus.shared import permissions as perms
+from optimus.shared.failures import FailureKind
 
 # -- constants ---------------------------------------------------------------
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from optimus.core.logging import get_logger
-from optimus.services.moderation.permissions import Overwrite, effective_permissions
+from optimus.shared.permissions import Overwrite, effective_permissions
 
 _log = get_logger(__name__)
 

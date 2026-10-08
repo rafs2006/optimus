@@ -17,7 +17,7 @@ from typing import Any
 
 from optimus.contracts.events import Action
 from optimus.i18n import translate
-from optimus.services.moderation.review import merge_reports
+from optimus.shared.review import merge_reports
 from tests.unit.test_confirm_campaign_cleanup import scope as _scope_fixture
 from tests.unit.test_coordinator import _target
 from tests.unit.test_departed_ban_auto_close import _departed, _event, _Harness

@@ -36,13 +36,13 @@ from optimus.services.gateway.bot import GATEWAY_INTENTS, GatewayService, shard_
 from optimus.services.gateway.permission_probe import CachePermissionProbe, to_overwrites
 from optimus.services.gateway.watchdog import GatewayWatchdog
 from optimus.services.interactions.service import InteractionService, respond_to_interaction
-from optimus.services.moderation.explain import (
+from optimus.services.moderation.rest_adapter import HikariRestActions
+from optimus.services.moderation.service import _post_report
+from optimus.shared.explain import (
     explain_rescan_summary,
     explain_setup_replay_summary,
 )
-from optimus.services.moderation.rest_adapter import HikariRestActions
-from optimus.services.moderation.review import ReportData, stored_action_label
-from optimus.services.moderation.service import _post_report
+from optimus.shared.review import ReportData, stored_action_label
 
 if TYPE_CHECKING:
     from optimus.app.simple import SimpleApp

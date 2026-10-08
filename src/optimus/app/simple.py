@@ -64,10 +64,10 @@ from optimus.services.detection.service import build_service as build_detection
 from optimus.services.ingest.service import _handle as ingest_handle
 from optimus.services.ingest.service import build_worker as build_ingest
 from optimus.services.ingest.worker import IngestWorker
-from optimus.services.moderation.actions import ActionResult
 from optimus.services.moderation.priority import PriorityDispatcher
 from optimus.services.moderation.service import ModerationService, build_coordinator
 from optimus.services.scheduler.service import SchedulerService
+from optimus.shared.outcomes import ActionResult
 
 _log = get_logger(__name__)
 
@@ -451,7 +451,7 @@ async def _register_commands(  # pragma: no cover - net
         build_command_builders,
         build_context_menu_command_builders,
     )
-    from optimus.services.moderation.review import COMMAND_IDS
+    from optimus.shared.review import COMMAND_IDS
 
     try:
         registered = await rest.set_application_commands(  # type: ignore[attr-defined]

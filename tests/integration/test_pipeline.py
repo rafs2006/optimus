@@ -61,8 +61,8 @@ from optimus.services.moderation.actions import ActionExecutor
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
-from optimus.services.moderation.review import ReportData
 from optimus.services.moderation.service import ModerationService
+from optimus.shared.review import ReportData
 from tests.integration._harness import (
     InMemoryBus,
     RecordingRest,

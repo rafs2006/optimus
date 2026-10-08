@@ -406,7 +406,7 @@ def parse_message_reference(text: str) -> tuple[int | None, int]:
 class ComponentAction(StrEnum):
     """Non-report component actions, carried in the ``om:v1`` custom-id scheme.
 
-    These complement :class:`optimus.services.moderation.review.ReviewAction`
+    These complement :class:`optimus.shared.review.ReviewAction`
     (the report buttons) with the appeal lifecycle and the safe-mode resume
     control. They share the ``om:v1:<action>:<id>`` envelope.
     """

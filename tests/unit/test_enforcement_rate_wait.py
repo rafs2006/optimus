@@ -27,11 +27,10 @@ from optimus.services.moderation.actions import (
     MAX_RETRY_AFTER_SECONDS,
     ActionExecutor,
     ActionRequest,
-    ActionResult,
-    Step,
 )
 from optimus.services.moderation.cooldown import Cooldown
-from optimus.services.moderation.failures import FailureKind, classify
+from optimus.shared.failures import FailureKind, classify
+from optimus.shared.outcomes import ActionResult, Step
 from tests.unit.test_departed_ban_auto_close import _departed, _event, _Harness
 from tests.unit.test_moderation_actions import _FakeRest
 

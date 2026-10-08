@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import pytest
 
-from optimus.services.moderation.reasons import (
+from optimus.shared.reasons import (
     AUDIT_REASON_LIMIT,
     REASON_PREFIX,
     appeal_approved_reason,

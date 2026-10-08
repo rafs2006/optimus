@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from optimus.services.moderation import review as review_mod
-from optimus.services.moderation.review import (
+from optimus.shared import review as review_mod
+from optimus.shared.review import (
     BUTTON_LABELS,
     REVIEW_BUTTONS,
     ReportData,

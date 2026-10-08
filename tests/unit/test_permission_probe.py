@@ -14,7 +14,7 @@ import hikari
 import pytest
 
 from optimus.services.gateway.permission_probe import CachePermissionProbe
-from optimus.services.moderation import permissions as perms
+from optimus.shared import permissions as perms
 
 _GUILD = 100
 _BOT = 7
