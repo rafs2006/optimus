@@ -35,7 +35,7 @@ from prometheus_client import Counter
 from optimus.core.logging import get_logger
 from optimus.db.engine import SessionScope
 from optimus.db.models import GuildHash
-from optimus.db.repositories import DetectionRepository, GuildHashRepository
+from optimus.db.repositories import DetectionRepository, GuildHashRepository, copy_hash_to_peers
 
 _log = get_logger(__name__)
 
@@ -68,6 +68,8 @@ class SweepOutcome:
     channels: int = 0
     #: New blocklist hash ids harvested from the swept images.
     harvested: tuple[str, ...] = field(default=())
+    #: Linked servers that got a copy of a harvested hash (indexes to reload).
+    linked: tuple[int, ...] = field(default=())
 
     @property
     def touched(self) -> bool:
@@ -162,7 +164,7 @@ class CampaignSweeper:
             deleted += 1
             SWEPT_MESSAGES.labels(outcome="deleted").inc()
 
-        stored = await self._harvest(guild_id, harvested, added_by=added_by)
+        stored, linked = await self._harvest(guild_id, harvested, added_by=added_by)
 
         _log.info(
             "campaign_swept",
@@ -178,25 +180,28 @@ class CampaignSweeper:
             failed=failed,
             channels=len(channels),
             harvested=tuple(stored),
+            linked=tuple(linked),
         )
 
     async def _harvest(
         self, guild_id: int, candidates: dict[str, dict[str, int]], *, added_by: int
-    ) -> list[str]:
-        """Add each distinct swept image to the guild blocklist.
+    ) -> tuple[list[str], list[int]]:
+        """Add each distinct swept image to the guild blocklist (and linked servers).
 
         Existing entries are left alone rather than overwritten, so a hash a
-        moderator added by hand keeps its original attribution.
+        moderator added by hand keeps its original attribution. Returns the
+        new hash ids and the linked servers that got a copy.
         """
         if not candidates:
-            return []
+            return [], []
         stored: list[str] = []
+        linked: set[int] = set()
         async with self._scope() as session:
             repo = GuildHashRepository(session, guild_id)
             for hash_id, ensemble in candidates.items():
                 if await repo.get(hash_id) is not None:
                     continue
-                await repo.add(
+                gh = await repo.add(
                     GuildHash(
                         hash_id=hash_id,
                         phash=ensemble["phash"],
@@ -209,4 +214,5 @@ class CampaignSweeper:
                 )
                 stored.append(hash_id)
                 SWEPT_HASHES.inc()
-        return stored
+                linked.update(await copy_hash_to_peers(session, guild_id, gh))
+        return stored, sorted(linked)

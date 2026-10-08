@@ -240,3 +240,20 @@ async def test_revoke_without_submitter_skips_reputation_dock(session: AsyncSess
     row = await GlobalHashRepository(session).get("orphan2")
     assert row is not None
     assert row.status == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_promotion_without_a_signing_key_keeps_the_vote_and_does_not_raise(
+    session: AsyncSession,
+) -> None:
+    # A deployment with no OPTIMUS_GLOBAL_SIGNING_PRIVATE_KEY used to raise at
+    # the promoting vote, rolling back that moderator's whole Confirm.
+    svc = _service(session)
+    await _submit(svc, "h1", user=1)
+    await svc.approve(hash_id="h1", approver_user_id=11, approver_guild_id=100)
+    second = await svc.approve(hash_id="h1", approver_user_id=22, approver_guild_id=200)
+    assert second.promoted is False
+    row = await GlobalHashRepository(session).get("h1")
+    assert row is not None
+    assert row.status == "candidate"
+    assert row.signature is None

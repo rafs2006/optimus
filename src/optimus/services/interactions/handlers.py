@@ -227,6 +227,14 @@ class KnownImage:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkResult:
+    """Servers in a link group after ``/global link_server``, and what each gained."""
+
+    members: tuple[int, ...]
+    gained: dict[int, int]
+
+
+@dataclass(frozen=True, slots=True)
 class ImageHashes:
     """A resolved hash ensemble for the image behind a detection.
 
@@ -269,6 +277,8 @@ class ModerationRest(Protocol):
     ) -> int: ...
 
     async def fetch_owner_ids(self) -> set[int]: ...
+
+    async def is_member_of(self, guild_id: int) -> bool | None: ...
 
     async def post_review_card(self, channel_id: int, items: Sequence[ReportData]) -> int:
         """Post one (grouped) review card with its buttons; return its message id."""
@@ -384,6 +394,22 @@ class InteractionDeps(Protocol):
 
     async def list_trusted_guilds(self) -> list[int]:
         """Ids of all approved contributor guilds, oldest first."""
+        ...
+
+    async def rest_bot_in_guild(self, guild_id: int) -> bool | None:
+        """Whether the bot is in ``guild_id`` (``None``: Discord could not say)."""
+        ...
+
+    async def link_guilds(self, guild_id: int, other_id: int, *, added_by: int) -> LinkResult:
+        """Link two servers so they keep one blocklist; copies entries both ways."""
+        ...
+
+    async def unlink_guild(self, guild_id: int) -> bool:
+        """Take a server out of its link group; ``False`` if it was not linked."""
+        ...
+
+    async def list_links(self) -> list[list[int]]:
+        """Every link group, as lists of server ids."""
         ...
 
     async def global_vote(
@@ -1444,6 +1470,16 @@ async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> Interac
     # set (lookup failed) refuses — fail closed on the trust-granting command.
     if ctx.user_id not in await deps.rest_owner_ids():
         return InteractionResponse("command.owner_only")
+    if ctx.subcommand == "links":
+        groups = await deps.list_links()
+        if not groups:
+            return InteractionResponse("command.global_links_none")
+        listing = "\n".join(
+            "\u2022 " + " \u2194 ".join(f"`{gid}`" for gid in group) for group in groups
+        )
+        return InteractionResponse(
+            "command.global_links", {"count": len(groups), "listing": listing}
+        )
     if ctx.subcommand == "servers":
         ids = await deps.list_trusted_guilds()
         if not ids:
@@ -1461,6 +1497,34 @@ async def _cmd_global(ctx: InteractionContext, deps: InteractionDeps) -> Interac
         if ctx.guild_id is not None:
             await deps.audit(ctx.guild_id, ctx.user_id, "global.approve_server", target=raw)
         key = "command.global_server_approved" if added else "command.global_server_already"
+        return InteractionResponse(key, {"server_id": raw})
+    if ctx.subcommand == "link_server":
+        if ctx.guild_id is None:
+            raise InteractionRejected(CommandError.GUILD_ONLY)
+        if server_id == ctx.guild_id:
+            return InteractionResponse("command.global_link_self")
+        # A typo'd id must not create a guild row and a copy of the list for
+        # a server the bot is not in. Unknown (Discord outage) refuses too.
+        member = await deps.rest_bot_in_guild(server_id)
+        if member is not True:
+            key = (
+                "command.global_link_not_member"
+                if member is False
+                else "command.global_link_unverified"
+            )
+            return InteractionResponse(key, {"server_id": raw})
+        result = await deps.link_guilds(ctx.guild_id, server_id, added_by=ctx.user_id)
+        await deps.audit(ctx.guild_id, ctx.user_id, "global.link_server", target=raw)
+        gained = ", ".join(f"`{g}` +{result.gained.get(g, 0)}" for g in result.members)
+        return InteractionResponse(
+            "command.global_linked",
+            {"server_id": raw, "count": len(result.members), "gained": gained},
+        )
+    if ctx.subcommand == "unlink_server":
+        removed = await deps.unlink_guild(server_id)
+        if ctx.guild_id is not None:
+            await deps.audit(ctx.guild_id, ctx.user_id, "global.unlink_server", target=raw)
+        key = "command.global_unlinked" if removed else "command.global_not_linked"
         return InteractionResponse(key, {"server_id": raw})
     if ctx.subcommand == "revoke_server":
         removed = await deps.untrust_guild(server_id)

@@ -230,6 +230,23 @@ class GlobalTrustedGuild(Base):
     created_at: Mapped[datetime] = _ts()
 
 
+class GuildLink(Base):
+    """A server's membership in a group of linked servers (owner-managed).
+
+    Linked servers keep one blocklist: an entry added to or removed from one
+    is added to or removed from every other server in the group, and each
+    copy is a local entry there, acted on like the server's own. Meant for
+    servers run by the same people; managed with ``/global link_server``.
+    """
+
+    __tablename__ = "guild_links"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    group_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    added_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = _ts()
+
+
 class GlobalSubmitter(Base):
     """A user's reputation as a contributor to the global hash database."""
 

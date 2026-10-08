@@ -354,6 +354,16 @@ query filters by `guild_id`; no raw SQL/`text()` interpolation). Key tables:
   whitelisted images. `guild_hashes` is keyed by `(guild_id, hash_id)` since
   migration `0011` ([#62](https://github.com/rafs2006/optimus/pull/62)), so the
   same image can be listed on more than one server.
+- **guild_links** (migration `0013`) — owner-managed groups of linked servers
+  that keep one blocklist (`/global link_server`). This is the one place a
+  write crosses servers: an entry added on one member is copied into the
+  others' `guild_hashes` (`source="linked"`, original `added_by`), and
+  removing it removes only those copies, never an entry a peer added itself.
+  **Trust note:** a copy is a local entry, so a linked peer's moderators can
+  trigger *this* server's `action_policy` (auto-delete or ban). Link only
+  servers run by the same people. Linking requires the bot to be in both
+  servers, and `/delete_server_data` leaves the group before erasing, so
+  copies can't refill a wiped server.
 - **global_hashes** / **global_hash_approvals** / **global_submitters** —
   the signed cross-guild promoted-hash database and its approval/reputation
   bookkeeping.

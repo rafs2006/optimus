@@ -144,3 +144,16 @@ async def test_fetch_owner_ids_caches_after_first_fetch(rest: Any) -> None:
     assert await adapter.fetch_owner_ids() == {111}
     assert await adapter.fetch_owner_ids() == {111}
     rest.fetch_application.assert_awaited_once()
+
+
+async def test_is_member_of(rest: Any) -> None:
+    adapter = HikariRestActions(rest)
+    assert await adapter.is_member_of(5) is True
+    rest.fetch_guild.assert_awaited_once_with(5)
+
+    rest.fetch_guild.side_effect = hikari.NotFoundError("u", {}, b"")  # type: ignore[arg-type]
+    assert await adapter.is_member_of(5) is False
+    rest.fetch_guild.side_effect = hikari.ForbiddenError("u", {}, b"")  # type: ignore[arg-type]
+    assert await adapter.is_member_of(5) is False
+    rest.fetch_guild.side_effect = RuntimeError("outage")
+    assert await adapter.is_member_of(5) is None

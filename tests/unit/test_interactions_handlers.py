@@ -85,6 +85,9 @@ class FakeDeps:
         #: hash_ids with a live global entry — global_dispute returns True.
         self._global_hashes: set[str] = set(flags.get("global_hashes", set()))
         self.global_votes: list[dict[str, Any]] = []
+        self.links: list[set[int]] = []
+        #: what rest_bot_in_guild answers: True, False (not in it) or None.
+        self.bot_in_guild: bool | None = flags.get("bot_in_guild", True)
         self.global_disputes: list[str] = []
         #: attachment_id -> exception to raise, or a hash_id string to return.
         self._attachment_outcomes: dict[int, Any] = flags.get("attachment_outcomes", {})
@@ -251,6 +254,23 @@ class FakeDeps:
 
     async def list_trusted_guilds(self) -> list[int]:
         return sorted(self.trusted_guilds)
+
+    async def rest_bot_in_guild(self, guild_id: int) -> bool | None:
+        return self.bot_in_guild
+
+    async def link_guilds(self, guild_id: int, other_id: int, *, added_by: int) -> Any:
+        from optimus.services.interactions.handlers import LinkResult
+
+        self.links.append({guild_id, other_id})
+        return LinkResult(members=tuple(sorted({guild_id, other_id})), gained={other_id: 3})
+
+    async def unlink_guild(self, guild_id: int) -> bool:
+        before = len(self.links)
+        self.links = [g for g in self.links if guild_id not in g]
+        return len(self.links) != before
+
+    async def list_links(self) -> list[list[int]]:
+        return [sorted(g) for g in self.links]
 
     async def global_vote(
         self,
@@ -2389,3 +2409,48 @@ async def test_evidence_storage_is_no_longer_a_config_field() -> None:
         )
     assert exc.value.reason is CommandError.UNKNOWN_FIELD
     assert "optin_evidence_storage" not in _CONFIG_VIEW_ORDER
+
+
+@pytest.mark.asyncio
+async def test_global_link_unlink_and_list() -> None:
+    deps = FakeDeps(owner_ids={99})
+    resp = await handle_command(_ctx("global", subcommand="links"), deps)
+    assert resp.i18n_key == "command.global_links_none"
+
+    resp = await handle_command(_ctx("global", subcommand="link_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.global_linked"
+    assert resp.params == {"server_id": "5", "count": 2, "gained": "`1` +0, `5` +3"}
+    assert (1, 99, "global.link_server", "5") in deps.audits
+
+    resp = await handle_command(_ctx("global", subcommand="links"), deps)
+    assert resp.i18n_key == "command.global_links"
+    assert resp.params == {"count": 1, "listing": "\u2022 `1` \u2194 `5`"}
+
+    resp = await handle_command(_ctx("global", subcommand="unlink_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.global_unlinked"
+    resp = await handle_command(_ctx("global", subcommand="unlink_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.global_not_linked"
+
+
+@pytest.mark.asyncio
+async def test_global_link_refuses_this_server_and_non_owners() -> None:
+    deps = FakeDeps(owner_ids={99})
+    resp = await handle_command(_ctx("global", subcommand="link_server", server_id="1"), deps)
+    assert resp.i18n_key == "command.global_link_self"
+    deps = FakeDeps(owner_ids={1000})
+    resp = await handle_command(_ctx("global", subcommand="link_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.owner_only"
+    assert deps.links == []
+
+
+@pytest.mark.asyncio
+async def test_global_link_refuses_a_server_the_bot_is_not_in() -> None:
+    deps = FakeDeps(owner_ids={99}, bot_in_guild=False)
+    resp = await handle_command(_ctx("global", subcommand="link_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.global_link_not_member"
+    assert deps.links == []
+
+    deps = FakeDeps(owner_ids={99}, bot_in_guild=None)  # Discord could not say
+    resp = await handle_command(_ctx("global", subcommand="link_server", server_id="5"), deps)
+    assert resp.i18n_key == "command.global_link_unverified"
+    assert deps.links == []

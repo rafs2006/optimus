@@ -176,6 +176,20 @@ class HikariRestActions:
         self.__dict__["_owner_ids"] = ids
         return ids
 
+    async def is_member_of(self, guild_id: int) -> bool | None:
+        """Whether the bot is in ``guild_id``: ``None`` when Discord can't say.
+
+        Discord answers 403/404 for a server the bot is not in (or that does
+        not exist); anything else is an outage, not an answer.
+        """
+        try:
+            await self._rest.fetch_guild(guild_id)
+        except (hikari.NotFoundError, hikari.ForbiddenError):
+            return False
+        except Exception:
+            return None
+        return True
+
     async def send_dm(self, user_id: int, content: str) -> None:
         channel = await self._rest.create_dm_channel(user_id)
         await self._rest.create_message(channel.id, content)

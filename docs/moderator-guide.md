@@ -344,6 +344,34 @@ see the command):
 | `/global approve_server <server_id>` | Approve a server: its mods' **Confirm scam** clicks count as global votes. |
 | `/global revoke_server <server_id>` | Remove a server from the approved contributors. |
 | `/global servers` | List approved contributor servers. |
+| `/global link_server <server_id>` | Run in one server: link it with another so both keep one blocklist (see below). |
+| `/global unlink_server <server_id>` | Take a server out of its linked group. Its entries stay on its list. |
+| `/global links` | List the groups of linked servers. |
+
+## Linked servers
+
+For servers run by the same people. Linked servers keep **one blocklist**:
+
+- Linking copies each server's entries to the others, so all of them end up
+  with the full list. The reply says how many entries each server gained.
+- From then on, an entry added on one server is added on all of them: by
+  `/scamhash add`, `/scamhash import`, **Confirm scam**, or the campaign sweep.
+  `/scamhash remove` removes the entry there and the other servers' copies
+  of it. An entry another server added itself stays on that server's list:
+  each server's own entries can only be removed on that server.
+- A copied entry is a local entry on each server, so it is acted on with that
+  server's own `action_policy`, like any entry of its own. This is the
+  difference from the global database, which only ever asks a moderator.
+- The whitelist, settings and review cards stay per server.
+- `/global unlink_server` stops the copying. Entries already copied stay.
+- The bot must be in both servers to link them. `/delete_server_data` takes a
+  server out of its group before erasing its data.
+- A copied entry is acted on with this server's `action_policy`, so the other
+  server's moderators can trigger automatic deletes or bans here. Link only
+  servers you run yourselves.
+
+A server is in one group at most; linking servers from two groups merges the
+groups.
 
 ## The global scam database
 
@@ -373,7 +401,13 @@ community can ever cause action on your server**:
   scammer could set up a server, report their own image, and pull it off the
   list for everyone.
 - Promoted hashes are cryptographically signed; rate limits and reputation
-  scores throttle even approved contributors.
+  scores throttle even approved contributors. Signing needs
+  `OPTIMUS_GLOBAL_SIGNING_PRIVATE_KEY` and `..._PUBLIC_KEY` on the
+  deployment; without them votes are kept but nothing is promoted (the log
+  says `global_promotion_unsigned`).
+- **What votes:** only **Confirm scam**. `/scamhash add`, cards the bot
+  handled on its own and the campaign sweep do not. Use linked servers to
+  share a whole list between your own servers.
 
 ## Settings reference (`/config set`)
 

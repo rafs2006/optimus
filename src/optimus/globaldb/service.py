@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from optimus.core.logging import get_logger
 from optimus.core.ratelimit import RateLimit, RateLimiter
 from optimus.db.models import GlobalHash
 from optimus.db.repositories import GlobalHashRepository, GlobalSubmitterRepository
@@ -30,6 +31,8 @@ from optimus.globaldb.promotion import (
     evaluate_promotion,
 )
 from optimus.globaldb.signing import HashRecord, sign_record, verify_record
+
+_log = get_logger(__name__)
 
 #: Default per-user submission budget: 5 candidates, refilling at 1 per minute.
 SUBMIT_RATE = RateLimit(capacity=5.0, refill_rate=1.0 / 60.0)
@@ -126,7 +129,13 @@ class GlobalHashService:
             [ApprovalRecord(a.approver_user_id, a.approver_guild_id) for a in approvals]
         )
 
-        if decision.promotable and row.status != "promoted":
+        if decision.promotable and row.status != "promoted" and not self._private_key:
+            # No signing key on this deployment: an unsigned entry is never
+            # trusted, and raising here would roll back the moderator's whole
+            # Confirm with it. Keep the vote; promote once a key is set and
+            # the next vote arrives.
+            _log.warning("global_promotion_unsigned", hash_id=hash_id)
+        elif decision.promotable and row.status != "promoted":
             signature = self._sign(row)
             await self._hashes.promote(hash_id, signature=signature)
             if row.submitter_user_id is not None:
