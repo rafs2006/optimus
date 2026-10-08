@@ -88,6 +88,27 @@ Per-server blocklist entries are keyed by `(guild_id, hash_id)` since
 several servers; adding an image a server already lists returns that server's
 existing row and keeps its original attribution. Every read stays guild-scoped.
 
+Since [#79](https://github.com/rafs2006/optimus/pull/79), the bot owner can link
+servers run by the same people so they keep one blocklist (`/global
+link_server`, `/global unlink_server`, `/global links`). Migration `0013` adds
+`guild_links` (`guild_id` primary key, `group_id`), so a server is in at most
+one group; linking servers from two groups merges them and a group left with
+one server dissolves. This is the one place a write crosses servers: linking
+copies the union of the group's entries to every member, and afterwards
+`/scamhash add`, `/scamhash import`, Confirm scam and the campaign-sweep harvest
+copy each new entry into the peers' `guild_hashes` as a local entry
+(`source="linked"`, original `added_by`), never overwriting an entry a peer
+already has. `/scamhash remove` also removes the peers' `linked` copies, never
+an entry a peer added itself. Affected servers' indexes reload after commit (the
+sweep publishes an index-invalidate event per linked server). Unlinking keeps
+copied entries; the whitelist, settings and review cards stay per server.
+Because a copy is a local entry, a linked peer's moderators can trigger this
+server's `action_policy`, including bans, unlike the review-only global list;
+linking therefore requires the bot to be in both servers, and
+`/delete_server_data` leaves the group before erasing so copies cannot refill a
+wiped server. Details: [`docs/architecture.md`](docs/architecture.md) and the
+[moderator guide](docs/moderator-guide.md#linked-servers).
+
 Since [#64](https://github.com/rafs2006/optimus/pull/64), a message gets one
 review card, not one card per flagged image. Later images of the same message
 update the open card, and the review buttons act on every image on it. A
@@ -301,6 +322,10 @@ the plan is versioned with the code.
   eventually auto-block after N confirmations from N distinct guilds? If yes,
   it changes the fail-closed posture in `docs/architecture.md` and needs its
   own section here.
+  Since #79, promotion also needs `OPTIMUS_GLOBAL_SIGNING_PRIVATE_KEY` on the
+  deployment; without it votes are kept, nothing is promoted, and
+  `global_promotion_unsigned` is logged. Linked servers (#79) are the separate,
+  owner-managed way to share a full list that does auto-act.
 - The spread-across-channels rule (#78) is on for every server by default and
   set only per deployment (`OPTIMUS_MOD_SPREAD_CHANNELS`,
   `OPTIMUS_MOD_SPREAD_WINDOW_SECONDS`). Should servers get a `/config` switch
@@ -349,3 +374,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#77 --> Applied: an auto-handled image adopts and folds its post's already-open card, and the post's earlier queued detections are stored as `auto:delete` - from #77.
 
 <!-- decision:rafs2006/optimus#78 --> Applied: a `SCAM` near match on the server's own list is auto-acted under the configured action once one uploader spreads the same blocklist entry across 3 channels in 10 minutes (deployment-configurable), excluding channels a moderator cleared - from #78.
+
+<!-- decision:rafs2006/optimus#79 --> Applied: owner-linked servers keep one blocklist through `guild_links`, the only cross-server write, with copies acted on under each server's own `action_policy` and removal limited to linked copies; a missing signing key keeps global votes unpromoted instead of failing Confirm - from #79.
