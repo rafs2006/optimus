@@ -151,6 +151,17 @@ action strings should strip the prefix. Images that join the card store their
 own plain `delete`, never the first image's cleanup notes, and a card line
 drops `delete` when `delete_ban`/`delete_kick`/`delete_timeout` already says it.
 
+Since [#77](https://github.com/rafs2006/optimus/pull/77), the order of a post's
+images no longer matters. When near matches of a post go first and open a card
+with buttons, and a later image of the same post is auto-handled, that image
+adopts the open card instead of posting a second one: the earlier items are
+re-labelled `delete` (gone with the post), the card re-renders folded, and their
+detection rows are stored as `auto:delete` through the coordinator's optional
+`settle_detections` hook, so `/queue`, the campaign closer, and the `/setup`
+replay no longer treat them as open. If that hook fails, the card still folds
+and the rows stay visible to `/queue`. A refused or partial enforcement leaves
+the card open, as before.
+
 Since [#69](https://github.com/rafs2006/optimus/pull/69), the whitelist is
 visible and correctable through `/scamhash whitelist` and
 `/scamhash unwhitelist`, and a scam call (Confirm scam, Review as scam,
@@ -305,3 +316,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#75 --> Applied: verdicts are serialised per uploader so a burst settles to one card and one ban, and detections the bot settled itself are stored as `auto:<action>` so the campaign closer never removes the bot's own cards - from #75.
 
 <!-- decision:rafs2006/optimus#76 --> Applied: enforcement takes the per-server rate token before the idempotency key, waits a bounded time for it, honours Discord's `retry_after`, and retries a `rate_limited` enforcement with a fresh key before leaving it for a moderator - from #76.
+
+<!-- decision:rafs2006/optimus#77 --> Applied: an auto-handled image adopts and folds its post's already-open card, and the post's earlier queued detections are stored as `auto:delete` - from #77.
