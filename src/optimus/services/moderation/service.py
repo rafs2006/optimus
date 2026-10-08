@@ -362,6 +362,13 @@ def build_coordinator(
                 deleted += 1
         return CardCleanup(closed=closed, cards_deleted=deleted, message_ids=message_ids)
 
+    async def settle_detections(guild_id: int, detection_ids: Sequence[int], action: str) -> None:
+        """Record ``action`` on a post's earlier images once the post was handled."""
+        async with scope() as session:
+            repo = DetectionRepository(session, guild_id)
+            for detection_id in detection_ids:
+                await repo.set_action_taken(detection_id, action)
+
     coordinator = ModerationCoordinator(
         config=config,
         target=target,
@@ -373,6 +380,7 @@ def build_coordinator(
         sweep=sweep,
         mark_reported=mark_reported,
         close_cards=close_cards,
+        settle_detections=settle_detections,
         campaign_window_seconds=settings.mod_sweep_window_hours * 3600,
         requeue_attempts=settings.mod_action_requeue_attempts,
         requeue_delay_seconds=settings.mod_action_requeue_delay_seconds,
