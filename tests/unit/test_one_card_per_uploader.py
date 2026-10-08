@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import asyncio
 
-from optimus.services.moderation.review import (
+from optimus.services.moderation.sweep import SweepOutcome
+from optimus.shared.review import (
     _merge_actions,
     merge_reports,
     stored_action_label,
 )
-from optimus.services.moderation.sweep import SweepOutcome
 from tests.unit.test_departed_ban_auto_close import _departed, _event, _Harness
 
 

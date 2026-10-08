@@ -13,7 +13,7 @@ import pytest
 from optimus.core.config import get_settings
 from optimus.core.ratelimit import InMemoryRateLimiter
 from optimus.services.interactions.service import DbDeps
-from optimus.services.moderation import permissions as perms
+from optimus.shared import permissions as perms
 
 _GUILD = 1
 _CHANNEL = 1402887429324673035

@@ -13,9 +13,9 @@ is localized like every other user-facing string.
 from __future__ import annotations
 
 from optimus.i18n import translate
-from optimus.services.moderation.actions import ActionResult, Step, StepOutcome
-from optimus.services.moderation.failures import FailureKind
-from optimus.services.moderation.permissions import AccessReport, PreflightResult
+from optimus.shared.failures import FailureKind
+from optimus.shared.outcomes import ActionResult, Step, StepOutcome
+from optimus.shared.permissions import AccessReport, PreflightResult
 
 #: Blocked channels listed per group before collapsing into "and N more", so a
 #: 200-channel server cannot produce a reply past Discord's length limit.

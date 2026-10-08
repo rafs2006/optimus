@@ -22,17 +22,8 @@ from prometheus_client import Counter
 from optimus.contracts.events import Action, OcrFindings, Verdict, VerdictEvent
 from optimus.core.logging import get_logger
 from optimus.i18n import translate
-from optimus.services.moderation import reasons
-from optimus.services.moderation.actions import (
-    ActionExecutor,
-    ActionRequest,
-    ActionResult,
-    Step,
-)
+from optimus.services.moderation.actions import ActionExecutor, ActionRequest
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
-from optimus.services.moderation.explain import explain_result
-from optimus.services.moderation.failures import FailureKind, classify
-from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.policy import (
     QUEUED_FOR_REVIEW,
     Decision,
@@ -45,8 +36,14 @@ from optimus.services.moderation.priority import (
     QueueFullError,
     classify_action,
 )
-from optimus.services.moderation.review import AUTO_ACTION_PREFIX, ReportData
 from optimus.services.moderation.sweep import SweepOutcome
+from optimus.shared import reasons
+from optimus.shared.actors import SYSTEM_ACTOR
+from optimus.shared.explain import explain_result
+from optimus.shared.failures import FailureKind, classify
+from optimus.shared.outcomes import ActionResult, Step
+from optimus.shared.permissions import PermissionProbe
+from optimus.shared.review import AUTO_ACTION_PREFIX, ReportData
 
 _log = get_logger(__name__)
 
@@ -152,8 +149,6 @@ DetectionSettler = Callable[[int, Sequence[int], str], Awaitable[None]]
 #: (guild, uploader, since, channels) -> cleared channels.
 SpreadClearedChannels = Callable[[int, int, datetime, Sequence[int]], Awaitable[set[int]]]
 
-#: Audit actor recorded when the bot itself settles an uploader's cards.
-_SYSTEM_ACTOR = 0
 
 #: The punitive steps, for spelling out on the card what was skipped and why.
 _PUNITIVE_ACTIONS = (Action.DELETE_TIMEOUT, Action.DELETE_KICK, Action.DELETE_BAN)
@@ -851,7 +846,7 @@ class ModerationCoordinator:
             # keep_message_id 0 matches no message: every open card of this
             # uploader goes, including the one just posted.
             cleanup = await self._close_cards(
-                event.guild_id, event.uploader_id, 0, _SYSTEM_ACTOR, cfg.review_channel_id
+                event.guild_id, event.uploader_id, 0, SYSTEM_ACTOR, cfg.review_channel_id
             )
         except Exception:
             _log.error(
@@ -962,7 +957,7 @@ class ModerationCoordinator:
             return None
         actor = event.confirmed_by if event.confirmed_by is not None else None
         if actor is None and auto:
-            actor = _SYSTEM_ACTOR
+            actor = SYSTEM_ACTOR
         if actor is None:
             return None
         try:

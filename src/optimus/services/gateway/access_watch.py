@@ -1,7 +1,7 @@
 """Notice when the bot *gains* access to a channel, and clean up what it missed.
 
 While the bot cannot see a channel it correctly does nothing: the preflight in
-:mod:`optimus.services.moderation.permissions` resolves the answer from cache
+:mod:`optimus.shared.permissions` resolves the answer from cache
 and spends no requests. But that leaves a gap the reported incident made
 obvious -- once a moderator fixes the overwrite, the scam images already sitting
 in that channel stay up, because nothing tells the bot to look again. Only the
@@ -15,7 +15,7 @@ already pushes the two edits that can grant access:
 
 Both events carry the **previous** state (``old_channel`` / ``old_role``), so a
 transition can be computed locally by running
-:func:`~optimus.services.moderation.permissions.effective_permissions` twice --
+:func:`~optimus.shared.permissions.effective_permissions` twice --
 once over the old state and once over the new -- with no API call and nothing
 remembered between events. Only a genuine blocked -> allowed transition triggers
 a rescan, so renaming a channel or editing an unrelated permission costs
@@ -38,7 +38,7 @@ import contextlib
 from typing import TYPE_CHECKING, Protocol
 
 from optimus.core.logging import get_logger
-from optimus.services.moderation.permissions import (
+from optimus.shared.permissions import (
     RESCAN_REQUIRES,
     Overwrite,
     effective_permissions,

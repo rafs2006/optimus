@@ -29,9 +29,9 @@ from optimus.db.models import Base, Detection, Guild, ModAction
 from optimus.i18n import translate
 from optimus.services.moderation import coordinator as coordinator_module
 from optimus.services.moderation.coordinator import CardCleanup, ModerationCoordinator
-from optimus.services.moderation.review import ReportData, build_card
 from optimus.services.moderation.service import build_coordinator
 from optimus.services.moderation.sweep import SweepOutcome
+from optimus.shared.review import ReportData, build_card
 from tests.unit.test_coordinator import _build, _cfg, _FakeRest, _target
 
 

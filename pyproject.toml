@@ -48,6 +48,7 @@ dev = [
     "mypy>=2.1.0",
     "pre-commit>=4.6.0",
     "types-redis",
+    "import-linter>=2.1",
 ]
 
 [build-system]
@@ -68,6 +69,8 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B011"]
+# Dev tooling runs fixed git/ruff commands.
+"scripts/**" = ["S603", "S607"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -97,3 +100,45 @@ addopts = "-q"
 [tool.coverage.run]
 source = ["src/optimus"]
 branch = true
+
+# Service boundaries (see docs/architecture.md). Services talk through
+# versioned events on the bus; code more than one of them needs lives in
+# optimus.shared. ignore_imports is the known debt: each line is a place a
+# service still reaches into another, to be removed, never added to without
+# review.
+[tool.importlinter]
+root_package = "optimus"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Services do not import each other"
+type = "independence"
+modules = [
+    "optimus.services.detection",
+    "optimus.services.gateway",
+    "optimus.services.ingest",
+    "optimus.services.interactions",
+    "optimus.services.moderation",
+    "optimus.services.scheduler",
+]
+ignore_imports = [
+    # /scamhash add checks "already listed?" with the detection matcher.
+    "optimus.services.interactions.service -> optimus.services.detection.index",
+    "optimus.services.interactions.service -> optimus.services.detection.matcher",
+    # Wiring: the interactions service builds moderation's REST adapter.
+    "optimus.services.interactions.service -> optimus.services.moderation.rest_adapter",
+    # Needed here too, not only in the contract below: every service imports
+    # core.config, so without it each one "imports" interactions through it.
+    "optimus.core.config -> optimus.services.interactions.commands",
+]
+
+[[tool.importlinter.contracts]]
+name = "Shared code and contracts import no service"
+type = "forbidden"
+source_modules = ["optimus.shared", "optimus.contracts", "optimus.core", "optimus.db"]
+forbidden_modules = ["optimus.services", "optimus.app", "optimus.dashboard"]
+ignore_imports = [
+    # OPTIMUS_MEMBER_COMMANDS is validated against the command catalog (a
+    # lazy import inside the validator). The catalog belongs in contracts.
+    "optimus.core.config -> optimus.services.interactions.commands",
+]

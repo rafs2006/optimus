@@ -14,6 +14,7 @@ from optimus.core.config import Sensitivity
 from optimus.hashing.ensemble import EnsembleResult, compare
 from optimus.hashing.perceptual import hamming
 from optimus.services.detection.index import HashIndex, KnownHash
+from optimus.shared.matching import DEFAULT_WHITELIST_RADIUS
 
 # phash Hamming radius used to gather index candidates before the full vote.
 # Raised 12 -> 18 after the eval harness showed heavy border crops land at phash
@@ -21,8 +22,6 @@ from optimus.services.detection.index import HashIndex, KnownHash
 # overall recall 0.792 -> 0.875) with zero precision/FPR loss. See
 # docs/detection-eval.md.
 DEFAULT_CANDIDATE_RADIUS = 18
-# phash radius within which a whitelist entry suppresses a match.
-DEFAULT_WHITELIST_RADIUS = 8
 
 
 @dataclass(frozen=True, slots=True)

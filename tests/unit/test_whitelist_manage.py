@@ -28,14 +28,14 @@ from optimus.services.interactions.commands import COMMANDS
 from optimus.services.interactions.handlers import (
     InteractionContext,
     handle_command,
-    handle_review_button,
 )
 from optimus.services.interactions.logic import (
     CommandError,
     InteractionRejected,
     validate_import,
 )
-from optimus.services.moderation.review import (
+from optimus.services.interactions.review_buttons import handle_review_button
+from optimus.shared.review import (
     ParsedCustomId,
     ReportData,
     ReviewAction,

@@ -1,7 +1,7 @@
 """hikari component (button) row builders for the safe-mode and purge flows.
 
 These complement the report buttons built in
-:mod:`optimus.services.moderation.review`. Every button's ``custom_id`` is
+:mod:`optimus.shared.review`. Every button's ``custom_id`` is
 encoded with :func:`~optimus.services.interactions.logic.encode_component_id`
 so it round-trips back to a :class:`ComponentAction` in the service layer.
 """

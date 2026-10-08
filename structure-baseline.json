@@ -1,0 +1,68 @@
+{
+  "files": {
+    "src/optimus/core/config.py": 559,
+    "src/optimus/dashboard/service.py": 590,
+    "src/optimus/db/repositories.py": 1037,
+    "src/optimus/hashing/ocr_extract.py": 559,
+    "src/optimus/services/gateway/bot.py": 586,
+    "src/optimus/services/interactions/commands.py": 513,
+    "src/optimus/services/interactions/handlers.py": 1794,
+    "src/optimus/services/interactions/service.py": 1881,
+    "src/optimus/services/moderation/coordinator.py": 1125,
+    "src/optimus/services/moderation/service.py": 634,
+    "src/optimus/shared/review.py": 533
+  },
+  "functions": {
+    "src/optimus/app/discord.py::run_discord_edges": {
+      "complexity": 27,
+      "statements": 95
+    },
+    "src/optimus/app/simple.py::run_simple": {
+      "statements": 55
+    },
+    "src/optimus/services/interactions/handlers.py::_cmd_global": {
+      "complexity": 17
+    },
+    "src/optimus/services/interactions/handlers.py::_cmd_scamhash": {
+      "complexity": 14
+    },
+    "src/optimus/services/interactions/handlers.py::_review_message": {
+      "complexity": 11
+    },
+    "src/optimus/services/interactions/handlers.py::_scamhash_add": {
+      "complexity": 17
+    },
+    "src/optimus/services/interactions/logic.py::validate_config_set": {
+      "complexity": 19
+    },
+    "src/optimus/services/interactions/logic.py::validate_import": {
+      "complexity": 11
+    },
+    "src/optimus/services/interactions/service.py::InteractionService._run": {
+      "complexity": 14
+    },
+    "src/optimus/services/interactions/service.py::InteractionService._run.attempt_once": {
+      "complexity": 11
+    },
+    "src/optimus/services/interactions/service.py::_resolve_add_options": {
+      "complexity": 16
+    },
+    "src/optimus/services/moderation/coordinator.py::ModerationCoordinator._post_report": {
+      "complexity": 21,
+      "statements": 52
+    },
+    "src/optimus/services/moderation/coordinator.py::ModerationCoordinator._remove_followup": {
+      "complexity": 12
+    },
+    "src/optimus/services/moderation/coordinator.py::ModerationCoordinator._spread_channels": {
+      "complexity": 12
+    },
+    "src/optimus/services/moderation/service.py::build_coordinator": {
+      "complexity": 22,
+      "statements": 69
+    },
+    "src/optimus/shared/review.py::_merge_actions": {
+      "complexity": 13
+    }
+  }
+}

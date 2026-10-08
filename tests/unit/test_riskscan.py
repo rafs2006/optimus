@@ -263,7 +263,7 @@ def test_ocr_summary_truncated() -> None:
 
 
 def test_report_fields_include_ocr_summary() -> None:
-    from optimus.services.moderation.review import ReportData, report_fields
+    from optimus.shared.review import ReportData, report_fields
 
     data = ReportData(
         detection_id=7,

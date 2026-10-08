@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from optimus.services.moderation.review import (
+from optimus.shared.review import (
     AUTO_HANDLED_BUTTONS,
     build_action_rows,
     build_card,

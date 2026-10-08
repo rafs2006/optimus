@@ -24,11 +24,11 @@ from optimus.contracts.events import (
 from optimus.core.config import get_settings
 from optimus.db.engine import SessionScope, create_engine, create_session_factory, session_scope
 from optimus.db.models import Base, Detection, Guild, ModAction
-from optimus.services.moderation.actions import ActionResult
 from optimus.services.moderation.service import (
     ModerationService,
     build_coordinator,
 )
+from optimus.shared.outcomes import ActionResult
 
 
 @pytest_asyncio.fixture

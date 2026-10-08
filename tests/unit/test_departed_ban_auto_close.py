@@ -20,7 +20,8 @@ from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.i18n import translate
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.coordinator import CardCleanup, ModerationCoordinator
-from optimus.services.moderation.review import (
+from optimus.services.moderation.sweep import SweepOutcome
+from optimus.shared.review import (
     AUTO_HANDLED_BUTTONS,
     ReportData,
     ReviewAction,
@@ -28,7 +29,6 @@ from optimus.services.moderation.review import (
     decided_note,
     merge_reports,
 )
-from optimus.services.moderation.sweep import SweepOutcome
 from tests.unit.test_coordinator import _build, _cfg, _FakeRest, _target
 
 

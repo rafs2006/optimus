@@ -15,8 +15,8 @@ from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
 from optimus.services.moderation.priority import PriorityDispatcher
-from optimus.services.moderation.reasons import REASON_PREFIX
-from optimus.services.moderation.review import ReportData
+from optimus.shared.reasons import REASON_PREFIX
+from optimus.shared.review import ReportData
 
 
 class _FakeRest:
@@ -386,8 +386,8 @@ async def test_dropped_dispatch_records_failure_audit() -> None:
     # a success=False "dropped" result and the audit row is still recorded.
     from collections.abc import Awaitable, Callable
 
-    from optimus.services.moderation.actions import ActionResult
     from optimus.services.moderation.priority import Priority, QueueFullError
+    from optimus.shared.outcomes import ActionResult
 
     class _RejectingDispatcher(PriorityDispatcher[ActionResult]):
         async def submit(  # type: ignore[override]
@@ -620,7 +620,7 @@ async def test_report_names_the_permission_gap_that_blocked_the_cleanup() -> Non
     Previously the review channel showed "delete_ban" with no hint that the
     message was still visible, so nobody knew a channel overwrite was the fix.
     """
-    from optimus.services.moderation import permissions as perms
+    from optimus.shared import permissions as perms
 
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     rest = _FakeRest()
@@ -644,7 +644,7 @@ async def test_report_names_the_permission_gap_that_blocked_the_cleanup() -> Non
 
 
 async def test_report_carries_no_problem_when_enforcement_was_clean() -> None:
-    from optimus.services.moderation import permissions as perms
+    from optimus.shared import permissions as perms
 
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     reports: list[ReportData] = []
@@ -668,7 +668,7 @@ async def test_campaign_sweep_still_runs_for_a_partially_applied_action() -> Non
     The sweep is gated on the decision, not on the delete succeeding: other
     channels may well be accessible even when this one is not.
     """
-    from optimus.services.moderation import permissions as perms
+    from optimus.shared import permissions as perms
 
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     swept: list[int] = []

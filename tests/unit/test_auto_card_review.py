@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from optimus.i18n import translate
-from optimus.services.moderation.review import (
+from optimus.shared.review import (
     COMMAND_IDS,
     ReportData,
     build_card,

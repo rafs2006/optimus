@@ -29,12 +29,12 @@ from optimus.services.interactions.handlers import (
     DetectionFacts,
     InteractionContext,
     handle_command,
-    handle_review_button,
 )
+from optimus.services.interactions.review_buttons import handle_review_button
 from optimus.services.interactions.service import DbDeps
-from optimus.services.moderation.actions import ActionResult
 from optimus.services.moderation.coordinator import GuildModConfig, ModerationCoordinator
-from optimus.services.moderation.review import (
+from optimus.shared.outcomes import ActionResult
+from optimus.shared.review import (
     MAX_CARD_IMAGES,
     ParsedCustomId,
     ReportData,

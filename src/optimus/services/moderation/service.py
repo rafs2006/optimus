@@ -54,7 +54,7 @@ from optimus.db.repositories import (
     GuildRepository,
     ModActionRepository,
 )
-from optimus.services.moderation.actions import ActionExecutor, ActionResult
+from optimus.services.moderation.actions import ActionExecutor
 from optimus.services.moderation.boundaries import TargetContext
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import (
@@ -62,10 +62,12 @@ from optimus.services.moderation.coordinator import (
     GuildModConfig,
     ModerationCoordinator,
 )
-from optimus.services.moderation.permissions import PermissionProbe
 from optimus.services.moderation.priority import PriorityDispatcher
-from optimus.services.moderation.review import AUTO_ACTION_PREFIX, ReportData
 from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
+from optimus.shared.actors import SYSTEM_ACTOR
+from optimus.shared.outcomes import ActionResult
+from optimus.shared.permissions import PermissionProbe
+from optimus.shared.review import AUTO_ACTION_PREFIX, ReportData
 
 _log = get_logger(__name__)
 
@@ -76,9 +78,6 @@ DECIDED_ACTIONS = frozenset({"confirmed", "dismissed", "banned", "reversed"})
 #: mark the row, Whitelist image only writes the audit log.
 CLEARED_ACTIONS = frozenset({"reversed", "dismissed"})
 CLEARED_AUDIT_ACTIONS = ("review.false_positive", "review.whitelist_image", "review.dismiss")
-
-#: Audit actor id used when the system (not a human moderator) acts.
-SYSTEM_ACTOR = 0
 
 
 class ModerationService:
@@ -501,7 +500,7 @@ async def _post_report(  # pragma: no cover
     rest: object, channel_id: int, data: ReportData | Sequence[ReportData]
 ) -> int | None:
     """Post one review card -- for one image, or merged for every image of a message."""
-    from optimus.services.moderation.review import build_card
+    from optimus.shared.review import build_card
 
     embeds, components = build_card([data] if isinstance(data, ReportData) else list(data))
     message = await rest.create_message(  # type: ignore[attr-defined]
@@ -514,7 +513,7 @@ async def _edit_report(  # pragma: no cover
     rest: object, channel_id: int, card_message_id: int, items: Sequence[ReportData]
 ) -> None:
     """Re-render a card in place: another image joined it, or it was confirmed."""
-    from optimus.services.moderation.review import build_card
+    from optimus.shared.review import build_card
 
     embeds, components = build_card(list(items))
     await rest.edit_message(  # type: ignore[attr-defined]

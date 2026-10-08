@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from optimus.services.gateway.access_watch import AccessWatcher, gained_access
-from optimus.services.moderation.permissions import (
+from optimus.shared.permissions import (
     MANAGE_MESSAGES,
     READ_MESSAGE_HISTORY,
     VIEW_CHANNEL,

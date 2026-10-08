@@ -14,8 +14,8 @@ from typing import Any
 
 from optimus.contracts.events import Action
 from optimus.i18n import available_locales, translate
-from optimus.services.moderation.explain import explain_access_report, explain_rescan_summary
-from optimus.services.moderation.permissions import (
+from optimus.shared.explain import explain_access_report, explain_rescan_summary
+from optimus.shared.permissions import (
     ADMINISTRATOR,
     EMBED_LINKS,
     MANAGE_MESSAGES,
