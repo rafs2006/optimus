@@ -18,7 +18,7 @@ from enum import StrEnum
 
 from prometheus_client import Counter
 
-from optimus.contracts.events import Action, OcrFindings, VerdictEvent
+from optimus.contracts.events import Action, OcrFindings, Verdict, VerdictEvent
 from optimus.core.logging import get_logger
 from optimus.i18n import translate
 from optimus.services.moderation import reasons
@@ -32,7 +32,7 @@ from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContex
 from optimus.services.moderation.explain import explain_result
 from optimus.services.moderation.failures import FailureKind, classify
 from optimus.services.moderation.permissions import PermissionProbe
-from optimus.services.moderation.policy import Decision, PolicyInput, decide
+from optimus.services.moderation.policy import Decision, PolicyInput, PolicyOutcome, decide
 from optimus.services.moderation.priority import (
     PriorityDispatcher,
     QueueFullError,
@@ -99,6 +99,10 @@ class GuildModConfig:
     #: Seconds of the banned user's message history Discord purges across all
     #: channels when a ban executes (native ban-dialog behavior). 0 disables.
     ban_purge_seconds: int = 0
+    #: Distinct channels of near matches from one uploader that trigger the
+    #: configured action (0 = off), and how long they are counted for.
+    spread_channels: int = 0
+    spread_window_seconds: int = 600
 
 
 #: Resolves a guild's moderation config (Redis-cached / DB-backed at runtime).
@@ -267,6 +271,9 @@ class ModerationCoordinator:
         #: recorded as soon as enforcement ran -- before the card is posted,
         #: so a post checked at the same moment can see it.
         self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
+        #: Per uploader, the channels their near matches were seen in and
+        #: when, for the spread-across-channels rule.
+        self._spread: OrderedDict[tuple[int, int], dict[int, float]] = OrderedDict()
         # When set, enforcement runs through the priority dispatcher so PROTECT
         # actions are dispatched ahead of courtesy work under rate-limit
         # pressure. None preserves the direct, synchronous execution path.
@@ -303,6 +310,9 @@ class ModerationCoordinator:
                 global_match=event.matched_source == "global",
             )
         )
+        spread = self._spread_channels(event, cfg, outcome)
+        if spread:
+            outcome = PolicyOutcome(Decision.AUTO_ACT, cfg.configured_action, "spread_channels")
         DECISIONS.labels(decision=outcome.decision.value).inc()
         # One line per image, so "why did this need a moderator?" is answered
         # by the log rather than guessed.
@@ -317,6 +327,7 @@ class ModerationCoordinator:
             decision=outcome.decision.value,
             reason=outcome.reason,
             confirmed=event.confirmed_by is not None,
+            spread_channels=spread or None,
         )
 
         action = outcome.action
@@ -362,8 +373,59 @@ class ModerationCoordinator:
             boundary=boundary,
             intended=intended,
             auto=auto,
+            spread=spread,
         )
         return result
+
+    def _spread_channels(
+        self, event: VerdictEvent, cfg: GuildModConfig, outcome: PolicyOutcome
+    ) -> int:
+        """Channels this uploader spread near matches across, once that triggers action.
+
+        Returns 0 unless the rule fires. Counts only what would otherwise ask a
+        moderator about this server's own list: a near match, not a global
+        match, a member report or a risk scan. Never fires in safe mode or
+        under a report-only policy, and the privilege boundaries still apply
+        to the action, so a moderator posting in many channels is not banned.
+        """
+        if cfg.spread_channels <= 0 or outcome.reason != "queued_for_review":
+            return 0
+        if event.verdict is not Verdict.SCAM or event.confirmed_by is not None:
+            return 0
+        if event.reported_by is not None or event.matched_source != "guild":
+            return 0
+        if not event.matched_hash_id or cfg.safe_mode:
+            return 0
+        if cfg.configured_action in (Action.NONE, Action.REPORT_ONLY):
+            return 0
+        if self._recently_settled(event):
+            # Already banned or confirmed: their later posts are only deleted
+            # (see :meth:`_remove_followup`). One that reached here had its
+            # delete refused, and that must stay visible on an open card.
+            return 0
+        key = (event.guild_id, event.uploader_id)
+        now = time.monotonic()
+        seen = {
+            c: t
+            for c, t in self._spread.get(key, {}).items()
+            if now - t <= cfg.spread_window_seconds
+        }
+        seen[event.channel_id] = now
+        self._spread[key] = seen
+        self._spread.move_to_end(key)
+        while len(self._spread) > OPEN_CARD_LIMIT:
+            self._spread.popitem(last=False)
+        if len(seen) < cfg.spread_channels:
+            return 0
+        _log.info(
+            "spread_escalated",
+            guild_id=event.guild_id,
+            uploader_id=event.uploader_id,
+            message_id=event.message_id,
+            channels=len(seen),
+            window_seconds=cfg.spread_window_seconds,
+        )
+        return len(seen)
 
     async def _sweep_campaign(
         self, event: VerdictEvent, decision: Decision, action: Action
@@ -510,6 +572,7 @@ class ModerationCoordinator:
         boundary: Boundary | None = None,
         intended: Action | None = None,
         auto: bool = False,
+        spread: int = 0,
     ) -> None:
         if cfg.review_channel_id is None or detection_id is None:
             return
@@ -528,6 +591,16 @@ class ModerationCoordinator:
             # of a bare "delete" that reads like the policy was ignored.
             note = translate(
                 f"report.boundary_{boundary.value}", cfg.locale, action=(intended or action).value
+            )
+            action_taken = f"{action_taken} — {note}"
+        if spread:
+            # Say why a near match was acted on: the confidence on the card
+            # is unchanged, so without this it reads like the bar was ignored.
+            note = translate(
+                "report.spread_channels",
+                cfg.locale,
+                channels=spread,
+                minutes=max(1, cfg.spread_window_seconds // 60),
             )
             action_taken = f"{action_taken} — {note}"
         # Whatever could not be applied is spelled out as an instruction on the

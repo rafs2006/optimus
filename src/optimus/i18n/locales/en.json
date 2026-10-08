@@ -25,7 +25,8 @@
     "title_group": "Scam detection #{detection_id} — {verdict} · {count} images",
     "boundary_departed_banned": "banned by user ID: the uploader had already left",
     "boundary_departed": "{action} skipped: the uploader had already left",
-    "boundary_unverified": "{action} skipped: could not verify the uploader's roles"
+    "boundary_unverified": "{action} skipped: could not verify the uploader's roles",
+    "spread_channels": "near match posted in {channels} channels within {minutes} min"
   },
   "command": {
     "no_permission": "You do not have permission to use this command.",

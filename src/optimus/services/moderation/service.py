@@ -216,6 +216,8 @@ def build_coordinator(
                 review_channel_id=guild.review_channel_id if guild is not None else None,
                 timeout_seconds=settings.mod_timeout_seconds,
                 ban_purge_seconds=(guild.ban_purge_hours if guild is not None else 24) * 3600,
+                spread_channels=settings.mod_spread_channels,
+                spread_window_seconds=settings.mod_spread_window_seconds,
             )
 
     async def target(guild_id: int, user_id: int) -> TargetContext | None:  # pragma: no cover

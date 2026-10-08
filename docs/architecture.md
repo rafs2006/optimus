@@ -257,7 +257,13 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    `auto_act_threshold` (or merely `AMBIGUOUS`) → `MOD_QUEUE` (report only);
    `SCAM` clearing `auto_act_threshold` → `AUTO_ACT` with the guild's configured
    action. If **safe mode** is on, an otherwise-auto action is downgraded to
-   report-only.
+   report-only. One coordinator rule sits on top: a `SCAM` near match on the
+   guild's own list (`queued_for_review`) from an uploader whose near matches
+   reached `mod_spread_channels` distinct channels within
+   `mod_spread_window_seconds` becomes `AUTO_ACT` with reason
+   `spread_channels` (logged as `spread_escalated`). Not for global matches,
+   member reports, safe mode, a report-only policy or an uploader already
+   settled; the boundaries below still apply. The tracking is in memory.
 2. **Boundaries** ([`boundaries.py`](../src/optimus/services/moderation/boundaries.py))
    apply only to punitive auto-actions (timeout/kick/ban): if the target is the
    owner, has `ADMINISTRATOR`, or sits above the bot in the role hierarchy, the
