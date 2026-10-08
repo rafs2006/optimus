@@ -71,7 +71,7 @@ Authoritative version with tables, subjects, and stream config lives at
 ## Moderation audit contract
 
 All enforcement and reversal reasons share the `Scam image` prefix and are built
-in `services/moderation/reasons.py`. Reasons are bounded to 512 characters after
+in `shared/reasons.py` (moved from `services/moderation/` in #80). Reasons are bounded to 512 characters after
 URL encoding; the timeout adapter carries the same reason contract as bans and
 kicks. Automated actions identify available confidence, fingerprint, source, and
 message evidence, not an invented detection ID: that row is created later.
@@ -343,6 +343,7 @@ the plan is versioned with the code.
 - Bus (JetStream / in-process): [`src/optimus/bus/`](src/optimus/bus/)
 - Hashing (ensemble, MIH, decoder sandbox, OCR/QR): [`src/optimus/hashing/`](src/optimus/hashing/)
 - Services: [`src/optimus/services/`](src/optimus/services/)
+- Code more than one service needs (review cards, permissions, failures, outcomes, audit reasons): [`src/optimus/shared/`](src/optimus/shared/). Services never import each other; CI enforces that with `lint-imports` and caps file and function size with `scripts/check_structure.py` (since #80); see [`docs/architecture.md`](docs/architecture.md#code-boundaries-and-size)
 - Core resilience (circuit, ratelimit, idempotency, readiness): [`src/optimus/core/`](src/optimus/core/)
 - Detection quality harness: [`benchmarks/`](benchmarks/) → [`docs/detection-eval.md`](docs/detection-eval.md)
 <!-- decision:rafs2006/optimus#55 --> Applied: review lifecycle grows a `dismissed` no-op terminal state alongside confirm/false-positive (no hash/whitelist/ban side-effects; audits `review.dismiss`), and a new MANAGE_GUILD-gated `/queue` command surface lists open cards via `DetectionRepository.list_open` (excludes unposted and already-actioned rows, oldest-first, capped at 25) so a neglected server can drain the backlog — from #55 _(Since #57, `/queue` requires MANAGE_MESSAGES, the same bar as the review buttons.)_
@@ -376,3 +377,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#78 --> Applied: a `SCAM` near match on the server's own list is auto-acted under the configured action once one uploader spreads the same blocklist entry across 3 channels in 10 minutes (deployment-configurable), excluding channels a moderator cleared - from #78.
 
 <!-- decision:rafs2006/optimus#79 --> Applied: owner-linked servers keep one blocklist through `guild_links`, the only cross-server write, with copies acted on under each server's own `action_policy` and removal limited to linked copies; a missing signing key keeps global votes unpromoted instead of failing Confirm - from #79.
+
+<!-- decision:rafs2006/optimus#80 --> Applied: cross-service code lives in `optimus/shared/`, services import no other service and `shared`/`contracts`/`core`/`db` import no service (enforced by import-linter in CI), and file and function sizes are ratcheted by a CI structure gate that only an explicit `structure-exception` label can raise - from #80.
