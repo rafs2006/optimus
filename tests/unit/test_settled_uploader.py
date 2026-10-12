@@ -16,7 +16,7 @@ import time
 import pytest
 from structlog.testing import capture_logs
 
-from optimus.contracts.events import Action
+from optimus.contracts.events import Action, Verdict, VerdictEvent
 from optimus.services.moderation import coordinator as coordinator_module
 from optimus.shared.review import merge_reports
 from tests.unit.test_departed_ban_auto_close import _data, _departed, _event, _Harness
@@ -31,6 +31,47 @@ async def test_global_match_from_a_settled_uploader_is_removed_quietly() -> None
 
     assert result.action is Action.DELETE
     assert len(h.reports) == 1  # no open card for the global match
+    assert h.updates[-1][1][0].followups_removed == 1
+
+
+def _risk_scan(**kw: object) -> VerdictEvent:
+    """An image only the OCR/QR risk scan flagged: no hash match at all."""
+    base: dict[str, object] = {
+        "verdict": Verdict.AMBIGUOUS,
+        "confidence": 0.9,
+        "matched_hash_id": None,
+        "matched_source": None,
+    }
+    base.update(kw)
+    return _event(**base)
+
+
+async def test_post_flagged_only_by_the_risk_scan_after_a_ban_is_removed_quietly() -> None:
+    # Detection #2288: three images of a post matched the list and one banned
+    # the uploader; the fourth image, which only the risk scan flagged, then
+    # opened a card for a moderator to confirm a scam already dealt with.
+    h = _Harness(target=_departed())
+    await h.coord.handle_verdict(_event(message_id=3))
+    with capture_logs() as logs:
+        result = await h.coord.handle_verdict(_risk_scan(message_id=3, attachment_id=4))
+        await h.coord.handle_verdict(_risk_scan(message_id=11))
+
+    assert result.action is Action.DELETE and result.success
+    assert len(h.reports) == 1  # only the settled card
+    assert h.rest.calls.count("ban_member") <= 1  # never a second ban
+    lines = [e for e in logs if e["event"] == "followup_removed"]
+    assert [(e["message_id"], e["path"], e["matched"]) for e in lines] == [
+        (3, "settled", False),
+        (11, "settled", False),
+    ]
+
+
+async def test_member_report_on_a_settled_uploader_is_cleaned_up() -> None:
+    h = _Harness(target=_departed())
+    await h.coord.handle_verdict(_event(message_id=3))
+    result = await h.coord.handle_verdict(_risk_scan(message_id=11, reported_by=5, confidence=1.0))
+    assert result.action is Action.DELETE and result.success
+    assert len(h.reports) == 1
     assert h.updates[-1][1][0].followups_removed == 1
 
 
@@ -100,11 +141,30 @@ async def test_late_card_with_a_refused_delete_stays_open() -> None:
     assert h.closes == []
 
 
-async def test_member_report_from_a_settled_uploader_keeps_its_card() -> None:
+async def test_member_report_card_that_lands_after_the_settlement_is_closed() -> None:
     h = _Harness(target=_departed())
     h.coord._mark_settled(_event(message_id=3))
-    await h.coord.handle_verdict(_event(message_id=11, matched_source="global", reported_by=5))
-    assert h.closes == []
+    await h.coord.handle_verdict(_risk_scan(message_id=11, reported_by=5, confidence=1.0))
+    assert "delete_message" in h.rest.calls
+    assert h.closes == [(1, 42, 0, 0, 100)]
+    assert "ban_member" not in h.rest.calls
+
+
+async def test_risk_scan_card_that_lands_after_the_settlement_is_closed() -> None:
+    h = _Harness(target=_departed())
+    h.coord._mark_settled(_event(message_id=3))
+    await h.coord.handle_verdict(_risk_scan(message_id=11))
+    assert h.closes == [(1, 42, 0, 0, 100)]
+
+
+async def test_clean_image_from_a_settled_uploader_is_left_alone() -> None:
+    h = _Harness(target=_departed())
+    await h.coord.handle_verdict(_event(message_id=3))
+    h.rest.calls.clear()
+    await h.coord.handle_verdict(
+        _event(message_id=11, verdict=Verdict.CLEAN, matched_hash_id=None, matched_source=None)
+    )
+    assert "delete_message" not in h.rest.calls
 
 
 async def test_safe_mode_never_deletes_for_a_settled_uploader() -> None:

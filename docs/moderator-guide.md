@@ -126,8 +126,10 @@ Notes on cards:
   match, a near match below `auto_act_threshold`, safe mode, a member report,
   a punishment refused by the role hierarchy, or a missing permission. The
   one exception is an uploader the bot or a moderator already settled in the
-  last 10 minutes: their global and near matches are deleted without a card
-  (see "One confirmation settles the whole campaign" below).
+  last 10 minutes: anything else of theirs that gets flagged is deleted
+  without a card, including global and near matches, images only the risk
+  scan flagged, and member reports (see "One confirmation settles the whole
+  campaign" below).
 - **Uploaders who already left are still banned.** Scam accounts often post
   and leave within seconds. Discord bans by user ID, member or not, so
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
@@ -151,13 +153,16 @@ Notes on cards:
   - for the next 24 hours, deletes their reposts of blocklisted images
     without a new card; the confirmed card counts them instead
     ("Removed N later post(s) from this uploader."). A repost Discord refuses
-    to delete, a new image that only looks risky, or anything in safe mode
-    still gets a normal card. This memory resets when the bot restarts;
-  - for the first 10 minutes, does the same for their weaker matches too: a
-    near match, or a match from the shared global list, which on its own
-    only asks a moderator. Posts that arrive at the same moment are handled
-    one after another, so they join that one card instead of getting their
-    own. The ban itself always rests on this server's own list.
+    to delete, anything in safe mode, or (after the first 10 minutes) a new
+    image that only looks risky still gets a normal card. This memory resets
+    when the bot restarts;
+  - for the first 10 minutes, does the same for anything else of theirs that
+    gets flagged: a near match, a match from the shared global list, an image
+    only the risk scan flagged, or a member report. The scam was already
+    found and the account banned, so there is nothing left to decide. Posts
+    that arrive at the same moment are handled one after another, so they
+    join that one card instead of getting their own. The ban itself always
+    rests on this server's own list.
 
   Cards from before this change don't record which card they are, so they
   are closed but stay in the channel for you to delete.

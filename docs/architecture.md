@@ -267,6 +267,12 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    before acting, the database is read to drop channels where a moderator
    cleared that uploader's card (False positive, Whitelist image, Dismiss),
    and a failed read leaves the post to a moderator.
+   Once an uploader is settled (one post handled in full, or confirmed), for
+   `SETTLED_WINDOW_SECONDS` every other flagged image of theirs skips the
+   policy: a near or global match, a risk-scan finding without a hash match,
+   or a member report is only deleted, counted on the settled card, and
+   logged as `followup_removed` ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
+   A refused delete or safe mode keeps the normal card.
 2. **Boundaries** ([`boundaries.py`](../src/optimus/services/moderation/boundaries.py))
    apply only to punitive auto-actions (timeout/kick/ban): if the target is the
    owner, has `ADMINISTRATOR`, or sits above the bot in the role hierarchy, the
