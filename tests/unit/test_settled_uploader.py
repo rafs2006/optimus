@@ -12,12 +12,15 @@ the same way instead of waiting for a moderator.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 from structlog.testing import capture_logs
 
 from optimus.contracts.events import Action, Verdict, VerdictEvent
+from optimus.i18n import translate
 from optimus.services.moderation import coordinator as coordinator_module
+from optimus.services.moderation.boundaries import TargetContext
 from optimus.shared.review import merge_reports
 from tests.unit.test_departed_ban_auto_close import _data, _departed, _event, _Harness
 
@@ -204,3 +207,34 @@ def test_cleanup_notes_add_up_on_a_multi_image_card() -> None:
         "delete_ban — purged 2 more in 1 channels, +1 hashes blocklisted"
         " — cleared 4 other report(s) from this uploader"
     )
+
+
+# --- "Already banned" instead of "had already left" -------------------------
+
+
+def _banned_already() -> TargetContext:
+    return replace(_departed(), already_banned=True)
+
+
+async def test_confirm_after_the_bots_own_ban_says_already_banned() -> None:
+    h = _Harness(target=_banned_already())
+    await h.coord.handle_verdict(_event(message_id=3, confirmed_by=77, confidence=1.0))
+    note = h.reports[-1].action_taken
+    assert translate("report.boundary_already_banned", "en") in note
+    assert translate("report.boundary_departed_banned", "en") not in note
+
+
+async def test_an_uploader_who_really_left_still_reads_departed() -> None:
+    h = _Harness(target=_departed())
+    await h.coord.handle_verdict(_event(message_id=3, confirmed_by=77, confidence=1.0))
+    note = h.reports[-1].action_taken
+    assert translate("report.boundary_departed_banned", "en") in note
+    assert translate("report.boundary_already_banned", "en") not in note
+
+
+async def test_already_banned_under_a_kick_policy_only_deletes() -> None:
+    h = _Harness(target=_banned_already(), action=Action.DELETE_KICK)
+    await h.coord.handle_verdict(_event(message_id=3))
+    assert "kick_member" not in h.rest.calls
+    assert "delete_message" in h.rest.calls
+    assert translate("report.boundary_already_banned", "en") in h.reports[-1].action_taken

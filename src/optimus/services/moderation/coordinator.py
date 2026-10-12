@@ -167,6 +167,8 @@ class Boundary(StrEnum):
 
     #: The uploader had already left; banned by user id anyway.
     DEPARTED_BANNED = "departed_banned"
+    #: The uploader is not a member because they are banned already.
+    ALREADY_BANNED = "already_banned"
     #: The uploader had already left; timeout/kick cannot apply to a non-member.
     DEPARTED = "departed"
     #: The uploader's roles could not be read, so nothing punitive ran.
@@ -543,6 +545,12 @@ class ModerationCoordinator:
                 # holds no roles, so the ban still runs: without it they
                 # simply rejoin. Timeout and kick need a member, so those
                 # policies fall back to deleting the post.
+                if ctx.already_banned:
+                    # Not a departure: they are banned already (by this bot
+                    # moments ago, or by a moderator). Saying "had already
+                    # left" here read as if the bot had missed them.
+                    kept = action if action is Action.DELETE_BAN else Action.DELETE
+                    return kept, decision, Boundary.ALREADY_BANNED
                 if action is Action.DELETE_BAN:
                     return action, decision, Boundary.DEPARTED_BANNED
                 return Action.DELETE, decision, Boundary.DEPARTED

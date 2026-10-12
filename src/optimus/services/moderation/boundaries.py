@@ -37,6 +37,9 @@ class TargetContext:
     bot_top_role_position: int
     #: Whether the event originated in a guild (False for DMs).
     in_guild: bool = True
+    #: For a target not in the guild: Discord already holds a ban for them
+    #: (this bot's earlier ban, or a moderator's), so they did not just leave.
+    already_banned: bool = False
 
 
 @dataclass(frozen=True, slots=True)

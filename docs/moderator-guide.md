@@ -135,7 +135,9 @@ Notes on cards:
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
   says `banned by user ID: the uploader had already left`. A timeout or kick
   cannot apply to someone who left, so those policies only delete the post
-  and the card says why. If the bot cannot read the uploader's roles at all,
+  and the card says why. If the uploader is gone because they are already
+  banned (by the bot moments earlier, or by a moderator), the card says
+  `the uploader was already banned` instead. If the bot cannot read the uploader's roles at all,
   it never punishes blind: it deletes the post and the card says the
   punishment was skipped.
 - After **Confirm scam**, the folded card also shows what enforcement did

@@ -273,6 +273,9 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    or a member report is only deleted, counted on the settled card, and
    logged as `followup_removed` ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
    A refused delete or safe mode keeps the normal card.
+   For a target who is not a member, [`targets.py`](../src/optimus/services/moderation/targets.py)
+   also asks Discord for an existing ban, so the card says "already banned"
+   rather than "had already left" when this bot (or a moderator) banned them.
 2. **Boundaries** ([`boundaries.py`](../src/optimus/services/moderation/boundaries.py))
    apply only to punitive auto-actions (timeout/kick/ban): if the target is the
    owner, has `ADMINISTRATOR`, or sits above the bot in the role hierarchy, the
