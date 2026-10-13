@@ -1,9 +1,13 @@
 """When an uploader counts as dealt with, and what then happens to their other posts.
 
 An uploader is *settled* once the bot handled one of their posts in full or a
-moderator confirmed one. While they are settled, every other flagged image of
-theirs is deleted without a card of its own: the scam was already found and
-the account banned, so a moderator has nothing left to decide about them.
+moderator confirmed one, under whatever action policy the server uses. While
+they are settled, their other hash matches that would ask a moderator (near
+or global) are deleted without a card of their own. If the settlement also
+banned them, the same goes for an image only the risk scan flagged and for a
+member report: the scam was found and the account is gone, so a moderator has
+nothing left to decide. Below the server's ``mod_queue_threshold`` nothing is
+touched -- such an image would not have reached a moderator either.
 """
 
 from __future__ import annotations
@@ -44,23 +48,39 @@ def fully_handled(
     return result.success and bool(result.steps) and result.message_deleted
 
 
-def flagged(event: VerdictEvent) -> bool:
-    """Whether anything pointed at this image: a match, the risk scan, a member."""
-    return event.reported_by is not None or event.verdict in (Verdict.SCAM, Verdict.AMBIGUOUS)
+def flagged(event: VerdictEvent, queue_threshold: float) -> bool:
+    """Whether this image would ask a moderator: a member report, or a scam or
+    suspicious verdict at or above the server's ``mod_queue_threshold``."""
+    if event.reported_by is not None:
+        return True
+    suspect = event.verdict in (Verdict.SCAM, Verdict.AMBIGUOUS)
+    return suspect and event.confidence >= queue_threshold
 
 
-def followup_path(event: VerdictEvent, *, safe_mode: bool, settled: bool) -> str | None:
+def followup_path(
+    event: VerdictEvent,
+    *,
+    safe_mode: bool,
+    settled: bool,
+    banned: bool,
+    queue_threshold: float,
+) -> str | None:
     """Why this image of a known campaign is deleted quietly; ``None`` to take the normal path.
 
-    ``"settled"``: the uploader was banned or confirmed moments ago, so any
-    flagged image goes -- a near or global match, a risk-scan finding without
-    a hash match, a member report. ``"campaign"``: a confirmed campaign's
-    repost that matches this server's own blocklist. Safe mode never deletes.
+    ``"settled"``: the uploader was handled or confirmed moments ago and this
+    is another hash match of theirs (a near or global match). ``"banned"``:
+    that settlement also banned them, so an image only the risk scan flagged
+    or a member report goes too. Both need :func:`flagged`. ``"campaign"``: a
+    confirmed campaign's repost that matches this server's own blocklist.
+    Safe mode never deletes.
     """
     if safe_mode:
         return None
-    if settled:
-        return "settled" if flagged(event) else None
+    if settled and flagged(event, queue_threshold):
+        if event.matched_hash_id:
+            return "settled"
+        if banned:
+            return "banned"
     if event.matched_hash_id and event.matched_source == "guild":
         return "campaign"
     return None

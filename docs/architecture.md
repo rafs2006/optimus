@@ -268,11 +268,13 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    cleared that uploader's card (False positive, Whitelist image, Dismiss),
    and a failed read leaves the post to a moderator.
    Once an uploader is settled (one post handled in full, or confirmed), for
-   `SETTLED_WINDOW_SECONDS` every other flagged image of theirs skips the
-   policy: a near or global match, a risk-scan finding without a hash match,
-   or a member report is only deleted, counted on the settled card, and
-   logged as `followup_removed` ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
-   A refused delete or safe mode keeps the normal card.
+   `SETTLED_WINDOW_SECONDS` their near and global matches skip the policy,
+   and so do a risk-scan finding without a hash match and a member report
+   when the settlement included a successful ban. Each is only deleted,
+   counted on the settled card, and logged as `followup_removed`
+   ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
+   Images below `mod_queue_threshold`, a refused delete and safe mode keep
+   the normal path.
    For a target who is not a member, [`targets.py`](../src/optimus/services/moderation/targets.py)
    also asks Discord for an existing ban, so the card says "already banned"
    rather than "had already left" when this bot (or a moderator) banned them.

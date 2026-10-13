@@ -38,7 +38,6 @@ from optimus.services.moderation.priority import (
 )
 from optimus.services.moderation.settlement import (
     banned,
-    flagged,
     followup_path,
     fully_handled,
     log_followup,
@@ -186,10 +185,10 @@ OPEN_CARD_TTL_SECONDS = 15 * 60
 #: Upper bound on remembered open cards (oldest evicted first).
 OPEN_CARD_LIMIT = 512
 
-#: For this long after an uploader is banned or confirmed here, any other
-#: hash match of theirs -- a near match or a global-list match, which on its
-#: own only asks a moderator -- is deleted quietly and counted on the settled
-#: card. The ban itself still rests on this server's own list.
+#: For this long after an uploader is handled or confirmed here, their other
+#: images that would ask a moderator are deleted quietly and counted on the
+#: settled card (rules in ``settlement.followup_path``). The ban itself still
+#: rests on this server's own list.
 SETTLED_WINDOW_SECONDS = 10 * 60
 
 #: Upper bound on (uploader, matched hash) entries the spread-across-channels
@@ -294,6 +293,8 @@ class ModerationCoordinator:
         #: recorded as soon as enforcement ran -- before the card is posted,
         #: so a post checked at the same moment can see it.
         self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
+        #: Settled uploaders whose settlement included a successful ban.
+        self._banned_uploaders: set[tuple[int, int]] = set()
         #: Per (guild, uploader, matched hash), the channels that near match
         #: was seen in and when, for the spread-across-channels rule.
         self._spread: OrderedDict[tuple[int, int, str], dict[int, float]] = OrderedDict()
@@ -369,7 +370,7 @@ class ModerationCoordinator:
         result = await self._execute(event, cfg, action, decision)
         auto = fully_handled(event, cfg.configured_action, decision, action, result)
         if auto or (event.confirmed_by is not None and result.success):
-            self._mark_settled(event)
+            self._mark_settled(event, banned=banned(result))
         # Enforcement landed on a real scam, so clean up the rest of the
         # campaign. Deliberately NOT gated on ``result.success``: the whole
         # point of the sweep is to cover the case where the punitive half
@@ -852,7 +853,17 @@ class ModerationCoordinator:
     def _late_card_eligible(self, event: VerdictEvent, cfg: GuildModConfig) -> bool:
         if event.confirmed_by is not None or cfg.safe_mode:
             return False
-        return flagged(event) and self._recently_settled(event)
+        return self._followup_path(event, cfg) in ("settled", "banned")
+
+    def _followup_path(self, event: VerdictEvent, cfg: GuildModConfig) -> str | None:
+        key = (event.guild_id, event.uploader_id)
+        return followup_path(
+            event,
+            safe_mode=cfg.safe_mode,
+            settled=self._recently_settled(event),
+            banned=key in self._banned_uploaders and self._recently_settled(event),
+            queue_threshold=cfg.mod_queue_threshold,
+        )
 
     async def _close_cards_for(self, event: VerdictEvent, cfg: GuildModConfig) -> None:
         if self._close_cards is None:
@@ -874,12 +885,14 @@ class ModerationCoordinator:
         for message_id in cleanup.message_ids:
             self._open_cards.pop((event.guild_id, message_id, False), None)
 
-    def _mark_settled(self, event: VerdictEvent) -> None:
+    def _mark_settled(self, event: VerdictEvent, *, banned: bool = False) -> None:
         key = (event.guild_id, event.uploader_id)
         self._settled[key] = time.monotonic()
         self._settled.move_to_end(key)
         while len(self._settled) > OPEN_CARD_LIMIT:
-            self._settled.popitem(last=False)
+            self._banned_uploaders.discard(self._settled.popitem(last=False)[0])
+        if banned:  # a later settlement without a ban never un-bans
+            self._banned_uploaders.add(key)
 
     def _recently_settled(self, event: VerdictEvent) -> bool:
         at = self._settled.get((event.guild_id, event.uploader_id))
@@ -1023,13 +1036,14 @@ class ModerationCoordinator:
         Within the campaign window after a moderator confirmed an uploader, a
         new post of theirs that matches this server's blocklist is deleted
         without a card of its own; the confirmed card counts it instead
-        ("+N later posts removed"). While the uploader is settled (banned or
-        confirmed in the last ``SETTLED_WINDOW_SECONDS``), that covers every
-        flagged image of theirs: a near or global match, a risk-scan finding
-        without a hash match, a member report. Anything else -- another
-        account, a clean image, safe mode -- takes the normal path, and so
-        does a delete Discord refuses, so a failure is always visible on a
-        card.
+        ("+N later posts removed"). While the uploader is settled (handled or
+        confirmed in the last ``SETTLED_WINDOW_SECONDS``), that covers their
+        near and global matches too, and once a settlement banned them also a
+        risk-scan finding without a hash match and a member report; see
+        ``settlement.followup_path``. Anything else -- another account, an
+        image below ``mod_queue_threshold``, safe mode -- takes the normal
+        path, and so does a delete Discord refuses, so a failure is always
+        visible on a card.
         """
         key = (event.guild_id, event.uploader_id)
         campaign = self._campaigns.get(key)
@@ -1038,7 +1052,7 @@ class ModerationCoordinator:
         if time.monotonic() > campaign.expires_at:
             del self._campaigns[key]
             return None
-        path = followup_path(event, safe_mode=cfg.safe_mode, settled=self._recently_settled(event))
+        path = self._followup_path(event, cfg)
         if path is None:
             return None
         # The uploader is settled: the ban (or the moderator's call) already

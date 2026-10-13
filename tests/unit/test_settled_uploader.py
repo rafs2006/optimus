@@ -64,8 +64,8 @@ async def test_post_flagged_only_by_the_risk_scan_after_a_ban_is_removed_quietly
     assert h.rest.calls.count("ban_member") <= 1  # never a second ban
     lines = [e for e in logs if e["event"] == "followup_removed"]
     assert [(e["message_id"], e["path"], e["matched"]) for e in lines] == [
-        (3, "settled", False),
-        (11, "settled", False),
+        (3, "banned", False),
+        (11, "banned", False),
     ]
 
 
@@ -146,7 +146,7 @@ async def test_late_card_with_a_refused_delete_stays_open() -> None:
 
 async def test_member_report_card_that_lands_after_the_settlement_is_closed() -> None:
     h = _Harness(target=_departed())
-    h.coord._mark_settled(_event(message_id=3))
+    h.coord._mark_settled(_event(message_id=3), banned=True)
     await h.coord.handle_verdict(_risk_scan(message_id=11, reported_by=5, confidence=1.0))
     assert "delete_message" in h.rest.calls
     assert h.closes == [(1, 42, 0, 0, 100)]
@@ -155,7 +155,7 @@ async def test_member_report_card_that_lands_after_the_settlement_is_closed() ->
 
 async def test_risk_scan_card_that_lands_after_the_settlement_is_closed() -> None:
     h = _Harness(target=_departed())
-    h.coord._mark_settled(_event(message_id=3))
+    h.coord._mark_settled(_event(message_id=3), banned=True)
     await h.coord.handle_verdict(_risk_scan(message_id=11))
     assert h.closes == [(1, 42, 0, 0, 100)]
 
@@ -238,3 +238,33 @@ async def test_already_banned_under_a_kick_policy_only_deletes() -> None:
     assert "kick_member" not in h.rest.calls
     assert "delete_message" in h.rest.calls
     assert translate("report.boundary_already_banned", "en") in h.reports[-1].action_taken
+
+
+# --- Review of #81: the queue threshold and settlements without a ban -------
+
+
+async def test_below_threshold_image_from_a_settled_uploader_is_left_alone() -> None:
+    h = _Harness(target=_departed())
+    await h.coord.handle_verdict(_event(message_id=3))
+    h.rest.calls.clear()
+    # The harness's mod_queue_threshold is 0.5: this would not reach a moderator.
+    result = await h.coord.handle_verdict(_risk_scan(message_id=11, confidence=0.4))
+    assert "delete_message" not in h.rest.calls
+    assert result.action is Action.NONE
+    assert len(h.reports) == 1
+
+
+async def test_settled_without_a_ban_keeps_the_risk_scan_card() -> None:
+    # A Confirm under a delete policy settles the uploader, who is still here.
+    h = _Harness(target=_departed(), action=Action.DELETE)
+    await h.coord.handle_verdict(_event(message_id=3, confirmed_by=77, confidence=1.0))
+    await h.coord.handle_verdict(_risk_scan(message_id=11))
+    await h.coord.handle_verdict(_risk_scan(message_id=12, reported_by=5, confidence=1.0))
+    assert len(h.reports) == 3  # both still ask a moderator
+
+
+async def test_settled_without_a_ban_still_removes_hash_matches() -> None:
+    h = _Harness(target=_departed(), action=Action.DELETE)
+    await h.coord.handle_verdict(_event(message_id=3, confirmed_by=77, confidence=1.0))
+    await h.coord.handle_verdict(_event(message_id=11, matched_source="global"))
+    assert len(h.reports) == 1
