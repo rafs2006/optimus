@@ -64,6 +64,7 @@ from optimus.services.moderation.coordinator import (
 )
 from optimus.services.moderation.priority import PriorityDispatcher
 from optimus.services.moderation.sweep import CampaignSweeper, SweepOutcome
+from optimus.services.moderation.targets import resolve_target
 from optimus.shared.actors import SYSTEM_ACTOR
 from optimus.shared.outcomes import ActionResult
 from optimus.shared.permissions import PermissionProbe
@@ -225,7 +226,7 @@ def build_coordinator(
             )
 
     async def target(guild_id: int, user_id: int) -> TargetContext | None:  # pragma: no cover
-        return await _resolve_target(rest, guild_id, user_id, bot_user_id)
+        return await resolve_target(rest, guild_id, user_id, bot_user_id)
 
     async def report(channel_id: int, data: ReportData) -> int | None:  # pragma: no cover
         return await _post_report(rest, channel_id, data)
@@ -429,71 +430,6 @@ class _ActionIdempotency:
     async def acquire(self, key: str) -> bool:
         result = await self._redis.set(key, "1", nx=True, ex=self._ttl)  # type: ignore[attr-defined]
         return result is True or result == "OK"
-
-
-async def _resolve_target(  # pragma: no cover - requires live REST
-    rest: object, guild_id: int, user_id: int, bot_user_id: int
-) -> TargetContext | None:
-    import hikari
-
-    try:
-        member = await rest.fetch_member(guild_id, user_id)  # type: ignore[attr-defined]
-    except hikari.NotFoundError:
-        # Genuinely absent: the uploader left or was already banned. Reported
-        # as an out-of-guild target rather than ``None`` so the caller can tell
-        # "gone" (a ban by user id is still possible and safe: a non-member
-        # holds no roles) from "unverifiable" (never punish blind).
-        _log.info("target_resolve_not_found", guild_id=guild_id, user_id=user_id)
-        return TargetContext(
-            user_id=user_id,
-            guild_owner_id=0,
-            bot_user_id=bot_user_id,
-            is_administrator=False,
-            top_role_position=0,
-            bot_top_role_position=0,
-            in_guild=False,
-        )
-    except Exception:
-        _log.warning(
-            "target_resolve_failed",
-            guild_id=guild_id,
-            user_id=user_id,
-            exc_info=True,
-        )
-        return None
-    try:
-        guild = await rest.fetch_guild(guild_id)  # type: ignore[attr-defined]
-        roles = await rest.fetch_roles(guild_id)  # type: ignore[attr-defined]
-        me = await rest.fetch_member(guild_id, bot_user_id)  # type: ignore[attr-defined]
-    except Exception:
-        # Anything else (a 403 from missing permissions, a transient 5xx) used
-        # to propagate out of the coordinator and abandon the verdict entirely:
-        # no delete, no ban, no report, just a stack trace. Failing closed to
-        # "privileges unverifiable" downgrades to delete-only instead, so the
-        # scam still comes down while the cause stays visible in the logs.
-        _log.warning(
-            "target_resolve_failed",
-            guild_id=guild_id,
-            user_id=user_id,
-            exc_info=True,
-        )
-        return None
-    by_id = {int(r.id): r for r in roles}
-    is_admin = any(
-        (by_id[int(rid)].permissions & hikari.Permissions.ADMINISTRATOR)
-        for rid in member.role_ids
-        if int(rid) in by_id
-    )
-    top = max((by_id[int(rid)].position for rid in member.role_ids if int(rid) in by_id), default=0)
-    bot_top = max((by_id[int(rid)].position for rid in me.role_ids if int(rid) in by_id), default=0)
-    return TargetContext(
-        user_id=user_id,
-        guild_owner_id=int(guild.owner_id),
-        bot_user_id=bot_user_id,
-        is_administrator=is_admin,
-        top_role_position=top,
-        bot_top_role_position=bot_top,
-    )
 
 
 async def _post_report(  # pragma: no cover

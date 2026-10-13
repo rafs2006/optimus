@@ -126,14 +126,18 @@ Notes on cards:
   match, a near match below `auto_act_threshold`, safe mode, a member report,
   a punishment refused by the role hierarchy, or a missing permission. The
   one exception is an uploader the bot or a moderator already settled in the
-  last 10 minutes: their global and near matches are deleted without a card
-  (see "One confirmation settles the whole campaign" below).
+  last 10 minutes: their global and near matches are deleted without a card,
+  and if that settlement banned them, so are images only the risk scan
+  flagged and member reports (see "One confirmation settles the whole
+  campaign" below).
 - **Uploaders who already left are still banned.** Scam accounts often post
   and leave within seconds. Discord bans by user ID, member or not, so
   `delete_ban` (and **Confirm scam** under it) still bans them, and the card
   says `banned by user ID: the uploader had already left`. A timeout or kick
   cannot apply to someone who left, so those policies only delete the post
-  and the card says why. If the bot cannot read the uploader's roles at all,
+  and the card says why. If the uploader is gone because they are already
+  banned (by the bot moments earlier, or by a moderator), the card says
+  `the uploader was already banned` instead. If the bot cannot read the uploader's roles at all,
   it never punishes blind: it deletes the post and the card says the
   punishment was skipped.
 - After **Confirm scam**, the folded card also shows what enforcement did
@@ -151,13 +155,22 @@ Notes on cards:
   - for the next 24 hours, deletes their reposts of blocklisted images
     without a new card; the confirmed card counts them instead
     ("Removed N later post(s) from this uploader."). A repost Discord refuses
-    to delete, a new image that only looks risky, or anything in safe mode
-    still gets a normal card. This memory resets when the bot restarts;
+    to delete, anything in safe mode, or a new image that only looks risky
+    still gets a normal card (except in the first 10 minutes after a ban,
+    below). This memory resets when the bot restarts;
   - for the first 10 minutes, does the same for their weaker matches too: a
     near match, or a match from the shared global list, which on its own
-    only asks a moderator. Posts that arrive at the same moment are handled
-    one after another, so they join that one card instead of getting their
-    own. The ban itself always rests on this server's own list.
+    only asks a moderator;
+  - if the uploader was banned (under `delete_ban`), for those 10 minutes
+    also deletes an image of theirs that only the risk scan flagged, and a
+    member report about one of their posts. The scam was found and the
+    account is gone, so there is nothing left to decide. Under other
+    policies the uploader is still in the server, so those keep a card;
+  - anything below your `mod_queue_threshold` is left alone, as it would
+    not have reached you either. Posts that arrive at the same moment are
+    handled one after another, so they join that one card instead of
+    getting their own. The ban itself always rests on this server's own
+    list.
 
   Cards from before this change don't record which card they are, so they
   are closed but stay in the channel for you to delete.

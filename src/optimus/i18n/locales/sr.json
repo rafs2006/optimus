@@ -24,6 +24,7 @@
     "field_partial_value": "Prekršilac je kažnjen, ali nije sve moglo da se očisti. Vidite **Zahteva pažnju**.",
     "title_group": "Otkrivanje prevare #{detection_id} — {verdict} · {count} slika",
     "boundary_departed_banned": "banovan po ID-u: pošiljalac je već napustio server",
+    "boundary_already_banned": "pošiljalac je već banovan",
     "boundary_departed": "{action} preskočeno: pošiljalac je već napustio server",
     "boundary_unverified": "{action} preskočeno: nije moguće proveriti uloge pošiljaoca",
     "spread_channels": "slično poklapanje objavljeno u {channels} kanala za {minutes} min"

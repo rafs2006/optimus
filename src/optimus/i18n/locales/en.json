@@ -24,6 +24,7 @@
     "field_partial_value": "The offender was punished, but not everything could be cleaned up. See **Needs attention**.",
     "title_group": "Scam detection #{detection_id} — {verdict} · {count} images",
     "boundary_departed_banned": "banned by user ID: the uploader had already left",
+    "boundary_already_banned": "the uploader was already banned",
     "boundary_departed": "{action} skipped: the uploader had already left",
     "boundary_unverified": "{action} skipped: could not verify the uploader's roles",
     "spread_channels": "near match posted in {channels} channels within {minutes} min"

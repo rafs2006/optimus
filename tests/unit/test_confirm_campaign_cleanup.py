@@ -166,17 +166,21 @@ async def test_a_later_blocklisted_repost_is_removed_without_a_card() -> None:
     assert h.updates[-1][1][0].followups_removed == 2
 
 
-@pytest.mark.parametrize(
-    "kw",
-    [
-        {},  # no hash match: a fresh risk scan still gets a card
-        {"matched_hash_id": "aa", "matched_source": "guild", "uploader_id": 43},
-    ],
-)
-async def test_other_reposts_take_the_normal_path(kw: dict[str, Any]) -> None:
+async def test_another_uploaders_repost_takes_the_normal_path() -> None:
     h = _Harness()
     await h.coord.handle_verdict(_event(3, confirmed_by=77))
-    await h.coord.handle_verdict(_event(20, **kw))
+    await h.coord.handle_verdict(
+        _event(20, matched_hash_id="aa", matched_source="guild", uploader_id=43)
+    )
+    assert len(h.reports) == 2
+
+
+async def test_risk_scan_repost_gets_a_card_once_the_settled_window_passed() -> None:
+    # Within the window it is removed quietly (see test_settled_uploader.py).
+    h = _Harness()
+    await h.coord.handle_verdict(_event(3, confirmed_by=77))
+    h.coord._settled.clear()
+    await h.coord.handle_verdict(_event(20, verdict=Verdict.AMBIGUOUS, confidence=0.9))
     assert len(h.reports) == 2
 
 

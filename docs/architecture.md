@@ -267,6 +267,17 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    before acting, the database is read to drop channels where a moderator
    cleared that uploader's card (False positive, Whitelist image, Dismiss),
    and a failed read leaves the post to a moderator.
+   Once an uploader is settled (one post handled in full, or confirmed), for
+   `SETTLED_WINDOW_SECONDS` their near and global matches skip the policy,
+   and so do a risk-scan finding without a hash match and a member report
+   when the settlement included a successful ban. Each is only deleted,
+   counted on the settled card, and logged as `followup_removed`
+   ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
+   Images below `mod_queue_threshold`, a refused delete and safe mode keep
+   the normal path.
+   For a target who is not a member, [`targets.py`](../src/optimus/services/moderation/targets.py)
+   also asks Discord for an existing ban, so the card says "already banned"
+   rather than "had already left" when this bot (or a moderator) banned them.
 2. **Boundaries** ([`boundaries.py`](../src/optimus/services/moderation/boundaries.py))
    apply only to punitive auto-actions (timeout/kick/ban): if the target is the
    owner, has `ADMINISTRATOR`, or sits above the bot in the role hierarchy, the

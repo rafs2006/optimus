@@ -36,12 +36,19 @@ from optimus.services.moderation.priority import (
     QueueFullError,
     classify_action,
 )
+from optimus.services.moderation.settlement import (
+    banned,
+    followup_path,
+    fully_handled,
+    log_followup,
+    rate_limited,
+)
 from optimus.services.moderation.sweep import SweepOutcome
 from optimus.shared import reasons
 from optimus.shared.actors import SYSTEM_ACTOR
 from optimus.shared.explain import explain_result
-from optimus.shared.failures import FailureKind, classify
-from optimus.shared.outcomes import ActionResult, Step
+from optimus.shared.failures import classify
+from optimus.shared.outcomes import ActionResult
 from optimus.shared.permissions import PermissionProbe
 from optimus.shared.review import AUTO_ACTION_PREFIX, ReportData
 
@@ -159,6 +166,8 @@ class Boundary(StrEnum):
 
     #: The uploader had already left; banned by user id anyway.
     DEPARTED_BANNED = "departed_banned"
+    #: The uploader is not a member because they are banned already.
+    ALREADY_BANNED = "already_banned"
     #: The uploader had already left; timeout/kick cannot apply to a non-member.
     DEPARTED = "departed"
     #: The uploader's roles could not be read, so nothing punitive ran.
@@ -176,10 +185,10 @@ OPEN_CARD_TTL_SECONDS = 15 * 60
 #: Upper bound on remembered open cards (oldest evicted first).
 OPEN_CARD_LIMIT = 512
 
-#: For this long after an uploader is banned or confirmed here, any other
-#: hash match of theirs -- a near match or a global-list match, which on its
-#: own only asks a moderator -- is deleted quietly and counted on the settled
-#: card. The ban itself still rests on this server's own list.
+#: For this long after an uploader is handled or confirmed here, their other
+#: images that would ask a moderator are deleted quietly and counted on the
+#: settled card (rules in ``settlement.followup_path``). The ban itself still
+#: rests on this server's own list.
 SETTLED_WINDOW_SECONDS = 10 * 60
 
 #: Upper bound on (uploader, matched hash) entries the spread-across-channels
@@ -284,6 +293,8 @@ class ModerationCoordinator:
         #: recorded as soon as enforcement ran -- before the card is posted,
         #: so a post checked at the same moment can see it.
         self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
+        #: Settled uploaders whose settlement included a successful ban.
+        self._banned_uploaders: set[tuple[int, int]] = set()
         #: Per (guild, uploader, matched hash), the channels that near match
         #: was seen in and when, for the spread-across-channels rule.
         self._spread: OrderedDict[tuple[int, int, str], dict[int, float]] = OrderedDict()
@@ -357,9 +368,9 @@ class ModerationCoordinator:
             return ActionResult(Action.NONE, success=True, detail=outcome.reason)
 
         result = await self._execute(event, cfg, action, decision)
-        auto = _fully_handled(event, cfg, decision, action, result)
+        auto = fully_handled(event, cfg.configured_action, decision, action, result)
         if auto or (event.confirmed_by is not None and result.success):
-            self._mark_settled(event)
+            self._mark_settled(event, banned=banned(result))
         # Enforcement landed on a real scam, so clean up the rest of the
         # campaign. Deliberately NOT gated on ``result.success``: the whole
         # point of the sweep is to cover the case where the punitive half
@@ -535,6 +546,12 @@ class ModerationCoordinator:
                 # holds no roles, so the ban still runs: without it they
                 # simply rejoin. Timeout and kick need a member, so those
                 # policies fall back to deleting the post.
+                if ctx.already_banned:
+                    # Not a departure: they are banned already (by this bot
+                    # moments ago, or by a moderator). Saying "had already
+                    # left" here read as if the bot had missed them.
+                    kept = action if action is Action.DELETE_BAN else Action.DELETE
+                    return kept, decision, Boundary.ALREADY_BANNED
                 if action is Action.DELETE_BAN:
                     return action, decision, Boundary.DEPARTED_BANNED
                 return Action.DELETE, decision, Boundary.DEPARTED
@@ -571,7 +588,7 @@ class ModerationCoordinator:
         )
         result = await self._dispatch(action, request)
         for attempt in range(1, self._requeue_attempts + 1):
-            if not _rate_limited(result):
+            if not rate_limited(result):
                 break
             # Being rate limited is "not yet", never "no": try again shortly
             # rather than leave a confirmed scam for a moderator to finish.
@@ -631,7 +648,7 @@ class ModerationCoordinator:
         action_taken = (
             action.value if result.success else f"{action.value} (failed: {result.detail})"
         )
-        if boundary is Boundary.DEPARTED_BANNED and not _banned(result):
+        if boundary is Boundary.DEPARTED_BANNED and not banned(result):
             # "banned by user ID" next to a failed ban told moderators the
             # opposite of what happened; the failure text says it alone.
             boundary = None
@@ -696,7 +713,7 @@ class ModerationCoordinator:
         key = (event.guild_id, event.message_id)
         # A moderator's confirmation is already decided: its card is folded
         # (outcome, no buttons) and kept apart from the message's open card.
-        # So is a card the bot settled on its own (see :func:`_fully_handled`):
+        # So is a card the bot settled on its own (see ``settlement.fully_handled``):
         # it is posted folded too, keeping only the False positive button.
         decided = event.confirmed_by is not None or auto
         card_key = (event.guild_id, event.message_id, decided)
@@ -822,6 +839,7 @@ class ModerationCoordinator:
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
         if not result.success:
             return  # the open card stays: a refused delete must stay visible
+        log_followup(event, "late_card")
         await self._close_cards_for(event, cfg)
         campaign = self._campaigns.get((event.guild_id, event.uploader_id))
         if campaign is None:
@@ -833,11 +851,19 @@ class ModerationCoordinator:
                 await self._update_report(campaign.channel_id, campaign.card_id, items)
 
     def _late_card_eligible(self, event: VerdictEvent, cfg: GuildModConfig) -> bool:
-        if event.confirmed_by is not None or event.reported_by is not None:
+        if event.confirmed_by is not None or cfg.safe_mode:
             return False
-        if cfg.safe_mode or not event.matched_hash_id:
-            return False
-        return self._recently_settled(event)
+        return self._followup_path(event, cfg) in ("settled", "banned")
+
+    def _followup_path(self, event: VerdictEvent, cfg: GuildModConfig) -> str | None:
+        key = (event.guild_id, event.uploader_id)
+        return followup_path(
+            event,
+            safe_mode=cfg.safe_mode,
+            settled=self._recently_settled(event),
+            banned=key in self._banned_uploaders and self._recently_settled(event),
+            queue_threshold=cfg.mod_queue_threshold,
+        )
 
     async def _close_cards_for(self, event: VerdictEvent, cfg: GuildModConfig) -> None:
         if self._close_cards is None:
@@ -859,12 +885,14 @@ class ModerationCoordinator:
         for message_id in cleanup.message_ids:
             self._open_cards.pop((event.guild_id, message_id, False), None)
 
-    def _mark_settled(self, event: VerdictEvent) -> None:
+    def _mark_settled(self, event: VerdictEvent, *, banned: bool = False) -> None:
         key = (event.guild_id, event.uploader_id)
         self._settled[key] = time.monotonic()
         self._settled.move_to_end(key)
         while len(self._settled) > OPEN_CARD_LIMIT:
-            self._settled.popitem(last=False)
+            self._banned_uploaders.discard(self._settled.popitem(last=False)[0])
+        if banned:  # a later settlement without a ban never un-bans
+            self._banned_uploaders.add(key)
 
     def _recently_settled(self, event: VerdictEvent) -> bool:
         at = self._settled.get((event.guild_id, event.uploader_id))
@@ -1008,10 +1036,14 @@ class ModerationCoordinator:
         Within the campaign window after a moderator confirmed an uploader, a
         new post of theirs that matches this server's blocklist is deleted
         without a card of its own; the confirmed card counts it instead
-        ("+N later posts removed"). Anything else -- another account, a risk
-        scan without a hash match, a global-only match, safe mode -- takes the
-        normal path, and so does a delete Discord refuses, so a failure is
-        always visible on a card.
+        ("+N later posts removed"). While the uploader is settled (handled or
+        confirmed in the last ``SETTLED_WINDOW_SECONDS``), that covers their
+        near and global matches too, and once a settlement banned them also a
+        risk-scan finding without a hash match and a member report; see
+        ``settlement.followup_path``. Anything else -- another account, an
+        image below ``mod_queue_threshold``, safe mode -- takes the normal
+        path, and so does a delete Discord refuses, so a failure is always
+        visible on a card.
         """
         key = (event.guild_id, event.uploader_id)
         campaign = self._campaigns.get(key)
@@ -1020,9 +1052,8 @@ class ModerationCoordinator:
         if time.monotonic() > campaign.expires_at:
             del self._campaigns[key]
             return None
-        if cfg.safe_mode or not event.matched_hash_id:
-            return None
-        if event.matched_source != "guild" and not self._recently_settled(event):
+        path = self._followup_path(event, cfg)
+        if path is None:
             return None
         # The uploader is settled: the ban (or the moderator's call) already
         # happened, so this image needs only its post gone -- no second ban
@@ -1030,6 +1061,7 @@ class ModerationCoordinator:
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
         if not result.success:
             return None  # a refused delete must stay visible on a card
+        log_followup(event, path)
         detection_id = await self._audit(
             event, f"{AUTO_ACTION_PREFIX}{Action.DELETE.value}", result
         )
@@ -1079,47 +1111,3 @@ class ModerationCoordinator:
             with contextlib.suppress(Exception):
                 await self._mark_reported(event.guild_id, detection_id, campaign.card_id)
         return result
-
-
-def _fully_handled(
-    event: VerdictEvent,
-    cfg: GuildModConfig,
-    decision: Decision,
-    action: Action,
-    result: ActionResult,
-) -> bool:
-    """Whether the bot finished the job itself, so no moderator is needed.
-
-    True only for a match against this server's own blocklist that ran the
-    server's configured action in full: the post is gone and every punitive
-    step succeeded (a ban of an uploader who already left counts). Anything a
-    person should look at keeps an open card: a global-only match, a near
-    match queued for review, safe mode, a refused or downgraded punishment, a
-    missing permission, a member report.
-    """
-    if event.confirmed_by is not None or event.reported_by is not None:
-        return False
-    if decision is not Decision.AUTO_ACT or action in (Action.NONE, Action.REPORT_ONLY):
-        return False
-    if event.matched_source != "guild" or not event.matched_hash_id:
-        return False
-    if action is not cfg.configured_action:
-        return False
-    return result.success and bool(result.steps) and result.message_deleted
-
-
-def _banned(result: ActionResult) -> bool:
-    """Whether the ban step of ``result`` actually succeeded."""
-    return any(s.step is Step.BAN and s.success for s in result.steps)
-
-
-def _rate_limited(result: ActionResult) -> bool:
-    """Whether ``result`` failed only for want of rate budget (ours or Discord's)."""
-    if result.success:
-        return False
-    if result.detail == "rate_limited":
-        return True
-    return any(
-        s.failure is not None and s.failure.kind is FailureKind.RATE_LIMITED
-        for s in result.failed_steps
-    )
