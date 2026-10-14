@@ -15,13 +15,11 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 
 from prometheus_client import Counter
 
 from optimus.contracts.events import Action, OcrFindings, Verdict, VerdictEvent
 from optimus.core.logging import get_logger
-from optimus.i18n import translate
 from optimus.services.moderation.actions import ActionExecutor, ActionRequest
 from optimus.services.moderation.boundaries import BoundaryRefusal, TargetContext, check_target
 from optimus.services.moderation.policy import (
@@ -36,6 +34,7 @@ from optimus.services.moderation.priority import (
     QueueFullError,
     classify_action,
 )
+from optimus.services.moderation.report_notes import Boundary, action_note
 from optimus.services.moderation.settlement import (
     banned,
     followup_path,
@@ -155,23 +154,13 @@ DetectionSettler = Callable[[int, Sequence[int], str], Awaitable[None]]
 #: cards (False positive, Whitelist image, Dismiss) since a time:
 #: (guild, uploader, since, channels) -> cleared channels.
 SpreadClearedChannels = Callable[[int, int, datetime, Sequence[int]], Awaitable[set[int]]]
+#: Whether a moderator cleared any of the uploader's cards (False positive,
+#: Whitelist image, Dismiss) since a time: (guild, uploader, since) -> bool.
+SettlementCleared = Callable[[int, int, datetime], Awaitable[bool]]
 
 
 #: The punitive steps, for spelling out on the card what was skipped and why.
 _PUNITIVE_ACTIONS = (Action.DELETE_TIMEOUT, Action.DELETE_KICK, Action.DELETE_BAN)
-
-
-class Boundary(StrEnum):
-    """What the privilege check did to a punitive action, shown on the card."""
-
-    #: The uploader had already left; banned by user id anyway.
-    DEPARTED_BANNED = "departed_banned"
-    #: The uploader is not a member because they are banned already.
-    ALREADY_BANNED = "already_banned"
-    #: The uploader had already left; timeout/kick cannot apply to a non-member.
-    DEPARTED = "departed"
-    #: The uploader's roles could not be read, so nothing punitive ran.
-    UNVERIFIED = "unverified"
 
 
 #: A second confirmed verdict for the same uploader within this many seconds
@@ -205,6 +194,7 @@ class _Campaign:
     card_id: int
     items: list[ReportData]
     expires_at: float
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     removed: int = 0
     #: Posts counted in ``removed``: one post with four images counts once.
     removed_messages: set[int] = field(default_factory=set)
@@ -251,6 +241,7 @@ class ModerationCoordinator:
         close_cards: CardCloser | None = None,
         settle_detections: DetectionSettler | None = None,
         spread_cleared: SpreadClearedChannels | None = None,
+        settlement_cleared: SettlementCleared | None = None,
         campaign_window_seconds: int = 24 * 3600,
         requeue_attempts: int = 0,
         requeue_delay_seconds: float = 0.0,
@@ -286,6 +277,7 @@ class ModerationCoordinator:
         self._close_cards = close_cards
         self._settle_detections = settle_detections
         self._spread_cleared = spread_cleared
+        self._settlement_cleared = settlement_cleared
         self._campaign_window = campaign_window_seconds
         self._campaigns: OrderedDict[tuple[int, int], _Campaign] = OrderedDict()
         self._recent_sweeps: dict[tuple[int, int], float] = {}
@@ -295,6 +287,8 @@ class ModerationCoordinator:
         self._settled: OrderedDict[tuple[int, int], float] = OrderedDict()
         #: Settled uploaders whose settlement included a successful ban.
         self._banned_uploaders: set[tuple[int, int]] = set()
+        #: When each settlement happened, for the database's clock.
+        self._settled_wall: dict[tuple[int, int], datetime] = {}
         #: Per (guild, uploader, matched hash), the channels that near match
         #: was seen in and when, for the spread-across-channels rule.
         self._spread: OrderedDict[tuple[int, int, str], dict[int, float]] = OrderedDict()
@@ -642,51 +636,21 @@ class ModerationCoordinator:
     ) -> None:
         if cfg.review_channel_id is None or detection_id is None:
             return
-        # The report doubles as the guild's status feed: surface the actual
-        # outcome, not just the intended action, so a failed enforcement is
-        # visible in Discord instead of only in an audit row.
-        action_taken = (
-            action.value if result.success else f"{action.value} (failed: {result.detail})"
-        )
-        if boundary is Boundary.DEPARTED_BANNED and not banned(result):
-            # "banned by user ID" next to a failed ban told moderators the
-            # opposite of what happened; the failure text says it alone.
-            boundary = None
-        if boundary is not None:
-            # Say why the configured punishment did or did not happen, instead
-            # of a bare "delete" that reads like the policy was ignored.
-            note = translate(
-                f"report.boundary_{boundary.value}", cfg.locale, action=(intended or action).value
-            )
-            action_taken = f"{action_taken} — {note}"
-        if spread:
-            # Say why a near match was acted on: the confidence on the card
-            # is unchanged, so without this it reads like the bar was ignored.
-            note = translate(
-                "report.spread_channels",
-                cfg.locale,
-                channels=spread,
-                minutes=max(1, cfg.spread_window_seconds // 60),
-            )
-            action_taken = f"{action_taken} — {note}"
         # Whatever could not be applied is spelled out as an instruction on the
         # card. Without this, a channel the bot cannot see produced a report
         # that looked like a silent, inexplicable failure.
         problem = explain_result(result, cfg.locale, channel_id=event.channel_id)
-        if swept is not None and swept.touched:
-            # Make the cross-channel cleanup visible to moderators: without it
-            # the card reports one deletion while the sweep quietly removed a
-            # campaign spanning a dozen channels.
-            extra = f"purged {swept.deleted} more in {swept.channels} channels"
-            if swept.failed:
-                extra += f", {swept.failed} unreachable"
-            if swept.harvested:
-                extra += f", +{len(swept.harvested)} hashes blocklisted"
-            action_taken = f"{action_taken} — {extra}"
-        if cleanup is not None and cleanup.closed:
-            action_taken = (
-                f"{action_taken} — cleared {cleanup.closed} other report(s) from this uploader"
-            )
+        action_taken = action_note(
+            action,
+            result,
+            cfg.locale,
+            boundary=boundary,
+            intended=intended,
+            spread=spread,
+            spread_minutes=max(1, cfg.spread_window_seconds // 60),
+            swept=swept,
+            cleared=cleanup.closed if cleanup is not None else 0,
+        )
         data = ReportData(
             detection_id=detection_id,
             guild_id=event.guild_id,
@@ -834,7 +798,7 @@ class ModerationCoordinator:
         settlement. The post is deleted (already gone counts) and the card
         closed and removed exactly as that cleanup would have.
         """
-        if not self._late_card_eligible(event, cfg):
+        if not self._late_card_eligible(event, cfg) or not await self._still_settled(event):
             return
         result = await self._execute(event, cfg, Action.DELETE, Decision.AUTO_ACT)
         if not result.success:
@@ -889,14 +853,43 @@ class ModerationCoordinator:
         key = (event.guild_id, event.uploader_id)
         self._settled[key] = time.monotonic()
         self._settled.move_to_end(key)
+        self._settled_wall[key] = datetime.now(UTC)
         while len(self._settled) > OPEN_CARD_LIMIT:
-            self._banned_uploaders.discard(self._settled.popitem(last=False)[0])
+            old = self._settled.popitem(last=False)[0]
+            self._banned_uploaders.discard(old)
+            self._settled_wall.pop(old, None)
         if banned:  # a later settlement without a ban never un-bans
             self._banned_uploaders.add(key)
 
     def _recently_settled(self, event: VerdictEvent) -> bool:
         at = self._settled.get((event.guild_id, event.uploader_id))
         return at is not None and time.monotonic() - at <= SETTLED_WINDOW_SECONDS
+
+    async def _still_settled(self, event: VerdictEvent, since: datetime | None = None) -> bool:
+        """Whether no moderator took the settlement back; ``False`` if that is unknown.
+
+        False positive, Whitelist image and Dismiss are pressed in the
+        interactions service, which may be another process, so the database
+        is asked rather than this process's memory. A moderator who cleared
+        any of the uploader's cards since the settlement ends it: their later
+        images take the normal path and get cards again. A failed read keeps
+        the settlement but sends this one image to a moderator.
+        """
+        key = (event.guild_id, event.uploader_id)
+        times = [t for t in (self._settled_wall.get(key), since) if t is not None]
+        if self._settlement_cleared is None or not times:
+            return True
+        try:
+            cleared = await self._settlement_cleared(event.guild_id, event.uploader_id, min(times))
+        except Exception:
+            _log.warning("settlement_check_failed", guild_id=event.guild_id, exc_info=True)
+            return False
+        if cleared:
+            _log.info("settlement_reversed", guild_id=event.guild_id, uploader_id=event.uploader_id)
+            for store in (self._settled, self._settled_wall, self._campaigns):
+                store.pop(key, None)
+            self._banned_uploaders.discard(key)
+        return not cleared
 
     @contextlib.asynccontextmanager
     async def _keyed_lock(
@@ -1053,7 +1046,7 @@ class ModerationCoordinator:
             del self._campaigns[key]
             return None
         path = self._followup_path(event, cfg)
-        if path is None:
+        if path is None or not await self._still_settled(event, campaign.started_at):
             return None
         # The uploader is settled: the ban (or the moderator's call) already
         # happened, so this image needs only its post gone -- no second ban

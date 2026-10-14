@@ -274,7 +274,13 @@ runs a fixed sequence: **config → policy → boundaries → execute → audit 
    counted on the settled card, and logged as `followup_removed`
    ([`settlement.py`](../src/optimus/services/moderation/settlement.py)).
    Images below `mod_queue_threshold`, a refused delete and safe mode keep
-   the normal path.
+   the normal path. Before each such deletion the coordinator asks the
+   database whether a moderator pressed False positive, Whitelist image or
+   Dismiss on that uploader's cards since the settlement. The buttons are
+   handled by the interactions service, so this process's memory cannot see
+   them. If one was pressed, the settlement, the ban flag and the campaign
+   are forgotten (logged as `settlement_reversed`). A failed read sends that
+   image to a moderator.
    For a target who is not a member, [`targets.py`](../src/optimus/services/moderation/targets.py)
    also asks Discord for an existing ban, so the card says "already banned"
    rather than "had already left" when this bot (or a moderator) banned them.
