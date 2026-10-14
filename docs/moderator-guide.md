@@ -170,7 +170,11 @@ Notes on cards:
     not have reached you either. Posts that arrive at the same moment are
     handled one after another, so they join that one card instead of
     getting their own. The ban itself always rests on this server's own
-    list.
+    list;
+  - pressing **False positive**, **Whitelist image** or **Dismiss** on any of
+    that uploader's cards ends all of this at once: their later posts get
+    normal cards again. False positive also lifts the ban if you have
+    **Ban Members** (see the button table above).
 
   Cards from before this change don't record which card they are, so they
   are closed but stay in the channel for you to delete.

@@ -56,6 +56,7 @@ from optimus.db.repositories import (
 )
 from optimus.services.moderation.actions import ActionExecutor
 from optimus.services.moderation.boundaries import TargetContext
+from optimus.services.moderation.clears import cleared_channels_query, settlement_cleared_query
 from optimus.services.moderation.cooldown import Cooldown
 from optimus.services.moderation.coordinator import (
     CardCleanup,
@@ -74,11 +75,6 @@ _log = get_logger(__name__)
 
 #: Moderator decisions that close a report; anything else is still open.
 DECIDED_ACTIONS = frozenset({"confirmed", "dismissed", "banned", "reversed"})
-
-#: A moderator's "this is not a scam" on a card: False positive and Dismiss
-#: mark the row, Whitelist image only writes the audit log.
-CLEARED_ACTIONS = frozenset({"reversed", "dismissed"})
-CLEARED_AUDIT_ACTIONS = ("review.false_positive", "review.whitelist_image", "review.dismiss")
 
 
 class ModerationService:
@@ -378,27 +374,8 @@ def build_coordinator(
             for detection_id in detection_ids:
                 await repo.set_action_taken(detection_id, action)
 
-    async def spread_cleared(
-        guild_id: int, uploader_id: int, since: datetime, channels: Sequence[int]
-    ) -> set[int]:
-        """Channels where a moderator cleared one of this uploader's cards."""
-        wanted = set(channels)
-        async with scope() as session:
-            rows = [
-                r
-                for r in await DetectionRepository(session, guild_id).list_by_uploader_since(
-                    uploader_id, since, limit=settings.mod_sweep_max_messages
-                )
-                if int(r.channel_id) in wanted
-            ]
-            audited = await ModActionRepository(session, guild_id).targets_since(
-                CLEARED_AUDIT_ACTIONS, [str(r.id) for r in rows], since
-            )
-        return {
-            int(r.channel_id)
-            for r in rows
-            if r.action_taken in CLEARED_ACTIONS or str(r.id) in audited
-        }
+    spread_cleared = cleared_channels_query(scope, settings.mod_sweep_max_messages)
+    settlement_cleared = settlement_cleared_query(scope, settings.mod_sweep_max_messages)
 
     coordinator = ModerationCoordinator(
         config=config,
@@ -413,6 +390,7 @@ def build_coordinator(
         close_cards=close_cards,
         settle_detections=settle_detections,
         spread_cleared=spread_cleared,
+        settlement_cleared=settlement_cleared,
         campaign_window_seconds=settings.mod_sweep_window_hours * 3600,
         requeue_attempts=settings.mod_action_requeue_attempts,
         requeue_delay_seconds=settings.mod_action_requeue_delay_seconds,

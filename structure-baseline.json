@@ -8,8 +8,8 @@
     "src/optimus/services/interactions/commands.py": 513,
     "src/optimus/services/interactions/handlers.py": 1794,
     "src/optimus/services/interactions/service.py": 1881,
-    "src/optimus/services/moderation/coordinator.py": 1113,
-    "src/optimus/services/moderation/service.py": 570,
+    "src/optimus/services/moderation/coordinator.py": 1106,
+    "src/optimus/services/moderation/service.py": 548,
     "src/optimus/shared/review.py": 533
   },
   "functions": {
@@ -48,8 +48,7 @@
       "complexity": 16
     },
     "src/optimus/services/moderation/coordinator.py::ModerationCoordinator._post_report": {
-      "complexity": 21,
-      "statements": 52
+      "complexity": 14
     },
     "src/optimus/services/moderation/coordinator.py::ModerationCoordinator._remove_followup": {
       "complexity": 11
@@ -58,8 +57,8 @@
       "complexity": 12
     },
     "src/optimus/services/moderation/service.py::build_coordinator": {
-      "complexity": 22,
-      "statements": 69
+      "complexity": 21,
+      "statements": 65
     },
     "src/optimus/shared/review.py::_merge_actions": {
       "complexity": 13
