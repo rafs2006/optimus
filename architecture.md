@@ -159,6 +159,20 @@ safe mode, hashless risk-scan matches, and other uploaders are unchanged. The
 settled memory is in-process, bounded, and resets on restart. Each image logs a
 `verdict_decided` line with its decision and reason.
 
+Since [#82](https://github.com/rafs2006/optimus/pull/82), a moderator can end a
+settlement. Before each quiet removal (settled, banned, campaign and late-card
+paths) the coordinator asks the database whether a moderator pressed False
+positive, Whitelist image or Dismiss on any of that uploader's cards since the
+settlement (a `review.false_positive`, `review.whitelist_image` or
+`review.dismiss` audit row after it, on detections recorded from an hour before
+it, via `moderation/clears.py`); the bot's own `review.campaign_close` and the
+Confirm itself do not count. The buttons run in the interactions service, which
+may be another process, so the database is read rather than memory, the same
+approach as the spread rule below. If one was pressed, the settlement, the ban
+flag and the campaign are forgotten (`settlement_reversed`) and the image gets a
+normal card; a failed read keeps the settlement but sends that one image to a
+moderator (`settlement_check_failed`).
+
 Verdicts are serialised per uploader (`_uploader_locks`), so a burst across
 channels settles once: the first image bans and posts the card, later images of
 that post join it as items, and other posts take the follow-up path (delete
@@ -379,3 +393,5 @@ the plan is versioned with the code.
 <!-- decision:rafs2006/optimus#79 --> Applied: owner-linked servers keep one blocklist through `guild_links`, the only cross-server write, with copies acted on under each server's own `action_policy` and removal limited to linked copies; a missing signing key keeps global votes unpromoted instead of failing Confirm - from #79.
 
 <!-- decision:rafs2006/optimus#80 --> Applied: cross-service code lives in `optimus/shared/`, services import no other service and `shared`/`contracts`/`core`/`db` import no service (enforced by import-linter in CI), and file and function sizes are ratcheted by a CI structure gate that only an explicit `structure-exception` label can raise - from #80.
+
+<!-- decision:rafs2006/optimus#82 --> Applied: a moderator's False positive, Whitelist image or Dismiss on any of a settled uploader's cards after the settlement ends it, read from the database before each quiet removal, and a failed read sends the image to a moderator - from #82.
