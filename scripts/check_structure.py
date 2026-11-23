@@ -2,9 +2,12 @@
 
 The rules (``docs/architecture.md#keeping-files-small``):
 
-* A source file may not grow past its ceiling in ``structure-baseline.json``.
+* A Python file may not grow past its ceiling in ``structure-baseline.json``.
   Files with no ceiling (every new file) must stay at or under
-  ``NEW_FILE_LIMIT`` lines.
+  ``NEW_FILE_LIMIT`` lines. This covers every hand-written ``*.py`` file git
+  knows about: ``src``, ``tests``, ``scripts`` and ``benchmarks``. Alembic
+  revisions (``migrations/versions``) are left out, because an applied
+  migration is never edited.
 * A function ruff flags as too complex (C901) or with too many statements
   (PLR0915) must already be in the baseline, and may not get worse.
 * Ceilings only go down. ``--update`` lowers them to today's numbers and
@@ -37,7 +40,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "structure-baseline.json"
+# Function size and complexity are checked for the application code only.
 SOURCES = ("src/optimus",)
+# File size is checked for every Python file except these path prefixes.
+# Append-only: an applied migration is never edited, so it cannot be split.
+SIZE_EXCLUDED = ("migrations/versions/",)
 NEW_FILE_LIMIT = 500
 MAX_COMPLEXITY = 10
 MAX_STATEMENTS = 50
@@ -54,11 +61,38 @@ def _line_count(path: Path) -> int:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
+def size_checked(path: str) -> bool:
+    """Whether a repo-relative path counts for the file-size ceilings."""
+    return path.endswith(".py") and not path.startswith(SIZE_EXCLUDED)
+
+
+def _known_to_git() -> list[str]:
+    """Tracked files, plus new ones that are not ignored.
+
+    Asking git rather than walking fixed directories means a new top-level
+    directory is covered without anyone remembering to list it, and virtualenvs
+    and build output are not.
+    """
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=ROOT,
+            capture_output=True,
+            encoding="utf-8",
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(f"check_structure needs git and a checkout of the repo: {exc}") from exc
+    return [name for name in listed.stdout.split("\0") if name]
+
+
 def measure_files() -> dict[str, int]:
     out: dict[str, int] = {}
-    for top in SOURCES:
-        for path in sorted((ROOT / top).rglob("*.py")):
-            out[path.relative_to(ROOT).as_posix()] = _line_count(path)
+    for name in sorted(set(_known_to_git())):
+        path = ROOT / name
+        # A file deleted in the working tree is still in the index.
+        if size_checked(name) and path.is_file():
+            out[name] = _line_count(path)
     return out
 
 
@@ -250,8 +284,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if failed:
         print(
-            "\nStructure gate failed. Split the file or function by feature "
-            "(docs/architecture.md#keeping-files-small). For an urgent fix that "
+            "\nStructure gate failed. Split the file or function by domain, one "
+            "concern per module (docs/architecture.md#keeping-files-small). Do not "
+            "pack lines or cut at an arbitrary point. For an urgent fix that "
             "cannot wait for the split, run `--update --allow-raise`, commit the "
             f"baseline and add the '{EXCEPTION_LABEL}' label."
         )

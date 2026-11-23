@@ -1,5 +1,6 @@
 {
   "files": {
+    "benchmarks/soak/driver.py": 675,
     "src/optimus/core/config.py": 559,
     "src/optimus/dashboard/service.py": 590,
     "src/optimus/db/repositories.py": 1037,
@@ -10,7 +11,14 @@
     "src/optimus/services/interactions/service.py": 1881,
     "src/optimus/services/moderation/coordinator.py": 1106,
     "src/optimus/services/moderation/service.py": 548,
-    "src/optimus/shared/review.py": 533
+    "src/optimus/shared/review.py": 533,
+    "tests/integration/test_pipeline.py": 833,
+    "tests/unit/test_coordinator.py": 752,
+    "tests/unit/test_core.py": 617,
+    "tests/unit/test_detection.py": 521,
+    "tests/unit/test_grouped_review_cards.py": 570,
+    "tests/unit/test_interactions_handlers.py": 2456,
+    "tests/unit/test_moderation_actions.py": 528
   },
   "functions": {
     "src/optimus/app/discord.py::run_discord_edges": {
