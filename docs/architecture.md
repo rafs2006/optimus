@@ -463,8 +463,11 @@ CI enforces the shape described above. Both gates run in `.github/workflows/ci.y
 `uv run python scripts/check_structure.py` checks against
 [`structure-baseline.json`](../structure-baseline.json):
 
-- A file may not grow past its ceiling. A file without one, which means every
-  new file, stays at or under 500 lines.
+- A Python file may not grow past its ceiling. A file without one, which means
+  every new file, stays at or under 500 lines. This covers application code,
+  tests, scripts and benchmarks: every `*.py` file git knows about. Alembic
+  revisions (`migrations/versions/`) are left out, because an applied
+  migration is never edited.
 - A function ruff flags as too complex (C901, over 10) or too long (PLR0915,
   over 50 statements) must already be in the baseline and may not get worse.
 - Ceilings only go down. When code shrinks, `--update` locks the gain in. It
@@ -474,11 +477,17 @@ CI enforces the shape described above. Both gates run in `.github/workflows/ci.y
   offender. If it still exceeds the limits after the move, the PR needs
   `--update --allow-raise` and the label. Better: split it as you move it.
 
-When something outgrows its limit, split it by feature, not by layer. The
-review buttons are the model: `interactions/review_buttons.py` holds one
-function per button behind a dispatch table, out of `handlers.py`. The next
-splits are scam-image list (`/scamhash`), setup and queue modules out of
-`handlers.py`, and `ModerationCoordinator._post_report`.
+When something outgrows its limit, split it by domain: one concern per module,
+next to the code it belongs with, not one module per layer. The review buttons
+are the model: `interactions/review_buttons.py` holds one function per button
+behind a dispatch table, out of `handlers.py`. The next splits are scam-image
+list (`/scamhash`), setup and queue modules out of `handlers.py`, and
+`ModerationCoordinator._post_report`. A test file is split the same way and
+follows the module it tests.
+
+Getting under the number without separating a concern is not a split. Don't
+pack statements onto fewer lines, strip comments or blank lines, or cut a file
+at an arbitrary point into `part2` or a catch-all `utils`.
 
 **Urgent fix in a big file.** A fix shouldn't wait for a refactor. Run
 `scripts/check_structure.py --update --allow-raise`, commit the baseline and
