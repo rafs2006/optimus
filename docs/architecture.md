@@ -195,7 +195,10 @@ starts `python -m optimus.services.detection.riskscan_child`, writes the image t
 its stdin and reads one JSON result back. The child applies `RLIMIT_CPU`,
 `RLIMIT_AS` (2 GiB of address space), `RLIMIT_FSIZE` (64 MiB, not zero:
 pytesseract passes each variant to Tesseract through a temporary file) and
-`RLIMIT_CORE=0` to itself before it imports OpenCV or reads a byte of the image.
+`RLIMIT_CORE=0` to itself after it imports OpenCV and before it reads a byte of the image
+(native libraries exit or hang instead of raising when their own imports hit
+the cap; a limit below what the loaded scanner already uses fails at once,
+with a reason).
 The parent enforces a wall timeout of the OCR budget plus 30 seconds and, on
 expiry, kills the child's whole process group, Tesseract included. The child's
 output and pytesseract's temporary files live in a private directory that the

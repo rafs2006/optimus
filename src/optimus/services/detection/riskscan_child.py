@@ -6,10 +6,18 @@ the image bytes on stdin. It runs exactly one :func:`riskscan.scan` and exits,
 so every buffer OpenCV allocated for the image goes back to the operating
 system with the process.
 
-The resource limits are applied here, before OpenCV is imported and before a
-single image byte is read, rather than through ``preexec_fn`` in the parent:
-the parent is multi-threaded, and running Python between ``fork`` and ``exec``
-there can deadlock.
+The resource limits are applied here, before a single image byte is read,
+rather than through ``preexec_fn`` in the parent: the parent is
+multi-threaded, and running Python between ``fork`` and ``exec`` there can
+deadlock. They are applied after the scanner (OpenCV, NumPy and their bundled
+OpenBLAS) is imported, not before: under an address-space cap too small for
+them, those native libraries do not fail with a Python exception but exit the
+process themselves (OpenBLAS: "Memory allocation still failed after 10
+retries") or hang, leaving no reason line and, at worst, a child that only the
+wall timeout ends. Importing first costs no bound -- the address space and CPU
+time the imports took count against the limits all the same -- and a limit
+that does not even cover them fails at once, with a reason
+(:func:`require_headroom`).
 
 Protocol: one JSON object on stdout,
 ``{"findings": <OcrFindings dump or null>, "ocr": <OCR run report or null>}``.
@@ -56,6 +64,40 @@ def _set_limit(which: int, soft: int, hard: int) -> None:
     resource.setrlimit(which, (soft, hard))
 
 
+def address_space_bytes() -> int | None:
+    """This process's current address-space size (``VmSize``), if known."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmSize:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def require_headroom(config: dict[str, Any]) -> None:
+    """Fail now if the memory limit does not even cover the loaded scanner.
+
+    ``RLIMIT_AS`` may be set below what a process already uses; it then only
+    makes every later allocation fail, in whichever library happens to make
+    it. A limit that small can never scan anything, so say so plainly.
+    """
+    mem = int(config["mem_bytes"])
+    used = address_space_bytes()
+    if used is not None and used >= mem:
+        mib = 1024 * 1024
+        raise MemoryError(
+            f"memory limit {mem // mib} MiB is below the {used // mib} MiB"
+            " the loaded scanner already uses"
+        )
+
+
+def load_scanner() -> None:
+    """Import the scan stack (OpenCV, NumPy, Tesseract bindings) up front."""
+    import optimus.services.detection.riskscan  # noqa: F401
+
+
 def ocr_report() -> dict[str, Any] | None:
     """Read back what the one OCR extraction of this process recorded.
 
@@ -92,7 +134,7 @@ def ocr_report() -> dict[str, Any] | None:
 def run(image_bytes: bytes, *, ocr_timeout: float | None) -> dict[str, Any]:
     """Scan one image and build the result object for the parent."""
     # Imported here, not at module import: this pulls in OpenCV, and the
-    # limits must already be in force by then.
+    # parent imports this module (for FAILURE_PREFIX) without wanting it.
     from optimus.services.detection.riskscan import scan
 
     findings = scan(image_bytes, timeout=ocr_timeout)
@@ -119,7 +161,6 @@ def describe_failure(exc: BaseException) -> str:
 
 def main(argv: list[str]) -> int:
     config = json.loads(argv[1])
-    apply_limits(config)
     # Keep the real stdout for the result and point fd 1 at stderr, so a stray
     # print from OpenCV, Tesseract or a logger cannot land in the JSON.
     result_fd = os.dup(1)
@@ -131,6 +172,11 @@ def main(argv: list[str]) -> int:
         from optimus.core.logging import configure_logging
 
         configure_logging(service_name="risk-scan")
+        # Trusted code only until the limits are in force: no image byte has
+        # been read yet. See the module docstring for why this order.
+        load_scanner()
+        require_headroom(config)
+        apply_limits(config)
         result = run(sys.stdin.buffer.read(), ocr_timeout=config.get("ocr_timeout"))
     except Exception as exc:
         sys.stderr.write(describe_failure(exc) + "\n")

@@ -119,3 +119,25 @@ def test_describe_failure_keeps_only_content_free_messages() -> None:
     assert describe(OSError("no space left")) == "risk scan failed: OSError: no space left"
     # Anything else may quote text read out of the image: the type name only.
     assert describe(ValueError("claim your reward at ...")) == "risk scan failed: ValueError"
+
+
+def test_require_headroom_fails_a_limit_the_loaded_scanner_already_exceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Below what is already mapped, every later allocation would fail somewhere."""
+    monkeypatch.setattr(riskscan_child, "address_space_bytes", lambda: 300 * 1024 * 1024)
+    with pytest.raises(MemoryError, match="memory limit 48 MiB is below the 300 MiB"):
+        riskscan_child.require_headroom({"mem_bytes": 48 * 1024 * 1024})
+    riskscan_child.require_headroom({"mem_bytes": 2048 * 1024 * 1024})
+
+
+def test_require_headroom_lets_an_unknown_size_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``/proc`` (not Linux): the limit itself still holds."""
+    monkeypatch.setattr(riskscan_child, "address_space_bytes", lambda: None)
+    riskscan_child.require_headroom({"mem_bytes": 1024})
+
+
+def test_address_space_bytes_reads_this_process() -> None:
+    size = riskscan_child.address_space_bytes()
+    assert size is not None
+    assert size > 0
