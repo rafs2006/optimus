@@ -94,7 +94,10 @@ def require_headroom(config: dict[str, Any]) -> None:
 
 
 def load_scanner() -> None:
-    """Import the scan stack (OpenCV, NumPy, Tesseract bindings) up front."""
+    """Import the scan stack (OpenCV, NumPy) up front.
+
+    The Tesseract bindings are small and still load on first use, under the cap.
+    """
     import optimus.services.detection.riskscan  # noqa: F401
 
 

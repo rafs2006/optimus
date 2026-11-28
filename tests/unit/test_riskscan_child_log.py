@@ -196,8 +196,9 @@ def test_warning_logged_through_the_real_child_reaches_the_service_log(
     ]
 
 
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="needs /proc (Linux)")
 def test_real_child_names_its_failure_for_the_log() -> None:
-    """A memory limit too small for the imports: the reason line, no traceback."""
+    """A memory limit below the loaded scanner: the reason line, no traceback."""
     proc = subprocess.run(
         sandbox._child_argv(ScanLimits(mem_bytes=48 * 1024 * 1024)),
         input=b"img",
@@ -209,5 +210,34 @@ def test_real_child_names_its_failure_for_the_log() -> None:
     events, reason, size = sandbox._child_said(io.BytesIO(proc.stderr))
     assert events == []
     assert reason is not None
-    assert reason.startswith(("MemoryError", "ImportError", "OSError"))
+    assert reason.startswith("MemoryError: memory limit 48 MiB is below the ")
     assert size == len(proc.stderr)
+
+
+_REAL_MAIN_WITH_BROKEN_LOGGING_SETUP = """
+import sys
+import optimus.core.logging
+from optimus.services.detection import riskscan_child
+
+
+def configure_logging(**kwargs):
+    raise OSError("no handler")
+
+
+optimus.core.logging.configure_logging = configure_logging
+raise SystemExit(riskscan_child.main(["riskscan_child", sys.argv[1]]))
+"""
+
+
+def test_real_child_that_cannot_set_up_logging_still_names_its_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure before the scan starts ends as a reason line, not a traceback."""
+    config = sandbox._child_argv(ScanLimits())[3]
+    _fake_child(monkeypatch, _REAL_MAIN_WITH_BROKEN_LOGGING_SETUP, config)
+    with capture_logs() as logs:
+        assert scan_sandboxed(b"img") is None
+    assert [(entry["event"], entry["returncode"], entry["reason"]) for entry in logs] == [
+        ("risk_scan_failed", 1, "OSError: no handler")
+    ]
+    assert logs[0]["child_events"] == []

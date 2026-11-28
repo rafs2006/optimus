@@ -8,6 +8,7 @@ stdout and applies resource limits); the end-to-end tests in
 from __future__ import annotations
 
 import resource
+from pathlib import Path
 
 import pytest
 from prometheus_client import CollectorRegistry, Counter, Histogram
@@ -137,6 +138,7 @@ def test_require_headroom_lets_an_unknown_size_through(monkeypatch: pytest.Monke
     riskscan_child.require_headroom({"mem_bytes": 1024})
 
 
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="needs /proc (Linux)")
 def test_address_space_bytes_reads_this_process() -> None:
     size = riskscan_child.address_space_bytes()
     assert size is not None

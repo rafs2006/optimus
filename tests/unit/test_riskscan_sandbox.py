@@ -18,6 +18,7 @@ from pathlib import Path
 import cv2
 import pytest
 from prometheus_client import REGISTRY
+from structlog.testing import capture_logs
 
 import optimus
 from optimus.contracts.events import OcrFindings
@@ -90,11 +91,50 @@ def test_wall_timeout_kills_the_child_and_returns_none() -> None:
     assert _delta(before) == {"timeout": 1.0}
 
 
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="needs /proc (Linux)")
 def test_memory_limit_too_small_to_start_is_a_failed_scan() -> None:
     before = _child_outcomes()
     limits = ScanLimits(mem_bytes=48 * 1024 * 1024)
     assert scan_sandboxed(_qr_png(LOOKALIKE), limits) is None
     assert _delta(before) == {"failed": 1.0}
+
+
+_REAL_MAIN_WITH_A_GREEDY_SCAN = """
+import sys
+from optimus.services.detection import riskscan_child
+
+
+def run(image_bytes, *, ocr_timeout):
+    bytearray(2 * 1024 * 1024 * 1024)
+    return {"findings": None, "ocr": None}
+
+
+riskscan_child.run = run
+raise SystemExit(riskscan_child.main(["riskscan_child", sys.argv[1]]))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="RLIMIT_AS is only enforced on Linux")
+def test_scan_that_outgrows_the_memory_limit_is_a_failed_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The limit is in force while the scan runs, not only checked before it.
+
+    The child's real ``main`` loads the scanner and applies the default limits;
+    the scan is stood in for by one allocation as large as the whole allowance,
+    which fails the same way on every machine. Without the limit it succeeds.
+    """
+    limits = ScanLimits()
+    argv = [sys.executable, "-c", _REAL_MAIN_WITH_A_GREEDY_SCAN, sandbox._child_argv(limits)[3]]
+    monkeypatch.setattr(sandbox, "_child_argv", lambda _limits: argv)
+    before = _child_outcomes()
+    with capture_logs() as logs:
+        assert scan_sandboxed(b"img", limits) is None
+    assert _delta(before) == {"failed": 1.0}
+    # The child's one reason line is what the service log repeats.
+    assert [(entry["event"], entry["returncode"], entry["reason"]) for entry in logs] == [
+        ("risk_scan_failed", 1, "MemoryError: ")
+    ]
 
 
 def test_child_environment_has_no_settings_or_cloud_credentials(
