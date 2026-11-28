@@ -9,7 +9,9 @@ to the verdict, not about OCR quality.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import threading
 from datetime import UTC, datetime
 
 import pytest
@@ -158,7 +160,7 @@ def _findings(level: str, score: int = 7) -> OcrFindings:
     return OcrFindings(risk_level=level, risk_score=score, signals=["credential_harvest"])
 
 
-def _worker(scanner: _Scanner | None) -> DetectionWorker:
+def _worker(scanner: _Scanner | None, **kwargs: int) -> DetectionWorker:
     async def gi(_gid: int) -> HashIndex:
         return EMPTY
 
@@ -180,6 +182,7 @@ def _worker(scanner: _Scanner | None) -> DetectionWorker:
         sensitivity=sens,
         idempotency_acquire=_Guard().acquire,
         risk_scan=scanner,
+        **kwargs,
     )
 
 
@@ -290,3 +293,53 @@ def test_report_fields_include_ocr_summary() -> None:
         action_taken="delete",
     )
     assert not any("OCR" in name for name, _ in report_fields(plain))
+
+
+async def test_worker_queues_scans_beyond_the_concurrency_limit() -> None:
+    """A burst of images runs at most ``risk_scan_max_concurrent`` scans at once.
+
+    Every scan blocks until the test lets go, so the burst cannot drain. Once
+    all six handlers have asked for a slot, exactly two must have been given
+    one and be scanning; the other four wait.
+    """
+    progress = asyncio.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    loop = asyncio.get_running_loop()
+    inside = peak = asked = admitted = 0
+
+    def scanner(_data: bytes) -> OcrFindings | None:
+        nonlocal inside, peak
+        with lock:
+            inside += 1
+            peak = max(peak, inside)
+        loop.call_soon_threadsafe(progress.set)
+        release.wait(timeout=10)
+        with lock:
+            inside -= 1
+        return None
+
+    worker = _worker(scanner, risk_scan_max_concurrent=2)  # type: ignore[arg-type]
+    gate = worker._risk_scan_gate
+    acquire = gate.acquire
+
+    async def counted_acquire() -> bool:
+        nonlocal asked, admitted
+        asked += 1
+        progress.set()
+        got = await acquire()
+        admitted += 1
+        return got
+
+    gate.acquire = counted_acquire  # type: ignore[method-assign]
+    burst = [asyncio.create_task(worker.handle(_event(key=f"burst-{i}"))) for i in range(6)]
+    try:
+        while inside <= 2 and not (asked == 6 and inside == 2):
+            progress.clear()
+            await asyncio.wait_for(progress.wait(), timeout=10)
+        assert (asked, admitted, inside) == (6, 2, 2)
+    finally:
+        release.set()
+    results = await asyncio.gather(*burst)
+    assert all(result is not None for result in results)
+    assert (admitted, peak) == (6, 2)

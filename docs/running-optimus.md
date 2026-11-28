@@ -128,9 +128,11 @@ the only ones that reach this lane at all; anything the hash lane already knows
 never pays it.
 
 What that means when sizing a host: the ceiling is per image, and the work is
-synchronous CPU, so sustained unmatched-image throughput is bounded by cores,
-not by the budget. `OPTIMUS_DETECTION_MAX_INFLIGHT` is the lever that keeps a
-burst from committing every core to OCR at once.
+synchronous CPU. Each scan runs in its own short-lived child process (see
+[Risk-scan sandbox](architecture.md#risk-scan-sandbox)) and at most two run at
+once per worker, so sustained unmatched-image throughput is bounded by those
+two scans, not by the budget, and a burst queues instead of committing every
+core to OCR.
 
 The lane now reports its own cost, so none of this has to stay an estimate:
 
@@ -139,6 +141,8 @@ The lane now reports its own cost, so none of this has to stay an estimate:
 | `optimus_ocr_duration_seconds` | what the lane really costs per image; buckets straddle the 8s budget |
 | `optimus_ocr_variants_completed` | how many of the three passes finish. A p50 below 3 means the budget is truncating the multi-pass design and you are running on the weakest pass |
 | `optimus_ocr_outcome_total` | `complete` vs `budget_exhausted` vs `decode_failed` vs `error`. A rising `budget_exhausted` share is the signal to raise the budget or add cores |
+| `optimus_risk_scan_child_total` | how each scan's child process ended: `ok`, or `timeout` / `failed` / `bad_result` / `spawn_failed` / `error`. Anything but `ok` is a scan that returned nothing and recorded no OCR sample above |
+| `optimus_risk_scan_child_seconds` | wall-clock time of the whole child, including interpreter start, decode and the QR pass that the OCR budget does not cover |
 
 If `budget_exhausted` is rare and the duration p99 sits well under 8s, the
 budget is not what is costing you — lowering it will only cost recall.

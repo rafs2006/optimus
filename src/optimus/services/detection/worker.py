@@ -60,6 +60,14 @@ RISK_ESCALATED = Counter(
     ["risk"],
 )
 
+#: Risk scans allowed to run at once. Each one holds a full-resolution image in
+#: its own child process (a few hundred MB at 24 MP) and keeps one core busy
+#: for seconds, so they queue here rather than stack up to the bus's in-flight
+#: limit when a burst of large images arrives: more of them at once than there
+#: are cores only pushes every one of them towards its wall-clock limit.
+#: Decode and hashing are not held back by this.
+RISK_SCAN_MAX_CONCURRENT = 2
+
 
 @dataclass(frozen=True, slots=True)
 class DetectionResult:
@@ -100,6 +108,7 @@ class DetectionWorker:
         swarm: SwarmCorrelator | None = None,
         limits: DecodeLimits | None = None,
         risk_scan: Callable[[bytes], OcrFindings | None] | None = None,
+        risk_scan_max_concurrent: int = RISK_SCAN_MAX_CONCURRENT,
     ) -> None:
         self._guild_index = guild_index
         self._global_index = global_index
@@ -112,6 +121,7 @@ class DetectionWorker:
         self._swarm = swarm
         self._limits = limits
         self._risk_scan = risk_scan
+        self._risk_scan_gate = asyncio.Semaphore(risk_scan_max_concurrent)
 
     async def handle(self, event: ImageFetchedEvent) -> DetectionResult | None:
         """Process one fetched image; return a verdict, or ``None`` if a duplicate."""
@@ -161,7 +171,8 @@ class DetectionWorker:
             and not outcome.whitelisted
             and outcome.verdict in (Verdict.CLEAN, Verdict.NON_DECISION)
         ):
-            findings = await asyncio.to_thread(self._risk_scan, data)
+            async with self._risk_scan_gate:
+                findings = await asyncio.to_thread(self._risk_scan, data)
             if findings is not None and findings.risk_level in ("high", "critical"):
                 ocr = findings
                 outcome = MatchOutcome(

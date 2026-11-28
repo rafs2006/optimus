@@ -258,7 +258,7 @@ class Settings(BaseSettings):
     detection_ocr_risk_scan: bool = True
     #: Total wall-clock budget for the OCR stage of one image, shared across all
     #: of its preprocessing variants. The scan runs off the event loop in a
-    #: worker thread, so this bounds CPU per unmatched image rather than
+    #: child process, so this bounds CPU per unmatched image rather than
     #: blocking ingestion. Lower it to cap CPU at the cost of recall on dense or
     #: low-contrast screenshots, which need the later variants to be readable.
     detection_ocr_timeout_seconds: float = Field(default=8.0, gt=0)
@@ -275,8 +275,8 @@ class Settings(BaseSettings):
     #: in-flight budget each loop).
     detection_fetch_batch: int = Field(default=16, ge=1)
     #: Seconds JetStream waits for an ack before redelivering. Must exceed the
-    #: slowest expected handler (decode + hash of ``max_frames``) so slow
-    #: processing buffers instead of triggering a spurious redelivery storm.
+    #: slowest expected handler (decode + hash of ``max_frames``, then the risk
+    #: scan) so slow processing buffers instead of causing a redelivery storm.
     detection_ack_wait_seconds: float = Field(default=60.0, gt=0.0)
     #: Max delivery attempts before JetStream gives up on a message.
     detection_max_deliver: int = Field(default=5, ge=1)
