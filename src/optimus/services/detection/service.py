@@ -291,11 +291,14 @@ def build_service(
 
     risk_scan: Callable[[bytes], OcrFindings | None] | None = None
     if settings.detection_ocr_risk_scan:
-        # Imported lazily so deployments that disable the scan never pay the
-        # cv2/pytesseract import (or need the tesseract binary present).
-        from optimus.services.detection.riskscan import scan
+        # The scan itself (OpenCV, Tesseract) runs in a short-lived child
+        # process per image; this process only starts it and reads the result.
+        from optimus.services.detection.riskscan_sandbox import ScanLimits, scan_sandboxed
 
-        risk_scan = partial(scan, timeout=settings.detection_ocr_timeout_seconds)
+        risk_scan = partial(
+            scan_sandboxed,
+            limits=ScanLimits.for_ocr_timeout(settings.detection_ocr_timeout_seconds),
+        )
 
     worker = DetectionWorker(
         guild_index=guild_index,

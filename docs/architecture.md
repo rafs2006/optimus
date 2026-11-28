@@ -186,6 +186,55 @@ decode-plus-hash block is offloaded with `asyncio.to_thread` (`_decode_and_hash`
 so a slow or large image never stalls the detection consumer's event loop, its
 NATS heartbeats, or its health responses.
 
+### Risk-scan sandbox
+
+The OCR/QR risk scan needs the image at full resolution, so it cannot reuse the
+decoder's thumbnail. It runs in a child process of its own, one per image:
+[`detection/riskscan_sandbox.py`](../src/optimus/services/detection/riskscan_sandbox.py)
+starts `python -m optimus.services.detection.riskscan_child`, writes the image to
+its stdin and reads one JSON result back. The child applies `RLIMIT_CPU`,
+`RLIMIT_AS` (2 GiB of address space), `RLIMIT_FSIZE` (64 MiB, not zero:
+pytesseract passes each variant to Tesseract through a temporary file) and
+`RLIMIT_CORE=0` to itself after it imports OpenCV and before it reads a byte of the image
+(native libraries exit or hang instead of raising when their own imports hit
+the cap; a limit below what the loaded scanner already uses fails at once,
+with a reason).
+The parent enforces a wall timeout of the OCR budget plus 30 seconds and, on
+expiry, kills the child's whole process group, Tesseract included. The child's
+output and pytesseract's temporary files live in a private directory that the
+parent removes afterwards, also when the child was killed mid-scan.
+
+Two reasons it is a process and not a thread:
+
+- **Memory.** Scanned on threads, the freed image buffers stay in the
+  allocator's per-thread arenas. The resident size of the process climbed to
+  about 1.2 GiB under a mixed workload of 0.5 to 24 MP images and stayed there
+  until the next restart. A child gives everything back when it exits, and the
+  long-lived process never imports OpenCV at all.
+- **Bounds.** The scan used to parse untrusted bytes with OpenCV inside the
+  service process with no memory, CPU or time limit, so one hostile image could
+  take the service down. The child gets the limits above, and its environment
+  carries neither the `OPTIMUS_*` settings (the bot token among them) nor
+  `AWS_*` credentials.
+
+This bounds resources; it is not an isolation boundary. The child runs as the
+same user as the service, so code execution inside it could still read that
+user's files, use the network, or inspect the parent through `/proc`.
+`RLIMIT_FSIZE` caps each file, not the total written.
+
+At most `RISK_SCAN_MAX_CONCURRENT` (2) scans run at once per worker; further
+ones wait, so a burst of large images cannot stack ten children or push each
+other past the wall timeout on a small host. **Any** child failure (could not
+start, timeout, non-zero exit, unexpected output) is the same "nothing
+noteworthy" the scan has always returned when a stage failed, and is counted on
+`optimus_risk_scan_child_total{outcome}`. The child reports its OCR duration,
+variant count and outcome, and the parent replays them on the `optimus_ocr_*`
+series after checking them, so those series keep their meaning for every scan
+that finishes. A child that timed out or crashed records no OCR sample; it
+shows up on `optimus_risk_scan_child_total` instead. Warnings the child logs
+(for example `qr_extract_failed`) reach the service log by event name only, as
+`risk_scan_degraded`, without the traceback.
+
 ### Perceptual hashing
 
 [`hashing/perceptual.py`](../src/optimus/hashing/perceptual.py) computes a

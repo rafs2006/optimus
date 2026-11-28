@@ -1,6 +1,11 @@
 """Tests for OCR text extraction, URL extraction, and domain lookalike detection."""
 
+from collections.abc import Iterator
+
+import pytest
+
 from optimus.hashing.ocr_extract import (
+    OFFICIAL_AI_DOMAINS,
     analyze_image,
     extract_urls,
     is_lookalike,
@@ -88,3 +93,38 @@ def test_lookalike_returns_none_for_unrelated():
 
 def test_lookalike_empty_domain():
     assert is_lookalike("") is None
+
+
+class _Backwards(frozenset[str]):
+    """A set that hands out its members last-first, as another process might."""
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(sorted(frozenset(self), reverse=True))
+
+
+def test_lookalike_target_does_not_follow_set_order() -> None:
+    """Two official domains qualify here; set order must not pick between them.
+
+    A set's order follows the per-process string hash seed, so the domain
+    named as impersonated used to change from one process to the next.
+    """
+    official = frozenset({"perplexity.ai", "perplexity.com"})
+    assert is_lookalike("perplexity-claim.com", official) == "perplexity.ai"
+    assert is_lookalike("perplexity-claim.com", _Backwards(official)) == "perplexity.ai"
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["chatgpt.openai.com", "grok.x.ai", "deepmind.google.com", "claude.anthropic.com"],
+)
+def test_subdomain_of_an_official_domain_is_never_a_lookalike(domain: str) -> None:
+    """Also when its first label matches another official domain's name.
+
+    ``chatgpt.openai.com`` is under the official ``openai.com`` and shares a
+    label with the official ``chatgpt.com``; whichever the loop met first used
+    to decide.
+    """
+    parent = domain.split(".", 1)[1]
+    assert parent in OFFICIAL_AI_DOMAINS
+    assert is_lookalike(domain) is None
+    assert is_lookalike(domain, _Backwards(OFFICIAL_AI_DOMAINS)) is None

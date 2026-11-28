@@ -309,6 +309,29 @@ here and scale the one axis that turns red:
   traffic rather than trusting that figure. A corpus benchmark for this lane is
   outstanding work, tracked as improvement plan item #1 in
   [the root architecture doc](../architecture.md).
+* **The OCR lane's memory is paid per scan, not kept.** Each unmatched image is
+  scanned in a child process that exits afterwards (see
+  [Risk-scan sandbox](architecture.md#risk-scan-sandbox)). Measured on a 4-core
+  machine with synthetic images: a child peaks at about 400 MB resident for a
+  24 MP image and needs between 512 and 768 MB of address space depending on
+  the content, against a 2 GiB limit; starting the interpreter and importing
+  OpenCV adds about 0.4 s per image. The child is single-threaded, so a very
+  large image scans slower than it did on the service's thread pool (a 24 MP
+  photo-like JPEG: about 8 s against 5 s). At most two scans run at once per
+  worker (`RISK_SCAN_MAX_CONCURRENT`), so budget for two such children on top
+  of the service's own footprint when traffic is bursty. Sustained
+  throughput is therefore two scans at a time, however many cores there are.
+  How that compares with the old in-process thread pool depended on the
+  workload: over a few hundred scans of mixed sizes (0.5 to 24 MP) it ranged
+  from about the same (default 8 s OCR budget, where concurrent in-process
+  Tesseract runs slowed each other down) to about three times slower (1 s OCR
+  budget, where the thread pool kept all four cores busy). Measure with your
+  own traffic before relying on this lane at volume. Each scan is cut off at the OCR budget plus
+  30 s; with the default 60 s `ack_wait`, a scan that queued behind two
+  worst-case ones can be redelivered. With Redis the idempotency guard turns
+  that into a skipped duplicate; without it the image is scanned again. The service process itself no longer grows with the size
+  of the images it has seen. Like the timings above, these numbers come from
+  one machine and synthetic inputs, not from a corpus.
 * **Per-guild action rate, not the Discord global limit, throttles one big
   guild.** Tune `mod_action_rate_*` for the server. PROTECT actions are always
   admitted and wait for a token, but a raid that outlasts the wait and retries

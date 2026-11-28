@@ -59,9 +59,16 @@ RUN apt-get update \
 RUN groupadd --gid 10001 optimus \
     && useradd --uid 10001 --gid optimus --no-create-home --home-dir /app optimus
 
+# MALLOC_ARENA_MAX: glibc otherwise creates up to 8 malloc arenas per CPU, one
+# per thread that allocates, and memory freed into an arena often stays there
+# instead of going back to the system. The services hand blocking work to
+# thread pools, so resident memory can climb with use and not come back down.
+# Two arenas keep that bounded; these are I/O-bound asyncio processes, so
+# allocator contention is not a concern.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
+    MALLOC_ARENA_MAX=2 \
     OPTIMUS_SIMPLE_DATABASE_URL="sqlite+aiosqlite:////data/optimus.db"
 
 WORKDIR /app

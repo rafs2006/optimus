@@ -70,6 +70,17 @@ tests in `tests/unit/test_interactions_handlers.py` and
   timeout, a Pillow pixel cap, and a frame cap. Any failure is a non-decision
   (`None`) — the pipeline never acts on an image it could not safely decode.
   No `shell=True`; the child is `[sys.executable, "-c", <inline source>]`.
+- **Risk-scan sandbox** (`detection/riskscan_sandbox.py`, added after this
+  audit): the OCR/QR lane used to parse untrusted bytes with OpenCV inside the
+  service process, with no limit. It now runs in a child process per image
+  under `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_CORE=0` and a wall
+  timeout that kills the child's process group, with the `OPTIMUS_*` and
+  `AWS_*` variables left out of its environment and its temporary files in a
+  directory the parent removes. The parent reads at most 64 KiB of output and
+  validates it before use. This is resource limiting, not isolation: the child
+  runs as the same user, with the same filesystem and network access, and
+  there is no seccomp or namespace layer. No `shell=True`; the child is
+  `[sys.executable, "-m", "optimus.services.detection.riskscan_child", <json>]`.
 - **Permissions** (`interactions/`): `default_member_permissions` is only a
   client hint. Every state-changing command and button re-checks the invoker's
   *effective* permissions server-side (`has_permission`), with `ADMINISTRATOR`

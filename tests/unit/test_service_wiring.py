@@ -15,6 +15,7 @@ from typing import cast
 from optimus.bus.nats import EventBus
 from optimus.core.config import RateLimitBackend, get_settings
 from optimus.core.ratelimit import InMemoryRateLimiter, RedisRateLimiter
+from optimus.services.detection.riskscan_sandbox import scan_sandboxed
 from optimus.services.detection.service import build_service
 from optimus.services.ingest.service import build_worker
 from optimus.services.interactions.service import build_rate_limiter
@@ -31,6 +32,25 @@ def test_build_service_wires_guild_index_cap() -> None:
     custom = settings.model_copy(update={"detection_guild_index_cap": 7})
     service2 = build_service(custom, bus, redis=None)
     assert service2._indexes._max_guilds == 7
+
+
+def test_build_service_wires_the_sandboxed_risk_scan() -> None:
+    settings = get_settings()
+    bus = cast(EventBus, object())
+
+    scan = build_service(settings, bus, redis=None)._worker._risk_scan
+    assert scan is not None
+    assert scan.func is scan_sandboxed  # type: ignore[attr-defined]
+    limits = scan.keywords["limits"]  # type: ignore[attr-defined]
+    assert limits.ocr_timeout == settings.detection_ocr_timeout_seconds
+    assert limits.wall_timeout > settings.detection_ocr_timeout_seconds
+
+    custom = settings.model_copy(update={"detection_ocr_timeout_seconds": 3.0})
+    scan2 = build_service(custom, bus, redis=None)._worker._risk_scan
+    assert scan2.keywords["limits"].ocr_timeout == 3.0  # type: ignore[union-attr]
+
+    off = settings.model_copy(update={"detection_ocr_risk_scan": False})
+    assert build_service(off, bus, redis=None)._worker._risk_scan is None
 
 
 def test_build_worker_wires_ingest_inmemory_sweep() -> None:

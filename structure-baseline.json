@@ -4,7 +4,7 @@
     "src/optimus/core/config.py": 559,
     "src/optimus/dashboard/service.py": 590,
     "src/optimus/db/repositories.py": 1037,
-    "src/optimus/hashing/ocr_extract.py": 559,
+    "src/optimus/hashing/ocr_extract.py": 536,
     "src/optimus/services/gateway/bot.py": 586,
     "src/optimus/services/interactions/commands.py": 513,
     "src/optimus/services/interactions/handlers.py": 1794,

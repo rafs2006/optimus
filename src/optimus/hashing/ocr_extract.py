@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 
 import cv2
 import numpy as np
-from prometheus_client import Counter, Histogram
+
+from optimus.hashing.ocr_metrics import record_ocr_run
 
 # Official domains of major AI companies — used for lookalike detection.
 OFFICIAL_AI_DOMAINS: frozenset[str] = frozenset(
@@ -251,31 +252,6 @@ _MIN_CONFIDENCE = 50  # drop tokens below this confidence
 # the ones that rescue low-contrast dark-mode screenshots, never run at all.
 _OCR_TOTAL_TIMEOUT_SECONDS = 8.0
 
-# The OCR lane is the most expensive stage in the pipeline and the only one with
-# no experiment behind its cost. These three series exist so the budget default
-# can be argued from data rather than from a single hand-timed image: duration
-# says what the lane actually costs, variants says whether the multi-pass design
-# is being truncated in practice, and outcome says how often the budget is the
-# binding constraint.
-OCR_DURATION = Histogram(
-    "optimus_ocr_duration_seconds",
-    "Wall-clock time for one full multi-pass OCR extraction.",
-    # Straddles the budget (8s) so budget-bound calls pile into a visible bucket
-    # instead of the overflow; the low end resolves cheap early exits.
-    buckets=(0.05, 0.25, 1.0, 2.5, 4.0, 6.0, 8.0, 12.0, 20.0),
-)
-OCR_VARIANTS = Histogram(
-    "optimus_ocr_variants_completed",
-    "Preprocessing variants that finished OCR before the budget ran out.",
-    # There are only ever 3 variants; integer bounds make p50 readable directly.
-    buckets=(0, 1, 2, 3),
-)
-OCR_OUTCOME = Counter(
-    "optimus_ocr_outcome_total",
-    "How each OCR extraction terminated.",
-    ["outcome"],
-)
-
 
 def _ocr_confident_text(img: np.ndarray, *, timeout: float) -> str:
     """Run OCR with per-word confidence filtering via image_to_data."""
@@ -350,9 +326,7 @@ def extract_text(image_bytes: bytes, *, timeout: float | None = None) -> str:
     finally:
         # In a finally so the swallowed-exception and decode-failure paths are
         # counted too -- those are exactly the failures that were invisible.
-        OCR_DURATION.observe(time.monotonic() - started)
-        OCR_VARIANTS.observe(completed)
-        OCR_OUTCOME.labels(outcome=outcome).inc()
+        record_ocr_run(seconds=time.monotonic() - started, variants=completed, outcome=outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -496,12 +470,15 @@ def is_lookalike(domain: str, official: frozenset[str] = OFFICIAL_AI_DOMAINS) ->
     if not domain:
         return None
 
-    if domain in official:
+    # An official domain or one of its subdomains is safe. Settled for every
+    # official domain before any lookalike rule runs, so that for example
+    # ``chatgpt.openai.com`` is not reported as impersonating ``chatgpt.com``.
+    if domain in official or any(domain.endswith("." + real) for real in official):
         return None
 
-    for real in official:
-        if domain.endswith("." + real) or domain == real:
-            return None
+    # Sorted: a set's order changes from one process to the next, and so did
+    # the domain named as impersonated when more than one qualifies.
+    for real in sorted(official):
         real_sld = real.split(".")[0]
         domain_sld = domain.split(".")[0]
         if len(real_sld) >= 5 and real_sld in domain_sld and domain != real:
